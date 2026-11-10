@@ -37,6 +37,7 @@ export interface AutomationConfig {
   mystery_shop_allow_diamond: boolean;
   mystery_shop_arrival_notify: boolean;
   mystery_shop_purchase_notify: boolean;
+  mall_coupon_gift_buy: boolean;
   sell: boolean;
   fertilizer: FertilizerMode;
   fertilizer_multi_season: boolean;

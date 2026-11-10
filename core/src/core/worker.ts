@@ -12,7 +12,7 @@ const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, 
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, getFriendsList, getFriendsListCacheOnly, getFriendLandsDetail, doFriendOperation, deleteFriend } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
-const { autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState } = require('../services/mall');
+const { autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, autoBuyCouponGifts, COUPON_GIFT_CHECK_INTERVAL_MS } = require('../services/mall');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { runExclusiveAutomationTask } = require('../services/automation-lock');
@@ -423,6 +423,7 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
         startUnifiedScheduler();
         startDailyRoutineTimer(false);
         startMysteryShopTimer();
+        startCouponGiftTimer();
     } catch (e: any) {
         log('系统', `登录启动序列执行失败: ${e.message}`, { module: 'system', event: '启动序列', result: 'error' });
     }
@@ -453,6 +454,27 @@ function startMysteryShopTimer(): void {
         runExclusiveAutomationTask('mystery_shop', runMysteryShopTick).catch(() => null);
     });
 }
+function stopCouponGiftTimer(): void {
+    workerScheduler.clear('coupon_gift_initial');
+    workerScheduler.clear('coupon_gift_interval');
+}
+
+function runCouponGiftTick(): Promise<void> {
+    if (!loginReady) return Promise.resolve();
+    return autoBuyCouponGifts();
+}
+
+function startCouponGiftTimer(): void {
+    stopCouponGiftTimer();
+    if (!loginReady || getAutomation().mall_coupon_gift_buy !== true) return;
+    workerScheduler.setTimeoutTask('coupon_gift_initial', 3000, () => {
+        runExclusiveAutomationTask('mall_coupon_gift', runCouponGiftTick).catch(() => null);
+    });
+    workerScheduler.setIntervalTask('coupon_gift_interval', COUPON_GIFT_CHECK_INTERVAL_MS, () => {
+        runExclusiveAutomationTask('mall_coupon_gift', runCouponGiftTick).catch(() => null);
+    });
+}
+
 
 function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
     const rev = Number((snapshot || {}).__revision || 0);
@@ -519,6 +541,7 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
             }
 
             startMysteryShopTimer();
+            startCouponGiftTimer();
         }
     }
 

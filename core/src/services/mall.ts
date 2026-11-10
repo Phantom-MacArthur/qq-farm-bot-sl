@@ -7,6 +7,7 @@ const { Buffer } = require('node:buffer');
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep, getSystemDateKey } = require('../utils/utils');
+const { getAutomation } = require('../models/store');
 
 const ORGANIC_FERTILIZER_MALL_GOODS_ID: number = 1002;
 const INORGANIC_FERTILIZER_MALL_GOODS_ID: number = 1003;
@@ -484,6 +485,95 @@ async function checkAndBuyFertilizerBoth(options: any, propagateErrors: boolean 
     }
 }
 
+// ===== 点券限时礼包自动购买（移植自 B mall-gift-auto-buy.js，判定改用 SL 的 MallGoods proto 结构）=====
+// B 的判定依赖 goods.enabled/is_activity/is_limited/type/end_time/limit 等字段，SL 的 MallGoods
+// 里没有这些；改按 SL 已解码字段：is_available + price(Item{id,count}) + purchase_limit
+// (PurchaseLimit{limit_type,bought_count,limit_count}) + promotion_end_time。促销窗口交给
+// 商品自身的 is_available / promotion_end_time 判断，不再硬编码绝对时间戳，过期自动失效。
+const COUPON_GIFT_GOODS_ID: number = 1061;
+const COUPON_CURRENCY_ID: number = 1002; // 点券
+const COUPON_GIFT_CHECK_INTERVAL_MS: number = 10 * 60 * 1000;
+
+function parseMallPriceInfo(raw: any): { currencyId: number; price: number } {
+    if (raw == null) return { currencyId: 0, price: 0 };
+    if (typeof raw === 'number') return { currencyId: 0, price: Math.max(0, Math.floor(raw)) };
+    // SL 的 price 是已解码的 corepb.Item：{ id: 货币ID, count: 单价 }
+    return {
+        currencyId: Math.max(0, Math.floor(toNum(raw.id))),
+        price: Math.max(0, Math.floor(toNum(raw.count))),
+    };
+}
+
+function parseMallLimitInfo(raw: any): { limitType: number; limitCount: number; boughtNum: number } {
+    if (raw == null) return { limitType: 0, limitCount: 0, boughtNum: 0 };
+    return {
+        limitType: Math.max(0, toNum(raw.limit_type)),
+        limitCount: Math.max(0, Math.floor(toNum(raw.limit_count))),
+        boughtNum: Math.max(0, Math.floor(toNum(raw.bought_count))),
+    };
+}
+
+// 仅接受在售、点券计价、有限购余量且促销未结束的点券礼包；余额不足时返回 0。
+function getCouponGiftPurchase(goods: any, balance: number, nowMs: number = Date.now()): number {
+    if (Number(goods?.goods_id) !== COUPON_GIFT_GOODS_ID || goods?.is_available !== true) return 0;
+    const price = parseMallPriceInfo(goods.price);
+    if (price.currencyId !== COUPON_CURRENCY_ID || price.price <= 0) return 0;
+    const limit = parseMallLimitInfo(goods.purchase_limit);
+    if (limit.limitCount <= 0) return 0;
+    const promoEnd = toNum(goods.promotion_end_time);
+    if (promoEnd > 0 && promoEnd * 1000 <= nowMs) return 0;
+    const remaining = Math.max(0, limit.limitCount - limit.boughtNum);
+    if (remaining <= 0) return 0;
+    return Number(balance) >= remaining * price.price ? remaining : 0;
+}
+
+function getCouponGiftBalance(state: any): number {
+    return Math.max(0, toNum(state?.coupon));
+}
+
+function createCouponGiftBuyer(deps: any): (force?: boolean) => Promise<number> {
+    const { getBalance, getGoods, purchase, report, now = Date.now } = deps;
+    const isEnabled: () => any = deps.getAutomation || (() => getAutomation() || {});
+    let busy = false;
+    let lastCheck = -Infinity;
+    return async function autoBuyCouponGifts(force: boolean = false): Promise<number> {
+        if (busy || isEnabled().mall_coupon_gift_buy !== true || (!force && now() - lastCheck < COUPON_GIFT_CHECK_INTERVAL_MS)) return 0;
+        busy = true;
+        lastCheck = now();
+        let bought = 0;
+        try {
+            const goods = await getGoods();
+            let balance = getBalance();
+            for (const item of goods || []) {
+                if (isEnabled().mall_coupon_gift_buy !== true) break;
+                const count = getCouponGiftPurchase(item, balance, now());
+                if (!count) {
+                    const required = getCouponGiftPurchase(item, Number.MAX_SAFE_INTEGER, now());
+                    if (required > 0) report(`点券礼包购买已跳过：需要 ${parseMallPriceInfo(item.price).price * required} 点券，当前 ${balance}`, 'skip');
+                    continue;
+                }
+                await purchase(Number(item.goods_id), count);
+                balance -= parseMallPriceInfo(item.price).price * count;
+                bought += count;
+                report(`自动购买点券限时礼包：${item.name} x${count}`, 'success');
+            }
+        } catch (error: any) {
+            report(`自动购买点券限时礼包失败：${error.message}`, 'error');
+        } finally {
+            busy = false;
+        }
+        return bought;
+    };
+}
+
+const autoBuyCouponGifts = createCouponGiftBuyer({
+    getAutomation: () => getAutomation() || {},
+    getBalance: () => getCouponGiftBalance(getUserState()),
+    getGoods: () => getMallGoodsList(5),
+    purchase: purchaseMallGoods,
+    report: (message: string, result: string) => log('商城', message, { module: 'shop', event: '点券限时礼包自动购买', result }),
+});
+
 module.exports = {
     getMallListBySlotType,
     getMallGoodsList,
@@ -494,6 +584,14 @@ module.exports = {
     checkAndBuyFertilizerByThreshold,
     checkAndBuyFertilizerBoth,
     buyFreeGifts,
+    COUPON_GIFT_GOODS_ID,
+    COUPON_GIFT_CHECK_INTERVAL_MS,
+    parseMallPriceInfo,
+    parseMallLimitInfo,
+    getCouponGiftBalance,
+    getCouponGiftPurchase,
+    createCouponGiftBuyer,
+    autoBuyCouponGifts,
     getFertilizerBuyDailyState: () => ({
         key: 'fertilizer_buy',
         doneToday: buyDoneDateKey === getSystemDateKey(),

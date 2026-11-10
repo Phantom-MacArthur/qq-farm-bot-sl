@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useIntervalFn } from '@vueuse/core'
 import { NCard } from 'naive-ui/es/card'
 import { NModal } from 'naive-ui/es/modal'
 import { NRadio, NRadioGroup } from 'naive-ui/es/radio'
@@ -19,7 +20,7 @@ const emit = defineEmits(['close', 'saved'])
 
 const loading = ref(false)
 const errorMessage = ref('')
-const activeLoginTab = ref<'code' | 'wx_qr' | 'qq_qr'>('code')
+const activeLoginTab = ref<'code' | 'wx_qr' | 'qq_qr' | 'capture'>('code')
 const loginSettingsLoaded = ref(false)
 const loginSettings = ref({
   wechatQrLogin: true,
@@ -52,6 +53,227 @@ let qqPollInFlight: Promise<void> | undefined
 let qqPollKey = ''
 let qqPendingCode = ''
 let qrNameSubmitTimer: ReturnType<typeof setTimeout> | undefined
+
+// ===== 抓包 Code 登录（移植自 B 项目，对接 SL 后端 /api/capture/*） =====
+interface CaptureFlowState {
+  id: string
+  platform: 'qq' | 'wx'
+  codeCaptured: boolean
+  accountGid: string
+  friendCount: number
+  friendListComplete: boolean
+  captureStatus: string
+  proxy: { running: boolean, status: string, error: string }
+  publicInfo: {
+    host: string
+    addresses: { address: string, kind: string }[]
+    mitmPort: number
+    remainingSec: number
+    certificateUrl: string
+  }
+}
+
+const CAPTURE_SUCCESS_STORAGE_KEY = 'capture_login_succeeded'
+const captureEnabled = ref(false)
+const captureLoading = ref(false)
+const captureChecking = ref(false)
+const captureCompleting = ref(false)
+const captureError = ref('')
+const captureCopiedField = ref<'host' | 'port' | ''>('')
+const captureAccountName = ref('')
+const capturePlatform = ref<'qq' | 'wx'>('wx')
+const showCaptureHelp = ref(false)
+const captureHelpMode = ref<'first' | 'daily'>('first')
+const captureHelpDevice = ref<'ios' | 'android'>('ios')
+const captureFlow = ref<CaptureFlowState | null>(null)
+
+const captureHelpSteps = computed(() => captureHelpMode.value === 'first'
+  ? [
+      '点击开始抓取，获取本次代理地址和端口',
+      '打开 CA 证书，并在手机系统中安装和信任',
+      '连续添加时，先切换到目标 QQ 并彻底关闭上一个农场',
+      '将手机 Wi-Fi 代理设置为页面显示的地址和端口',
+      '彻底关闭后重新打开对应的 QQ 或微信农场',
+      'Code 获取后账号会立即添加；QQ 好友 GID 将在后台继续同步',
+      'QQ 农场保持打开，完整好友列表同步后会立即释放代理，最迟约 15 秒',
+    ]
+  : [
+      '点击开始抓取，确认本次代理地址和端口',
+      '连续添加时，先切换到目标 QQ 并彻底关闭上一个农场',
+      '将手机 Wi-Fi 代理更新为本次显示的地址和端口',
+      '重新打开对应农场，并保持页面打开',
+      '账号添加后，QQ 农场继续保持打开，最迟约 15 秒完成后台同步',
+      '后台同步结束后，将手机 Wi-Fi 代理改回关闭',
+    ])
+
+const captureDeviceSteps = computed(() => captureHelpDevice.value === 'ios'
+  ? [
+      '在 Safari 中点击“打开证书”并允许下载描述文件',
+      '进入“设置 → 通用 → VPN 与设备管理”安装描述文件',
+      '进入“设置 → 通用 → 关于本机 → 证书信任设置”启用完全信任',
+    ]
+  : [
+      '点击“打开证书”下载 CA 文件',
+      '进入系统安全设置中的“安装证书”或“凭据存储”',
+      '选择 CA 证书并确认安装；不同品牌的菜单名称可能不同',
+    ])
+
+const captureCurrentStep = computed(() => {
+  if (!captureFlow.value)
+    return '开始新的抓取任务'
+  if (!captureFlow.value.codeCaptured)
+    return `设置 Wi-Fi 代理并打开${captureFlow.value.platform === 'qq' ? ' QQ' : '微信'}农场`
+  return '已获取 Code，正在立即完成账号操作'
+})
+
+const captureNextStep = computed(() => {
+  if (!captureFlow.value)
+    return '开始后按本次显示的代理信息设置手机 Wi-Fi'
+  if (!captureFlow.value.codeCaptured)
+    return '重新打开小程序，并保持农场页面打开'
+  if (captureFlow.value.platform === 'qq')
+    return `即将自动${props.editData ? '更新' : '添加'}账号，好友 GID 将在后台同步`
+  return `即将自动${props.editData ? '更新' : '添加'}账号`
+})
+
+const { pause: stopCaptureCheck, resume: startCaptureCheck } = useIntervalFn(async () => {
+  if (activeLoginTab.value !== 'capture' || !captureFlow.value || captureCompleting.value || captureChecking.value)
+    return
+  captureChecking.value = true
+  try {
+    const { data } = await api.get(`/api/capture/sessions/${captureFlow.value.id}`, { timeout: 20000, skipErrorToast: true } as any)
+    if (!data?.ok || !data.data)
+      return
+    captureFlow.value = data.data
+    captureError.value = data.data.proxy?.error || ''
+    if (data.data.codeCaptured)
+      await completeCaptureAccount()
+  }
+  catch (e: any) {
+    captureError.value = getApiErrorMessage(e, '查询抓取状态失败')
+  }
+  finally {
+    captureChecking.value = false
+  }
+}, 1500, { immediate: false })
+
+async function loadCaptureConfig() {
+  try {
+    const { data } = await api.get('/api/capture/config', { skipErrorToast: true } as any)
+    captureEnabled.value = data?.ok && data.data?.enabled === true
+  }
+  catch {
+    captureEnabled.value = false
+  }
+  if (!captureEnabled.value && activeLoginTab.value === 'capture')
+    activeLoginTab.value = 'code'
+}
+
+async function cancelCaptureSession() {
+  stopCaptureCheck()
+  const flowId = captureFlow.value?.id
+  captureFlow.value = null
+  if (flowId) {
+    try {
+      await api.delete(`/api/capture/sessions/${flowId}`, { skipErrorToast: true } as any)
+    }
+    catch {}
+  }
+}
+
+async function startCaptureSession() {
+  captureLoading.value = true
+  captureError.value = ''
+  await cancelCaptureSession()
+  try {
+    const { data } = await api.post('/api/capture/sessions', {
+      platform: capturePlatform.value,
+      accountId: props.editData?.id || '',
+    }, { timeout: 35000 })
+    if (!data?.ok || !data.data)
+      throw new Error(getApiErrorMessage(data, '启动抓取失败'))
+    captureFlow.value = data.data
+    startCaptureCheck()
+  }
+  catch (e: any) {
+    captureError.value = getApiErrorMessage(e, '启动抓取失败')
+  }
+  finally {
+    captureLoading.value = false
+  }
+}
+
+async function completeCaptureAccount() {
+  if (!captureFlow.value || captureCompleting.value)
+    return
+  captureCompleting.value = true
+  captureError.value = ''
+  try {
+    const { data } = await api.post(`/api/capture/sessions/${captureFlow.value.id}/complete`, {
+      name: captureAccountName.value.trim(),
+    }, { timeout: 35000 })
+    if (!data?.ok)
+      throw new Error(getApiErrorMessage(data, props.editData ? '更新账号失败' : '添加账号失败'))
+    localStorage.setItem(CAPTURE_SUCCESS_STORAGE_KEY, '1')
+    stopCaptureCheck()
+    captureFlow.value = null
+    emit('saved')
+    close()
+  }
+  catch (e: any) {
+    if (e.response?.data?.code === 'DUPLICATE_CAPTURE_ACCOUNT') {
+      stopCaptureCheck()
+      captureFlow.value = null
+    }
+    captureError.value = getApiErrorMessage(e, props.editData ? '更新账号失败' : '添加账号失败')
+  }
+  finally {
+    captureCompleting.value = false
+  }
+}
+
+function openCaptureHelp() {
+  captureHelpMode.value = localStorage.getItem(CAPTURE_SUCCESS_STORAGE_KEY) === '1' ? 'daily' : 'first'
+  showCaptureHelp.value = true
+}
+
+async function copyCaptureValue(field: 'host' | 'port') {
+  const host = captureFlow.value?.publicInfo.host || ''
+  const port = captureFlow.value?.publicInfo.mitmPort || 0
+  if (!host || !port)
+    return
+  const value = field === 'host' ? host : String(port)
+  try {
+    let copied = false
+    if (navigator.clipboard?.writeText) {
+      try {
+        await navigator.clipboard.writeText(value)
+        copied = true
+      }
+      catch {}
+    }
+    if (!copied) {
+      const textarea = document.createElement('textarea')
+      textarea.value = value
+      textarea.style.position = 'fixed'
+      textarea.style.opacity = '0'
+      document.body.appendChild(textarea)
+      textarea.select()
+      copied = document.execCommand('copy')
+      textarea.remove()
+    }
+    if (!copied)
+      throw new Error('copy failed')
+    captureCopiedField.value = field
+    setTimeout(() => {
+      if (captureCopiedField.value === field)
+        captureCopiedField.value = ''
+    }, 1800)
+  }
+  catch {
+    captureError.value = '复制失败，请手动填写代理地址和端口'
+  }
+}
 
 const wechatQrLoginEnabled = computed(() => loginSettingsLoaded.value && loginSettings.value.wechatQrLogin)
 const qqQrLoginEnabled = computed(() => loginSettingsLoaded.value && loginSettings.value.qqQrLogin)
@@ -580,6 +802,9 @@ async function startQqLogin() {
 function close() {
   resetWxLogin()
   resetQqLogin()
+  stopCaptureCheck()
+  void cancelCaptureSession()
+  showCaptureHelp.value = false
   emit('close')
 }
 
@@ -589,6 +814,15 @@ watch(() => props.show, (newVal) => {
     activeLoginTab.value = 'code'
     resetWxLogin()
     void loadLoginSettings()
+    // 抓包登录：重置会话并按后端开关决定 tab 可用性
+    stopCaptureCheck()
+    captureError.value = ''
+    captureCopiedField.value = ''
+    captureFlow.value = null
+    captureAccountName.value = props.editData?.name || ''
+    capturePlatform.value = props.editData?.platform === 'qq' ? 'qq' : 'wx'
+    captureHelpMode.value = localStorage.getItem(CAPTURE_SUCCESS_STORAGE_KEY) === '1' ? 'daily' : 'first'
+    void loadCaptureConfig()
     if (props.editData) {
       form.name = props.editData.name || ''
       form.code = props.editData.code || ''
@@ -599,6 +833,10 @@ watch(() => props.show, (newVal) => {
       form.code = ''
       form.platform = 'qq'
     }
+  }
+  else {
+    stopCaptureCheck()
+    void cancelCaptureSession()
   }
 })
 
@@ -611,10 +849,14 @@ watch(activeLoginTab, (tab) => {
     void startQqLogin()
   else if (tab === 'qq_qr' && !qqQrLoginEnabled.value)
     activeLoginTab.value = 'code'
+  else if (tab === 'capture' && !captureEnabled.value)
+    activeLoginTab.value = 'code'
   if (tab !== 'wx_qr')
     resetWxLogin()
   if (tab !== 'qq_qr')
     resetQqLogin()
+  if (tab !== 'capture')
+    void cancelCaptureSession()
 })
 
 watch(() => form.name, (name) => {
@@ -632,21 +874,22 @@ watch(() => form.name, (name) => {
 onBeforeUnmount(() => {
   resetWxLogin()
   resetQqLogin()
+  stopCaptureCheck()
 })
 </script>
 
 <template>
   <NModal
     :show="show"
-    :mask-closable="!loading && !wxLoading && !qqLoading"
-    :close-on-esc="!loading && !wxLoading && !qqLoading"
+    :mask-closable="!loading && !wxLoading && !qqLoading && !captureCompleting"
+    :close-on-esc="!loading && !wxLoading && !qqLoading && !captureCompleting"
     @update:show="value => !value && close()"
   >
     <NCard
       class="account-modal-card"
       :title="editData ? '编辑账号' : '添加账号'"
       :bordered="false"
-      :closable="!loading && !wxLoading && !qqLoading"
+      :closable="!loading && !wxLoading && !qqLoading && !captureCompleting"
       @close="close"
     >
       <div class="account-modal-content overflow-y-auto">
@@ -664,6 +907,9 @@ onBeforeUnmount(() => {
           </NTab>
           <NTab v-if="qqQrLoginEnabled" name="qq_qr">
             QQ扫码登录
+          </NTab>
+          <NTab v-if="captureEnabled" name="capture">
+            抓包登录
           </NTab>
         </NTabs>
 
@@ -762,6 +1008,194 @@ onBeforeUnmount(() => {
             <BaseButton variant="outline" @click="close">
               取消
             </BaseButton>
+          </div>
+        </div>
+        <div v-else-if="activeLoginTab === 'capture'" class="space-y-4" role="tabpanel" aria-label="抓包登录">
+          <BaseInput
+            v-model="captureAccountName"
+            label="账号备注（可选）"
+            :placeholder="editData ? '账号名保持不变' : '留空则使用抓包到的昵称'"
+            class="farm-input"
+            :disabled="!!captureFlow"
+          />
+
+          <NRadioGroup v-if="!editData" v-model:value="capturePlatform" name="capture-platform" :disabled="!!captureFlow">
+            <div class="flex gap-5">
+              <NRadio value="qq">
+                QQ 小程序
+              </NRadio>
+              <NRadio value="wx">
+                微信小程序
+              </NRadio>
+            </div>
+          </NRadioGroup>
+
+          <div class="flex items-center justify-between border border-gray-200 rounded-lg px-3 py-2 text-sm dark:border-gray-700">
+            <span class="opacity-70" :style="{ color: 'var(--theme-text)' }">需设置手机 Wi-Fi 代理并信任证书</span>
+            <BaseButton variant="text" size="sm" @click="openCaptureHelp">
+              使用说明
+            </BaseButton>
+          </div>
+
+          <div v-if="captureError" class="rounded-xl p-3 text-sm" style="background: rgba(239, 68, 68, 0.1); color: #ef4444">
+            {{ captureError }}
+          </div>
+
+          <div v-if="!captureFlow" class="flex flex-col items-center gap-3 py-4">
+            <div class="h-16 w-16 flex items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
+              <span class="i-carbon-data-connected text-3xl" :style="{ color: 'var(--theme-primary)' }" />
+            </div>
+            <BaseButton variant="primary" :loading="captureLoading" @click="startCaptureSession">
+              开始抓取
+            </BaseButton>
+          </div>
+
+          <template v-else>
+            <div class="rounded-lg px-3 py-3 text-sm" style="background-color: color-mix(in srgb, var(--theme-primary) 10%, transparent); color: var(--theme-text);">
+              <div class="text-xs opacity-60">
+                当前步骤
+              </div>
+              <div class="mt-1 break-words font-semibold">
+                {{ captureCurrentStep }}
+              </div>
+              <div class="mt-1 break-words text-xs opacity-70">
+                下一步：{{ captureNextStep }}
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-sm">
+              <div class="min-w-0 flex items-center justify-between gap-1 border border-gray-200 rounded-lg px-3 py-3 dark:border-gray-700">
+                <div class="min-w-0">
+                  <div class="text-xs opacity-60">
+                    代理服务器
+                  </div>
+                  <div class="mt-1 break-all font-semibold" :style="{ color: 'var(--theme-text)' }">
+                    {{ captureFlow.publicInfo.host || '-' }}
+                  </div>
+                </div>
+                <BaseButton variant="text" size="sm" :title="captureCopiedField === 'host' ? '已复制' : '复制代理服务器'" class="flex-none !px-2" @click="copyCaptureValue('host')">
+                  <span :class="captureCopiedField === 'host' ? 'i-carbon-checkmark text-green-600' : 'i-carbon-copy'" />
+                </BaseButton>
+              </div>
+              <div class="min-w-0 flex items-center justify-between gap-1 border border-gray-200 rounded-lg px-3 py-3 dark:border-gray-700">
+                <div class="min-w-0">
+                  <div class="text-xs opacity-60">
+                    代理端口
+                  </div>
+                  <div class="mt-1 font-semibold" :style="{ color: 'var(--theme-text)' }">
+                    {{ captureFlow.publicInfo.mitmPort || '-' }}
+                  </div>
+                </div>
+                <BaseButton variant="text" size="sm" :title="captureCopiedField === 'port' ? '已复制' : '复制代理端口'" class="flex-none !px-2" @click="copyCaptureValue('port')">
+                  <span :class="captureCopiedField === 'port' ? 'i-carbon-checkmark text-green-600' : 'i-carbon-copy'" />
+                </BaseButton>
+              </div>
+            </div>
+
+            <div v-if="captureFlow.publicInfo.addresses?.length > 1" class="border border-gray-200 rounded-lg p-3 text-sm dark:border-gray-700">
+              <div class="mb-2 text-xs opacity-60">
+                全部可用地址（按当前网络环境选择，代理端口相同）
+              </div>
+              <div class="space-y-1.5">
+                <div v-for="item in captureFlow.publicInfo.addresses" :key="item.address" class="flex items-center justify-between gap-2">
+                  <span class="min-w-0 break-all text-xs font-mono" :style="{ color: 'var(--theme-text)' }">{{ item.address }}:{{ captureFlow.publicInfo.mitmPort }}</span>
+                  <span class="flex-none rounded px-1.5 py-0.5 text-[10px] font-medium" :style="{ color: item.kind === 'tailscale' ? '#0ea5e9' : item.kind === 'lan' ? '#10b981' : 'var(--theme-text)', background: 'color-mix(in srgb, currentColor 10%, transparent)' }">
+                    {{ item.kind === 'tailscale' ? 'Tailscale' : item.kind === 'lan' ? '局域网' : '其他' }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div class="rounded-lg bg-gray-50 p-3 text-sm dark:bg-gray-800">
+              <div class="flex items-center justify-between gap-3">
+                <span>Code</span>
+                <span :class="captureFlow.codeCaptured ? 'text-green-600 dark:text-green-400' : 'text-amber-600 dark:text-amber-400'">{{ captureFlow.codeCaptured ? '已获取' : '等待中' }}</span>
+              </div>
+              <div v-if="captureFlow.platform === 'qq'" class="mt-2 flex items-center justify-between gap-3">
+                <span>好友 GID</span>
+                <span :style="{ color: 'var(--theme-primary)' }">{{ captureFlow.friendCount }} 个</span>
+              </div>
+              <div class="mt-2 flex items-center justify-between gap-3">
+                <span>剩余时间</span>
+                <span>{{ captureFlow.publicInfo.remainingSec }} 秒</span>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap justify-end gap-2 pt-2">
+              <BaseButton variant="secondary" size="sm" :href="captureFlow.publicInfo.certificateUrl">
+                <span class="i-carbon-certificate" /> 打开证书
+              </BaseButton>
+              <BaseButton variant="outline" size="sm" @click="cancelCaptureSession">
+                取消抓取
+              </BaseButton>
+              <BaseButton v-if="captureFlow.codeCaptured" variant="primary" size="sm" :loading="captureCompleting" @click="completeCaptureAccount">
+                {{ editData ? '立即更新' : '立即添加' }}
+              </BaseButton>
+            </div>
+          </template>
+        </div>
+      </div>
+    </NCard>
+  </NModal>
+  <NModal
+    :show="showCaptureHelp"
+    @update:show="value => !value && (showCaptureHelp = false)"
+  >
+    <NCard
+      class="account-modal-card"
+      title="抓包登录使用说明"
+      :bordered="false"
+      closable
+      @close="showCaptureHelp = false"
+    >
+      <div class="space-y-4">
+        <div class="grid grid-cols-2 gap-2">
+          <BaseButton :variant="captureHelpMode === 'first' ? 'primary' : 'outline'" size="sm" @click="captureHelpMode = 'first'">
+            首次使用
+          </BaseButton>
+          <BaseButton :variant="captureHelpMode === 'daily' ? 'primary' : 'outline'" size="sm" @click="captureHelpMode = 'daily'">
+            已装证书
+          </BaseButton>
+        </div>
+
+        <div class="space-y-3">
+          <div v-for="(step, index) in captureHelpSteps" :key="step" class="flex items-start gap-3">
+            <span class="h-6 w-6 flex flex-none items-center justify-center rounded-full text-xs text-white font-semibold" :style="{ background: 'var(--theme-primary)' }">
+              {{ index + 1 }}
+            </span>
+            <span class="min-w-0 break-words text-sm leading-6" :style="{ color: 'var(--theme-text)' }">{{ step }}</span>
+          </div>
+        </div>
+
+        <template v-if="captureHelpMode === 'first'">
+          <div class="border-t pt-4 dark:border-gray-700">
+            <div class="mb-3 text-sm font-semibold" :style="{ color: 'var(--theme-text)' }">
+              证书安装帮助
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <BaseButton :variant="captureHelpDevice === 'ios' ? 'primary' : 'outline'" size="sm" @click="captureHelpDevice = 'ios'">
+                iPhone / iPad
+              </BaseButton>
+              <BaseButton :variant="captureHelpDevice === 'android' ? 'primary' : 'outline'" size="sm" @click="captureHelpDevice = 'android'">
+                Android
+              </BaseButton>
+            </div>
+            <div class="mt-3 space-y-2">
+              <div v-for="(step, index) in captureDeviceSteps" :key="step" class="flex items-start gap-2 text-xs leading-5" :style="{ color: 'var(--theme-text)' }">
+                <span class="flex-none opacity-60">{{ index + 1 }}.</span>
+                <span class="break-words">{{ step }}</span>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <div class="rounded-lg bg-amber-50 px-3 py-3 text-xs text-amber-800 leading-5 dark:bg-amber-900/20 dark:text-amber-200">
+          <div>每次任务的代理端口可能变化，请以当前页面显示为准。</div>
+          <div class="mt-1">
+            服务端会自动释放代理，但账号完成后仍需在手机上手动关闭 Wi-Fi 代理。
+          </div>
+          <div v-if="capturePlatform === 'wx'" class="mt-1">
+            微信抓取成功后无法继续进入农场属于正常现象。
           </div>
         </div>
       </div>

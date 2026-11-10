@@ -324,7 +324,7 @@ async function getMysteryShop(): Promise<any> {
     };
 }
 
-async function purchaseMysteryOffer(npcIdInput: unknown): Promise<any> {
+async function purchaseMysteryOffer(npcIdInput: unknown, source: string = 'manual'): Promise<any> {
     const npcId = positiveInteger(npcIdInput, 'INVALID_MYSTERY_NPC_ID', 'npcId');
     return serializePurchase(async () => {
         const before = await getMysteryShop();
@@ -341,6 +341,8 @@ async function purchaseMysteryOffer(npcIdInput: unknown): Promise<any> {
         if (shop.active && shop.npc?.id === npcId && shop.npc.reward.count >= offer.reward.count) {
             throw businessError('MYSTERY_PURCHASE_NOT_CONFIRMED', 'Mystery shop purchase was not confirmed');
         }
+        // 落盘购买历史（手动/自动）；历史记录失败不影响已确认的购买。
+        try { mysteryShopService.appendMysteryShopHistory('', offer, { reward: offer.reward }, source); } catch { /* ignore history errors */ }
         return {
             purchase: {
                 npcId,

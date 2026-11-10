@@ -329,6 +329,31 @@ const settings = defineModel<AutomationSettingsFormModel>({ required: true })
             到货提醒可单独开启；购买提醒需先打开自动购买。
           </p>
         </section>
+
+        <section class="farm-card rounded-2xl p-4">
+          <div class="mb-4 flex items-start gap-3">
+            <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/25 dark:text-amber-400">
+              <span class="i-carbon-gift text-xl" />
+            </div>
+            <div>
+              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                点券限时礼包
+              </h4>
+              <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                在售且处于促销期时，自动用点券购买指定限时礼包
+              </p>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <div class="automation-setting-item sm:col-span-2">
+              <BaseSwitch v-model="settings.automation.mall_coupon_gift_buy" class="automation-setting-item" label="自动购买点券礼包" />
+            </div>
+          </div>
+          <p class="mt-3 text-xs text-gray-500 dark:text-gray-400">
+            仅在商品在售、未过促销结束时间时购买，会校验点券余额与限购余量；余额不足会自动跳过并记录日志。
+          </p>
+        </section>
       </div>
     </div>
 

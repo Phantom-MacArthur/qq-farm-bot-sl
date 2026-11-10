@@ -30,6 +30,7 @@ export interface AutomationConfig {
   mystery_shop_allow_diamond?: boolean
   mystery_shop_arrival_notify?: boolean
   mystery_shop_purchase_notify?: boolean
+  mall_coupon_gift_buy?: boolean
   skip_own_weed_bug?: boolean
   show_manual_fertilizer?: boolean
 }

@@ -77,6 +77,7 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         mystery_shop_allow_diamond: false,
         mystery_shop_arrival_notify: false,
         mystery_shop_purchase_notify: false,
+        mall_coupon_gift_buy: false,
         sell: true,
         fertilizer: 'smart',
         fertilizer_multi_season: true,

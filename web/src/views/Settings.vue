@@ -140,7 +140,7 @@ onMounted(async () => {
   }
   if (currentAccountId.value)
     await loadStrategyData(currentAccountId.value)
-  await Promise.all([loadSystemConfig(), loadDevicePresets()])
+  await Promise.all([loadSystemConfig(), loadDevicePresets(), loadCaptureConfigSettings()])
 })
 
 function openSettings(account: any) {
@@ -885,6 +885,7 @@ const localAutomationSettings = ref({
     mystery_shop_allow_diamond: false,
     mystery_shop_arrival_notify: false,
     mystery_shop_purchase_notify: false,
+    mall_coupon_gift_buy: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
     fertilizer_multi_season: false,
@@ -940,6 +941,7 @@ function syncLocalAutomationSettings() {
         mystery_shop_allow_diamond: false,
         mystery_shop_arrival_notify: false,
         mystery_shop_purchase_notify: false,
+        mall_coupon_gift_buy: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -973,6 +975,7 @@ function syncLocalAutomationSettings() {
         mystery_shop_allow_diamond: false,
         mystery_shop_arrival_notify: false,
         mystery_shop_purchase_notify: false,
+        mall_coupon_gift_buy: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -1289,6 +1292,75 @@ async function handleTestOffline() {
 const systemConfigSaving = ref(false)
 const systemConfigLoading = ref(false)
 const loginSettingsSaving = ref(false)
+
+// ===== 抓包登录配置（对接 /api/settings/capture-config） =====
+const captureConfigSaving = ref(false)
+const captureConfigTesting = ref(false)
+const localCaptureConfig = ref({
+  enabled: false,
+  autoImportQqGids: true,
+  embedded: false,
+  running: false,
+})
+
+function normalizeCaptureConfig(source: any) {
+  return {
+    enabled: source?.enabled === true,
+    autoImportQqGids: source?.autoImportQqGids !== false,
+    embedded: source?.embedded === true,
+    running: source?.running === true,
+  }
+}
+
+async function loadCaptureConfigSettings() {
+  try {
+    const { data } = await api.get('/api/settings/capture-config')
+    if (data?.ok)
+      localCaptureConfig.value = normalizeCaptureConfig(data.data)
+  }
+  catch (e) {
+    console.error('加载抓包登录配置失败:', e)
+  }
+}
+
+async function handleSaveCaptureConfig() {
+  captureConfigSaving.value = true
+  try {
+    const { data } = await api.post('/api/settings/capture-config', {
+      enabled: localCaptureConfig.value.enabled,
+      autoImportQqGids: localCaptureConfig.value.autoImportQqGids,
+    })
+    if (data?.ok)
+      localCaptureConfig.value = normalizeCaptureConfig(data.data)
+    showAlert(data?.ok ? '抓包登录设置已保存' : getApiErrorMessage(data, '保存失败'), data?.ok ? 'primary' : 'danger')
+  }
+  catch (e: any) {
+    showAlert(`保存失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
+  }
+  finally {
+    captureConfigSaving.value = false
+  }
+}
+
+async function handleTestCaptureConfig() {
+  captureConfigTesting.value = true
+  try {
+    const { data } = await api.post('/api/settings/capture-config/test')
+    if (data?.ok) {
+      const d = data.data || {}
+      showAlert(`抓包内核自检通过：会话 ${d.sessions || 0}，端口池 ${d.portPoolSize || 0}，代理端口 ${d.proxyPort || '-'}`, 'primary')
+    }
+    else {
+      showAlert(getApiErrorMessage(data, '自检失败'), 'danger')
+    }
+  }
+  catch (e: any) {
+    showAlert(`自检失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
+  }
+  finally {
+    captureConfigTesting.value = false
+  }
+}
 
 const defaultDeviceInfo = {
   os: 'Windows',
@@ -2144,6 +2216,51 @@ async function handleResetSystemConfig() {
                     @click="handleSaveLoginSettings"
                   >
                     保存登录设置
+                  </BaseButton>
+                </div>
+              </section>
+
+              <section class="farm-card rounded-lg p-4">
+                <div class="mb-4 flex items-start gap-3">
+                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-cyan-50 text-cyan-600 dark:bg-cyan-900/25 dark:text-cyan-400">
+                    <span class="i-carbon-data-connected text-xl" />
+                  </div>
+                  <div>
+                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                      抓包登录
+                    </h4>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      内置 MITM 代理，通过抓包获取 Code 登录（仅嵌入模式）
+                      <span v-if="localCaptureConfig.running" class="ml-1 text-green-600">· 代理运行中</span>
+                    </p>
+                  </div>
+                </div>
+
+                <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                  <div class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
+                    <BaseSwitch v-model="localCaptureConfig.enabled" label="启用抓包登录" />
+                  </div>
+                  <div class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
+                    <BaseSwitch v-model="localCaptureConfig.autoImportQqGids" label="QQ 好友 GID 自动导入" :disabled="!localCaptureConfig.enabled" />
+                  </div>
+                </div>
+
+                <div class="mt-3 flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+                  <BaseButton
+                    variant="outline"
+                    size="sm"
+                    :loading="captureConfigTesting"
+                    @click="handleTestCaptureConfig"
+                  >
+                    连通性自检
+                  </BaseButton>
+                  <BaseButton
+                    variant="primary"
+                    size="sm"
+                    :loading="captureConfigSaving"
+                    @click="handleSaveCaptureConfig"
+                  >
+                    保存抓包设置
                   </BaseButton>
                 </div>
               </section>

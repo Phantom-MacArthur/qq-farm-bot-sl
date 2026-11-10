@@ -72,6 +72,8 @@ const captureFlows = new Map<string, CaptureFlow>();
 
 // ===== 懒单例：首次用到才创建抓包核心，避免开机即落盘 CA 私钥 =====
 let captureCorePromise: Promise<any> | null = null;
+let shuttingDown = false;
+let shutdownHookInstalled = false;
 
 function captureLog(level: string, message: string, extra?: any): void {
     const meta = extra && typeof extra === 'object' ? extra : {};
@@ -101,6 +103,31 @@ async function stopCaptureCore(): Promise<void> {
     } catch (error: any) {
         captureLog('warn', '抓包核心停止失败', { error: error.message });
     }
+}
+
+/**
+ * 注册一次性主进程关停钩子：收到 SIGINT/SIGTERM 时释放抓包 MITM 代理再退出。
+ * admin 服务只在主进程挂载（startAdminServer 运行于主进程），故不会在 worker 子进程重复注册。
+ * 未创建过抓包内核时 stopCaptureCore() 立即返回，退出行为与原默认一致。
+ */
+function installShutdownHook(): void {
+    if (shutdownHookInstalled) return;
+    shutdownHookInstalled = true;
+    const handler = (): void => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        captureLog('info', '收到退出信号，正在释放抓包代理…');
+        // 兜底：最多等待 6s 仍未释放完成也强制退出，避免关停卡死
+        const guard = setTimeout(() => process.exit(0), 6000);
+        void stopCaptureCore()
+            .catch((error: any) => captureLog('warn', '关停释放抓包代理失败', { error: error.message }))
+            .finally(() => {
+                clearTimeout(guard);
+                process.exit(0);
+            });
+    };
+    process.once('SIGINT', handler);
+    process.once('SIGTERM', handler);
 }
 
 /** 进程内调用抓包核心，返回 {ok,data} 信封；status>=400 或 ok===false 抛错 */
@@ -451,6 +478,9 @@ async function cleanupExpiredFlows(): Promise<void> {
 // ===== 路由挂载 =====
 
 function mountCaptureRoutes(app: Application, ctx: AdminContext): void {
+    // 主进程关停时释放 MITM 代理端口与会话定时器（仅嵌入模式；未创建内核时为空操作）
+    installShutdownHook();
+
     const cleanupTimer = setInterval(() => {
         void cleanupExpiredFlows().catch((error: any) => {
             captureLog('warn', '过期抓包任务清理失败', { error: error.message });
