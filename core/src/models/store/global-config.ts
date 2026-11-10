@@ -1,4 +1,4 @@
-import type { GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
+import type { CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
 export {};
 
 const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
@@ -9,6 +9,7 @@ const {
     PUSHOO_CHANNELS,
     DEFAULT_OFFLINE_REMINDER,
     DEFAULT_LOGIN_SETTINGS,
+    DEFAULT_CAPTURE_SETTINGS,
     globalConfig,
     normalizeAccountConfig,
     cloneAccountConfig,
@@ -106,6 +107,26 @@ function setLoginSettings(cfg: Partial<LoginSettings> | undefined): LoginSetting
     return getLoginSettings();
 }
 
+function normalizeCaptureSettings(input: unknown): CaptureSettings {
+    const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
+    return {
+        enabled: typeof src.enabled === 'boolean' ? src.enabled : DEFAULT_CAPTURE_SETTINGS.enabled,
+        autoImportQqGids: typeof src.autoImportQqGids === 'boolean'
+            ? src.autoImportQqGids
+            : DEFAULT_CAPTURE_SETTINGS.autoImportQqGids,
+    };
+}
+
+function getCaptureSettings(): CaptureSettings {
+    return normalizeCaptureSettings(globalConfig.captureSettings);
+}
+
+function setCaptureSettings(cfg: Partial<CaptureSettings> | undefined): CaptureSettings {
+    const next = normalizeCaptureSettings({ ...getCaptureSettings(), ...(cfg || {}) });
+    saveGlobalConfig({ captureSettings: next });
+    return getCaptureSettings();
+}
+
 function setOfflineReminder(cfg: Partial<OfflineReminder> | undefined): OfflineReminder {
     const current = normalizeOfflineReminder(globalConfig.offlineReminder);
     const next = normalizeOfflineReminder({ ...current, ...(cfg || {}) });
@@ -183,6 +204,7 @@ loadGlobalConfig();
 // Apply offlineReminder normalization after load
 globalConfig.offlineReminder = normalizeOfflineReminder(globalConfig.offlineReminder);
 globalConfig.loginSettings = normalizeLoginSettings(globalConfig.loginSettings);
+globalConfig.captureSettings = normalizeCaptureSettings(globalConfig.captureSettings);
 if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
     saveGlobalConfig();
     sharedState.systemConfigMigrated = false;
@@ -194,6 +216,9 @@ module.exports = {
     setUITheme,
     getLoginSettings,
     setLoginSettings,
+    getCaptureSettings,
+    setCaptureSettings,
+    normalizeCaptureSettings,
     getOfflineReminder,
     setOfflineReminder,
     getSystemConfig,

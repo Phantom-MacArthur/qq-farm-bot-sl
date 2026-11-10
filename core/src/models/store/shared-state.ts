@@ -1,4 +1,4 @@
-import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, FertilizerLandType, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
+import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, CaptureSettings, FertilizerLandType, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
 export {};
 
 const { DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersion } = require('../../config/config');
@@ -45,6 +45,12 @@ const DEFAULT_LOGIN_SETTINGS: LoginSettings = {
     qqQrLogin: false,
     napCatEndpoint: '',
     napCatSignature: '',
+};
+
+// 抓包登录默认开启；内核 MITM 代理仍只在创建抓包会话时按会话临时监听端口。
+const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
+    enabled: true,
+    autoImportQqGids: true,
 };
 
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
@@ -510,6 +516,7 @@ const globalConfig: GlobalConfig = {
         theme: 'light',
     },
     loginSettings: { ...DEFAULT_LOGIN_SETTINGS },
+    captureSettings: { ...DEFAULT_CAPTURE_SETTINGS },
     offlineReminder: { ...DEFAULT_OFFLINE_REMINDER },
     systemConfig: null,
 };
@@ -561,6 +568,17 @@ function loadGlobalConfig(): void {
                     napCatSignature: typeof data.loginSettings.napCatSignature === 'string'
                         ? data.loginSettings.napCatSignature.trim()
                         : DEFAULT_LOGIN_SETTINGS.napCatSignature,
+                };
+            }
+
+            if (data.captureSettings && typeof data.captureSettings === 'object') {
+                globalConfig.captureSettings = {
+                    enabled: typeof data.captureSettings.enabled === 'boolean'
+                        ? data.captureSettings.enabled
+                        : DEFAULT_CAPTURE_SETTINGS.enabled,
+                    autoImportQqGids: typeof data.captureSettings.autoImportQqGids === 'boolean'
+                        ? data.captureSettings.autoImportQqGids
+                        : DEFAULT_CAPTURE_SETTINGS.autoImportQqGids,
                 };
             }
 
@@ -628,6 +646,7 @@ module.exports = {
     DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC,
     DEFAULT_OFFLINE_REMINDER,
     DEFAULT_LOGIN_SETTINGS,
+    DEFAULT_CAPTURE_SETTINGS,
     DEFAULT_ACCOUNT_CONFIG,
     ALLOWED_AUTOMATION_KEYS,
     // Mutable shared state (by reference)

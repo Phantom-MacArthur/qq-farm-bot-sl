@@ -121,6 +121,17 @@ export interface LoginSettings {
   napCatSignature: string;
 }
 
+/**
+ * 面板侧的抓包登录开关（落在 store.json）。
+ * 与 `<data>/capture/config.json`（代理端口、抓取域名等内核配置）相互独立。
+ */
+export interface CaptureSettings {
+  /** 是否允许使用抓包登录添加/更新账号 */
+  enabled: boolean;
+  /** QQ 抓包登录后是否把抓到的好友 GID 自动并入已知好友列表 */
+  autoImportQqGids: boolean;
+}
+
 export interface DeviceInfo {
   os: string;
   clientVersion: string;
@@ -148,6 +159,7 @@ export interface GlobalConfig {
   defaultAccountConfig: AccountConfig;
   ui: UIConfig;
   loginSettings: LoginSettings;
+  captureSettings: CaptureSettings;
   offlineReminder: OfflineReminder;
   systemConfig: SystemConfig | null;
 }
