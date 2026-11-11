@@ -21,9 +21,6 @@ const basis = computed(() => ({ planted: '按当前作物', ready: '待收获', 
       <span class="text-gray-700 dark:text-gray-200">{{ timeText }}</span>
       <span class="text-gray-400">{{ basis }}</span>
     </div>
-    <div v-if="forecast?.plotCount" class="text-gray-500" title="按当前季作物和土地经验加成估算，不计未确认的随机加成；经验需收获后获得。">
-      已种植 {{ forecast.plotCount }} 处 · 预计 {{ forecast.scheduledExp.toLocaleString('zh-CN') }} 经验
-    </div>
     <div v-if="forecast?.plotCount && !forecast.automatic" class="text-amber-600 dark:text-amber-400">
       收获时间取决于手动操作或恢复自动农场
     </div>

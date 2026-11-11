@@ -904,6 +904,13 @@ async function handleApiCall(msg: any): Promise<void> {
             case 'getDiamondBalance':
                 result = await require('../services/pay').getDiamondBalance();
                 break;
+            case 'getCareerInfo': {
+                const { getCareerInfo: _getCareerInfo } = require('../services/career');
+                // 未显式传 gid 时回退到当前登录角色的 GID
+                const careerGid = Number(args[0]) || Number(getUserState()?.gid) || 0;
+                result = await _getCareerInfo(careerGid);
+                break;
+            }
             case 'useItem': {
                 const { useItem: _useItem } = require('../services/warehouse');
                 const itemId = Number(args[0]) || 0;

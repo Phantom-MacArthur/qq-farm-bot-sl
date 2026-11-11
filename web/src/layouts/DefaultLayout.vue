@@ -63,7 +63,10 @@ useResizeObserver(scrollEl, measureScrollbar)
           class="page-scroll custom-scrollbar flex flex-1 flex-col"
           :class="[
             route.meta.fullBleed ? 'overflow-hidden p-0' : 'overflow-y-auto',
-            { 'page-scroll--fill': activityDetail },
+            {
+              'page-scroll--fill': activityDetail,
+              'page-scroll--dashboard': route.name === 'dashboard',
+            },
           ]"
           @scroll.passive="onPageScroll"
         >
@@ -93,7 +96,7 @@ useResizeObserver(scrollEl, measureScrollbar)
 
 /* 页头和内容共用左右留白，顶栏透出页面原有的渐变背景。 */
 .app-content {
-  --page-pad: clamp(16px, 2.4vw, 34px);
+  --page-pad: 24px;
   --sticky-top: 0px;
 }
 
@@ -108,7 +111,6 @@ useResizeObserver(scrollEl, measureScrollbar)
 
 .page-header-content {
   width: 100%;
-  max-width: 1580px;
   margin-inline: auto;
 }
 
@@ -124,16 +126,21 @@ useResizeObserver(scrollEl, measureScrollbar)
   position: relative;
   z-index: 0;
   min-height: 0;
-  padding: 0 var(--page-pad) 28px;
+  padding: 0 var(--page-pad) var(--page-pad);
   isolation: isolate;
 }
 
 .page-scroll > :deep(*) {
   flex: 0 0 auto;
   width: 100%;
-  max-width: 1580px;
   margin-block-start: 16px;
   margin-inline: auto;
+}
+
+@media (min-width: 1024px) {
+  .page-scroll--dashboard > :deep(.dashboard-page) {
+    flex: 1 0 auto;
+  }
 }
 
 /* 活动详情隐藏通用页头；普通详情沿用页面滚动，游戏外壳保留内部滚动。 */

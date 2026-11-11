@@ -83,18 +83,21 @@ interface InitialState {
     gold: number | null;
     exp: number | null;
     coupon: number | null;
+    goldBean: number | null;
 }
 
 const initialState: InitialState = {
     gold: null,
     exp: null,
     coupon: null,
+    goldBean: null,
 };
 
 interface SessionData {
     goldGained: number;
     expGained: number;
     couponGained: number;
+    goldBeanGained: number;
     lastExpGain: number;
     lastGoldGain: number;
     lastExpTime?: number;
@@ -104,6 +107,7 @@ const session: SessionData = {
     goldGained: 0,
     expGained: 0,
     couponGained: 0,
+    goldBeanGained: 0,
     lastExpGain: 0,
     lastGoldGain: 0,
 };
@@ -164,6 +168,8 @@ function initStats(gold: number, exp: number, coupon: number = 0): void {
     initialState.gold = g;
     initialState.exp = e;
     initialState.coupon = c;
+    // 金豆无独立初始化入参，置 null 后由 recomputeSessionTotals 惰性建立会话基线。
+    initialState.goldBean = null;
 }
 
 function initStatsWithPersistence(accountId: string, gold: number, exp: number, coupon: number = 0): void {
@@ -231,20 +237,27 @@ function resetSessionGains(): void {
     session.goldGained = 0;
     session.expGained = 0;
     session.couponGained = 0;
+    session.goldBeanGained = 0;
     session.lastGoldGain = 0;
     session.lastExpGain = 0;
     session.lastExpTime = 0;
 }
 
-function recomputeSessionTotals(currentGold: number, currentExp: number, currentCoupon: number): void {
+function recomputeSessionTotals(currentGold: number, currentExp: number, currentCoupon: number, currentGoldBean: number): void {
     if (initialState.gold === null || initialState.exp === null || initialState.coupon === null) {
         initialState.gold = currentGold;
         initialState.exp = currentExp;
         initialState.coupon = currentCoupon;
     }
+    if (initialState.goldBean === null && currentGoldBean > 0) {
+        // 等首个非零真实值再建立基线，避免连接初期把 0 误当作基线、
+        // 随后真实值到达时虚增一次“本次 +N”。
+        initialState.goldBean = currentGoldBean;
+    }
     session.goldGained = currentGold - (initialState.gold as number);
     session.expGained = currentExp - (initialState.exp as number);
     session.couponGained = currentCoupon - (initialState.coupon as number);
+    session.goldBeanGained = currentGoldBean - (initialState.goldBean as number);
 }
 
 function getStats(statusData: any, userState: any, connected: boolean, limits: any): any {
@@ -263,7 +276,7 @@ function getStats(statusData: any, userState: any, connected: boolean, limits: a
 
     if (connected) {
         updateStats(currentGold, currentExp);
-        recomputeSessionTotals(currentGold, currentExp, currentCoupon);
+        recomputeSessionTotals(currentGold, currentExp, currentCoupon, currentGoldBean);
     }
 
     const operationsSnapshot: OperationsMap = { ...operations };
@@ -285,6 +298,7 @@ function getStats(statusData: any, userState: any, connected: boolean, limits: a
         sessionExpGained: session.expGained,
         sessionGoldGained: session.goldGained,
         sessionCouponGained: session.couponGained,
+        sessionGoldBeanGained: session.goldBeanGained,
         lastExpGain: session.lastExpGain,
         lastGoldGain: session.lastGoldGain,
         limits,

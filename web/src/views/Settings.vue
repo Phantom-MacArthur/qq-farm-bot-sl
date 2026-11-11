@@ -44,6 +44,27 @@ const initialTab = settingsTabKeys.includes(queryTab as SettingsTab)
   ? queryTab as SettingsTab
   : storedTab === 'user' ? 'system' : (storedTab as SettingsTab) || 'account'
 const activeTab = ref<SettingsTab>(initialTab)
+const webVersion = __APP_VERSION__
+const coreVersion = ref('')
+const coreVersionLoading = ref(true)
+const coreVersionError = ref('')
+
+async function loadVersionInfo() {
+  coreVersionLoading.value = true
+  coreVersionError.value = ''
+  try {
+    const { data } = await api.get('/api/ping')
+    if (!data?.ok || !data?.data?.version)
+      throw new Error(getApiErrorMessage(data, 'Core 版本信息不可用'))
+    coreVersion.value = String(data.data.version)
+  }
+  catch (error: unknown) {
+    coreVersionError.value = getApiErrorMessage(error, '获取 Core 版本失败')
+  }
+  finally {
+    coreVersionLoading.value = false
+  }
+}
 
 watch(activeTab, (newTab) => {
   localStorage.setItem('settings-active-tab', newTab)
@@ -140,7 +161,7 @@ onMounted(async () => {
   }
   if (currentAccountId.value)
     await loadStrategyData(currentAccountId.value)
-  await Promise.all([loadSystemConfig(), loadDevicePresets(), loadCaptureConfigSettings()])
+  await Promise.all([loadSystemConfig(), loadDevicePresets(), loadCaptureConfigSettings(), loadVersionInfo()])
 })
 
 function openSettings(account: any) {
@@ -2019,6 +2040,27 @@ async function handleResetSystemConfig() {
           <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
             系统设置
           </h3>
+
+          <section class="farm-card rounded-lg p-4">
+            <div class="mb-3 flex items-center gap-2">
+              <span class="i-carbon-information text-lg text-blue-600 dark:text-blue-400" />
+              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                版本信息
+              </h4>
+            </div>
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div class="flex items-center justify-between rounded-lg bg-gray-50/70 px-3 py-2 text-sm dark:bg-gray-900/30">
+                <span class="text-gray-500 dark:text-gray-400">Web</span>
+                <strong class="text-gray-900 dark:text-gray-100">v{{ webVersion }}</strong>
+              </div>
+              <div class="flex items-center justify-between rounded-lg bg-gray-50/70 px-3 py-2 text-sm dark:bg-gray-900/30">
+                <span class="text-gray-500 dark:text-gray-400">Core</span>
+                <span v-if="coreVersionLoading" class="text-gray-500 dark:text-gray-400">读取中...</span>
+                <strong v-else-if="coreVersion" class="text-gray-900 dark:text-gray-100">v{{ coreVersion }}</strong>
+                <span v-else class="text-rose-600 dark:text-rose-400">{{ coreVersionError }}</span>
+              </div>
+            </div>
+          </section>
 
           <div class="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
             <section class="farm-card rounded-lg p-4">

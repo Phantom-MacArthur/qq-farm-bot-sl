@@ -1,47 +1,40 @@
 <script setup lang="ts">
-import { useMediaQuery } from '@vueuse/core'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
-import { computed } from 'vue'
-import { useRoute } from 'vue-router'
-import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
-import { menuRoutes } from '@/router/menu'
+import TopAccountMenu from '@/components/TopAccountMenu.vue'
 import { useAppStore } from '@/stores/app'
 
-const route = useRoute()
 const appStore = useAppStore()
-const isDesktop = useMediaQuery('(min-width: 1024px)')
-const { sidebarOpen, sidebarCollapsed } = storeToRefs(appStore)
-const currentPage = computed(() => menuRoutes.find(item => item.name === route.name))
-const navigationExpanded = computed(() => isDesktop.value ? !sidebarCollapsed.value : sidebarOpen.value)
-const navigationToggleLabel = computed(() => navigationExpanded.value ? '收起侧栏' : '展开侧栏')
-const navigationIcon = computed(() => {
-  if (!isDesktop.value)
-    return 'i-carbon-menu'
-  return navigationExpanded.value ? 'i-carbon-side-panel-close' : 'i-carbon-side-panel-open'
-})
-
-function toggleNavigation() {
-  if (isDesktop.value)
-    appStore.toggleSidebarCollapsed()
-  else
-    appStore.toggleSidebar()
-}
+const { sidebarOpen } = storeToRefs(appStore)
 </script>
 
 <template>
   <header class="page-header">
-    <div class="page-heading min-w-0">
-      <span v-if="currentPage" class="page-heading__icon" :class="currentPage.icon" />
-      <h1 class="page-heading__title">
-        {{ currentPage?.label || 'QQ农场智能助手' }}
+    <!-- 左侧：应用图标 + 标题 -->
+    <div class="min-w-0 flex flex-1 items-center gap-3">
+      <NButton
+        class="lg:hidden"
+        quaternary
+        circle
+        aria-controls="app-sidebar"
+        :aria-expanded="sidebarOpen"
+        aria-label="打开侧栏"
+        title="打开侧栏"
+        @click="appStore.openSidebar"
+      >
+        <div class="i-carbon-menu text-xl" />
+      </NButton>
+      <div class="page-header__brand">
+        <img src="/icon.png" alt="QQ农场智能助手图标" class="h-full w-full object-cover">
+      </div>
+      <h1 class="page-header__title">
+        QQ农场智能助手
       </h1>
     </div>
-    <div class="flex shrink-0 items-center gap-1">
-      <ThemeSwitcher />
-      <NButton quaternary circle aria-controls="app-sidebar" :aria-expanded="navigationExpanded" :aria-label="navigationToggleLabel" :title="navigationToggleLabel" @click="toggleNavigation">
-        <div class="text-xl" :class="navigationIcon" />
-      </NButton>
+
+    <!-- 右侧：账号切换 -->
+    <div class="flex shrink-0 items-center">
+      <TopAccountMenu />
     </div>
   </header>
 </template>
@@ -57,23 +50,24 @@ function toggleNavigation() {
   margin: 0;
 }
 
-.page-heading {
+.page-header__brand {
+  height: 32px;
+  width: 32px;
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 10px;
+  justify-content: center;
+  overflow: hidden;
+  border-radius: 999px;
+  border: 1px solid var(--ui-border);
+  box-shadow: var(--ui-shadow-sm);
 }
 
-.page-heading__icon {
-  flex-shrink: 0;
-  color: var(--ui-primary);
-  font-size: 22px;
-}
-
-.page-heading__title {
+.page-header__title {
   overflow: hidden;
   margin: 0;
   color: var(--ui-ink);
-  font-size: 22px;
+  font-size: 20px;
   font-weight: var(--fw-700);
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -81,8 +75,8 @@ function toggleNavigation() {
 }
 
 @media (max-width: 1023px) {
-  .page-heading__title {
-    font-size: 19px;
+  .page-header__title {
+    font-size: 17px;
   }
 }
 </style>

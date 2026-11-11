@@ -7,7 +7,6 @@ import { NPopover } from 'naive-ui/es/popover'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import CareerHarvestSteal from '@/components/CareerHarvestSteal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import LandCard from '@/components/FarmLandCard.vue'
 import LandDetailModal from '@/components/LandDetailModal.vue'
@@ -30,7 +29,6 @@ const {
   lands,
   summary,
   socialEvents,
-  career,
   loading,
   loaded,
   error,
@@ -639,9 +637,6 @@ onUnmounted(() => {
                   <span>空闲 {{ loaded && !error ? (summary?.empty || 0) : '--' }}</span>
                   <span>枯萎 {{ loaded && !error ? (summary?.dead || 0) : '--' }}</span>
                 </div>
-                <div v-if="loaded && !error && career" class="flex flex-col gap-2 border-t border-gray-100 pt-3 text-xs dark:border-gray-700">
-                  <CareerHarvestSteal :career="career" compact />
-                </div>
                 <div class="grid grid-cols-2 gap-2 border-t border-gray-100 pt-3 dark:border-gray-700">
                   <NButton size="small" :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning || !loaded || !!error || !lands.some(isFertilizeCandidate)" @click="fertilizerConfirmVisible = true">
                     一键施肥
@@ -693,7 +688,7 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <!-- Summary：左侧是当前土地状态，右侧是生涯数据；颜色只留给图标 -->
+      <!-- Summary：当前土地状态；颜色只留给图标 -->
       <div class="farm-summary shrink-0 border-b border-gray-100 px-4 py-3 dark:border-gray-700 sm:px-5">
         <div class="farm-summary__states">
           <span v-for="item in summaryItems" :key="item.key" class="farm-state" :class="{ 'is-zero': item.value === 0 }">
@@ -704,21 +699,6 @@ onUnmounted(() => {
             {{ item.label }}<b>{{ loaded && !error ? item.value : '--' }}</b>
           </span>
         </div>
-        <template v-if="loaded && !error && career">
-          <div class="farm-summary__career">
-            <CareerHarvestSteal :career="career" compact />
-          </div>
-          <NPopover trigger="click" placement="bottom-end" :show-arrow="false">
-            <template #trigger>
-              <button type="button" class="farm-summary__career-toggle" aria-label="查看生涯统计">
-                <span class="i-carbon-chart-relationship" />生涯
-              </button>
-            </template>
-            <div class="flex flex-col gap-2 text-sm">
-              <CareerHarvestSteal :career="career" compact />
-            </div>
-          </NPopover>
-        </template>
       </div>
 
       <!-- Grid -->
@@ -1084,29 +1064,6 @@ onUnmounted(() => {
 
 .farm-state.is-zero {
   opacity: 0.65;
-}
-
-.farm-summary__career {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
-}
-
-.farm-summary__career-toggle {
-  display: none;
-  align-items: center;
-  gap: 4px;
-  color: var(--ui-muted);
-}
-
-@media (max-width: 639px) {
-  .farm-summary__career {
-    display: none;
-  }
-
-  .farm-summary__career-toggle {
-    display: inline-flex;
-  }
 }
 
 .farm-actions {

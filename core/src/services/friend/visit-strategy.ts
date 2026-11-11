@@ -603,6 +603,33 @@ async function runFarmingWithFallback(
 }
 
 /**
+ * 帮好友务农的统计细分：对齐 origin 的 helpWater / helpWeed / helpBug 三个操作键。
+ * 一键务农接口不返回分类成功数，这里按各需求的土地数分配 operationCount，
+ * 分配不完的剩余部分记入 helpFarming 兜底，保证总数不丢。
+ */
+function recordHelpBreakdown(status: AnalyzeResult, operationCount: number): void {
+    if (operationCount <= 0) return;
+    const needs: Array<[string, number]> = [
+        ['helpWater', status.needWater.length],
+        ['helpWeed', status.needWeed.length],
+        ['helpBug', status.needBug.length],
+    ];
+    const totalNeed: number = needs.reduce((sum: number, [, n]) => sum + n, 0);
+    if (totalNeed <= 0) {
+        recordOperation('helpFarming', operationCount);
+        return;
+    }
+    let remaining: number = operationCount;
+    for (const [key, want] of needs) {
+        if (want <= 0 || remaining <= 0) continue;
+        const n: number = Math.min(want, remaining);
+        recordOperation(key, n);
+        remaining -= n;
+    }
+    if (remaining > 0) recordOperation('helpFarming', remaining);
+}
+
+/**
  * 面板手动好友操作（单个好友）
  * opType: 'steal' | 'water' | 'weed' | 'bug' | 'bad'
  */
@@ -672,7 +699,13 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
             if (!landIds.length) return { ok: true, opType, count: 0, message: '没有需要照顾的土地' };
             const outcome: FarmingOutcome = await runFarmingWithFallback(gid, landIds, false, getHelpSnapshotKey(lands), propagateErrors);
             count = outcome.landCount;
-            if (outcome.operationCount > 0) recordOperation('helpFarming', outcome.operationCount);
+            if (outcome.operationCount > 0) {
+                // 对齐 origin：按操作类型细分记录帮浇水/帮除草/帮除虫。
+                if (opType === 'water') recordOperation('helpWater', outcome.operationCount);
+                else if (opType === 'weed') recordOperation('helpWeed', outcome.operationCount);
+                else if (opType === 'bug') recordOperation('helpBug', outcome.operationCount);
+                else recordHelpBreakdown(status, outcome.operationCount);
+            }
             return {
                 ok: true,
                 opType,
@@ -846,7 +879,8 @@ export async function visitFriend(
                 actions.push(`一键务农${outcome.landCount}块/${outcome.operationCount}项(${parts.join('/')})`);
                 if (outcome.dogSkillGiftCount > 0) actions.push(`同气连枝礼包x${outcome.dogSkillGiftCount}(自动获得)`);
                 totalActions.farming += outcome.landCount;
-                recordOperation('helpFarming', outcome.operationCount);
+                // 对齐 origin：自动拜访的一键帮务农同样细分记录帮浇水/帮除草/帮除虫。
+                recordHelpBreakdown(status, outcome.operationCount);
             }
         }
     }

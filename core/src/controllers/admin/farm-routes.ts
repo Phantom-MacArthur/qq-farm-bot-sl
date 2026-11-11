@@ -50,6 +50,20 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
+    // API: 角色生涯（官方统计：累计收获/摘取与各作物收获明细）
+    app.get('/api/career', async (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+
+        try {
+            const gid = Number(req.query.gid) || 0;
+            const data = await ctx.provider.getCareerInfo(id, gid);
+            res.json({ ok: true, data });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
     app.post('/api/automation', async (req: Request, res: Response) => {
         const id = getAccId(ctx, req);
         if (!id) {
