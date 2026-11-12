@@ -746,6 +746,22 @@ async function loadBag() {
   imageErrors.value = {}
 }
 
+/** 只有用户点击刷新才让图标转圈；动作后的自动重载和 60 秒轮询不碰按钮，避免刷新图标闪烁。 */
+const manualRefreshing = ref(false)
+
+async function refreshBagOnDemand() {
+  if (manualRefreshing.value)
+    return
+
+  manualRefreshing.value = true
+  try {
+    await loadBag()
+  }
+  finally {
+    manualRefreshing.value = false
+  }
+}
+
 onMounted(() => {
   loadBag()
 })
@@ -791,12 +807,11 @@ useIntervalFn(loadBag, 60000)
             type="primary"
             aria-label="刷新"
             title="刷新背包"
-            :loading="bagLoading || statusLoading"
             :disabled="!currentAccountId || !status?.connection?.connected"
-            @click="loadBag"
+            @click="refreshBagOnDemand"
           >
             <template #icon>
-              <span class="i-carbon-renew" />
+              <span class="i-carbon-renew" :class="{ 'animate-spin': manualRefreshing }" />
             </template>
             <span class="bag-action-label">刷新</span>
           </NButton>

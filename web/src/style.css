@@ -885,17 +885,21 @@ select:focus-visible {
   margin: 8px 0 0 !important;
 }
 
-.personal-tabs.n-tabs.n-tabs--line-type {
-  --n-tab-gap: 0px !important;
+/* 所有栏目的分区子菜单共用一套几何：整条左边缘不留边距，每个子菜单至少容纳
+   一个 1.2em 图标 + 8px 间隙 + 四个 14px 汉字（约 81px），相邻子菜单固定 16px 间距。
+   更长名称（好友黑名单、SVIP 专属商城、带计数徽章的黑名单）自行撑开，不裁切；
+   下划线宽度取 Tab 元素本身，因此只跨过图标加文本。 */
+.page-tabs {
+  --page-tab-min-width: 84px;
+  --page-tab-gap: 16px;
 }
 
-.personal-tabs .n-tabs-tab-wrapper {
-  flex: 0 0 100px;
+.page-tabs.n-tabs.n-tabs--line-type {
+  --n-tab-gap: var(--page-tab-gap) !important;
 }
 
-.personal-tabs .n-tabs-tab {
-  width: 100%;
-  justify-content: center;
+.page-tabs .n-tabs-tab-wrapper {
+  min-width: var(--page-tab-min-width);
 }
 
 @media (min-width: 1024px) {

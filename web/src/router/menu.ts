@@ -25,6 +25,13 @@ export const menuRoutes: MenuItem[] = [
     component: () => import('@/views/Personal.vue'),
   },
   {
+    path: 'pets',
+    name: 'pets',
+    label: '宠物',
+    icon: 'i-carbon-dog-walker',
+    component: () => import('@/components/PetPanel.vue'),
+  },
+  {
     path: 'illustrated',
     name: 'illustrated',
     label: '图鉴',

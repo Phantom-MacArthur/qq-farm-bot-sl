@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import DailyOverview from '@/components/DailyOverview.vue'
 import { useAccountStore } from '@/stores/account'
 import { useStatusStore } from '@/stores/status'
@@ -29,6 +29,22 @@ async function refresh() {
     if (acc.running && status.value?.connection?.connected) {
       await statusStore.fetchDailyGifts(currentAccountId.value)
     }
+  }
+}
+
+/** 只有用户点击刷新才让图标转圈；挂载和账号切换引起的自动加载不碰按钮，避免刷新图标闪烁。 */
+const manualRefreshing = ref(false)
+
+async function refreshTasksOnDemand() {
+  if (manualRefreshing.value)
+    return
+
+  manualRefreshing.value = true
+  try {
+    await refresh()
+  }
+  finally {
+    manualRefreshing.value = false
   }
 }
 
@@ -72,12 +88,11 @@ function formatTaskProgress(task: any) {
           type="primary"
           title="刷新任务"
           aria-label="刷新任务"
-          :loading="dailyGiftsLoading || statusLoading"
           :disabled="!currentAccountId || !isConnected"
-          @click="refresh"
+          @click="refreshTasksOnDemand"
         >
           <template #icon>
-            <span class="i-carbon-renew" />
+            <span class="i-carbon-renew" :class="{ 'animate-spin': manualRefreshing }" />
           </template>
           <span class="task-action-label">刷新</span>
         </NButton>

@@ -732,22 +732,17 @@ async function refreshFarmData() {
   ])
 }
 
+/** 只有用户点击才走这个入口：仅驱动图标自己转圈，不让 Naive UI 替换 #icon 插槽。 */
 async function refreshFarm() {
-  const accountId = currentAccountId.value
-  if (!accountId || !currentAccountRunning.value)
+  if (manualRefreshing.value)
     return
 
   manualRefreshing.value = true
   try {
-    await Promise.all([
-      farmStore.fetchLands(accountId),
-      farmStore.fetchInteractionItems(accountId),
-      settingStore.fetchSettings(accountId),
-    ])
+    await refreshFarmData()
   }
   finally {
-    if (currentAccountId.value === accountId)
-      manualRefreshing.value = false
+    manualRefreshing.value = false
   }
 }
 
@@ -780,7 +775,7 @@ watch([currentAccountId, () => currentAccount.value?.running, currentAccountConn
     farmStore.resetLandState()
     return
   }
-  void refreshFarm()
+  void refreshFarmData()
 }, { immediate: true })
 
 const { pause, resume } = useIntervalFn(() => {
@@ -813,12 +808,11 @@ onUnmounted(() => {
             type="primary"
             aria-label="刷新"
             title="刷新"
-            :loading="manualRefreshing"
             :disabled="selectionBusy || !currentAccountId || !currentAccountRunning"
             @click="refreshFarm"
           >
             <template #icon>
-              <span class="i-carbon-renew" />
+              <span class="i-carbon-renew" :class="{ 'animate-spin': manualRefreshing }" />
             </template>
             <span class="farm-action-label">刷新</span>
           </NButton>

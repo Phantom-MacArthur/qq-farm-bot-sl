@@ -4,16 +4,14 @@ import { ref, watch } from 'vue'
 import BagPanel from '@/components/BagPanel.vue'
 import FarmPanel from '@/components/FarmPanel.vue'
 import PageTabs from '@/components/PageTabs.vue'
-import PetPanel from '@/components/PetPanel.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 
-type PersonalTab = 'farm' | 'pet' | 'bag' | 'task'
+type PersonalTab = 'farm' | 'bag' | 'task'
 
 const currentTab = ref<PersonalTab>('farm')
 
 const tabPanels: Record<PersonalTab, any> = {
   farm: FarmPanel,
-  pet: PetPanel,
   bag: BagPanel,
   task: TaskPanel,
 }
@@ -28,16 +26,9 @@ watch(currentTab, (tab) => {
 
 <template>
   <div class="page-stack flex flex-col">
-    <PageTabs
-      v-model:value="currentTab"
-      class="personal-tabs"
-      animated
-    >
+    <PageTabs v-model:value="currentTab" animated>
       <NTab name="farm">
         <span class="inline-flex items-center gap-2"><span class="i-carbon-grid" />农场</span>
-      </NTab>
-      <NTab name="pet">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-dog-walker" />宠物</span>
       </NTab>
       <NTab name="bag">
         <span class="inline-flex items-center gap-2"><span class="i-carbon-box" />背包</span>
