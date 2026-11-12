@@ -3,8 +3,8 @@ import { NCard } from 'naive-ui/es/card'
 import { NModal } from 'naive-ui/es/modal'
 import { computed } from 'vue'
 
-const props = defineProps<{ land: any, player: any, connected: boolean }>()
-const emit = defineEmits<{ close: [] }>()
+const props = defineProps<{ land: any, player: any, connected: boolean, upgradePending?: boolean }>()
+const emit = defineEmits<{ close: [], upgrade: [] }>()
 const info = computed(() => props.land?.landInfo)
 const metrics = [
   { key: 'yieldBonus', label: '产量加成', unit: '%' },
@@ -40,7 +40,7 @@ function format(value: unknown) {
   <NModal :show="!!land" @update:show="!$event && emit('close')">
     <NCard class="land-detail-modal" :bordered="false" closable role="dialog" aria-modal="true" aria-label="土地详情" @close="emit('close')">
       <template #header>
-        <span class="font-display">土地详情 <span class="text-sm opacity-50">#{{ land?.id }}</span></span>
+        <span class="font-display">土地详情 <span class="land-detail-number land-detail-number--id">#{{ land?.id }}</span></span>
       </template>
       <template v-if="info">
         <div class="land-detail-levels" :class="{ 'land-detail-levels--compare': info.next && info.current }">
@@ -48,7 +48,18 @@ function format(value: unknown) {
             <img :src="info.current.image" :alt="info.current.name" width="84" height="70">
             <strong>{{ info.current.name }}</strong>
           </div>
-          <span v-if="info.next && info.current" class="i-carbon-chevron-right text-2xl opacity-40" aria-hidden="true" />
+          <button
+            v-if="info.next && info.current"
+            type="button"
+            class="land-detail-upgrade"
+            :disabled="!connected || !land?.couldUpgrade || upgradePending"
+            :aria-label="upgradePending ? '土地升级中' : '升级土地'"
+            :title="land?.couldUpgrade ? '升级土地' : '当前暂不可升级'"
+            @click="emit('upgrade')"
+          >
+            <span :class="upgradePending ? 'i-svg-spinners-90-ring-with-bg' : 'i-carbon-upgrade'" aria-hidden="true" />
+            <span>{{ upgradePending ? '升级中' : '升级' }}</span>
+          </button>
           <div v-if="info.next" class="land-detail-soil">
             <img :src="info.next.image" :alt="info.next.name" width="84" height="70">
             <strong>{{ info.next.name }}</strong>
@@ -65,9 +76,9 @@ function format(value: unknown) {
           <tbody>
             <tr v-for="row in metrics" :key="row.key">
               <th>{{ row.label }}</th>
-              <td>{{ metric(info.current || info.next, row.key, row.unit) }}</td>
+              <td><span class="land-detail-number">{{ metric(info.current || info.next, row.key, row.unit) }}</span></td>
               <td v-if="info.current && info.next" :class="{ 'land-detail-improved': info.next[row.key] > info.current[row.key] }">
-                {{ metric(info.next, row.key, row.unit) }}<span v-if="info.next[row.key] > info.current[row.key]" aria-label="提升"> ↑</span>
+                <span class="land-detail-number">{{ metric(info.next, row.key, row.unit) }}</span><span v-if="info.next[row.key] > info.current[row.key]" aria-label="提升"> ↑</span>
               </td>
             </tr>
           </tbody>
@@ -78,16 +89,16 @@ function format(value: unknown) {
         <section v-else class="land-detail-requirements">
           <h3>{{ info.mode === 'unlock' ? '解锁条件' : '升级条件' }}</h3>
           <div v-if="info.needLevel !== null" class="land-detail-condition">
-            <span>种植等级达到 {{ info.needLevel }} 级</span>
-            <strong :class="levelMet ? 'land-detail-improved' : 'land-detail-missing'">{{ connected ? player?.level ?? '—' : '—' }} / {{ info.needLevel }}</strong>
+            <span>种植等级达到 <b class="land-detail-number">{{ info.needLevel }}</b> 级</span>
+            <strong class="land-detail-number" :class="levelMet ? 'land-detail-improved' : 'land-detail-missing'">{{ connected ? player?.level ?? '—' : '—' }} / {{ info.needLevel }}</strong>
           </div>
           <div v-if="info.prerequisite" class="land-detail-condition">
-            <span>解锁第 {{ info.prerequisite.landId }} 块土地</span>
+            <span>解锁第 <b class="land-detail-number">{{ info.prerequisite.landId }}</b> 块土地</span>
             <strong :class="info.prerequisite.met ? 'land-detail-improved' : 'land-detail-missing'">{{ info.prerequisite.met ? '已满足' : '未满足' }}</strong>
           </div>
           <div v-if="info.precedingLands" class="land-detail-condition">
-            <span>{{ info.precedingLands.name }}及以上达到 {{ info.precedingLands.required }} 块</span>
-            <strong :class="info.precedingLands.met === true ? 'land-detail-improved' : 'land-detail-missing'">{{ info.precedingLands.owned ?? '—' }} / {{ info.precedingLands.required }}</strong>
+            <span>{{ info.precedingLands.name }}及以上达到 <b class="land-detail-number">{{ info.precedingLands.required }}</b> 块</span>
+            <strong class="land-detail-number" :class="info.precedingLands.met === true ? 'land-detail-improved' : 'land-detail-missing'">{{ info.precedingLands.owned ?? '—' }} / {{ info.precedingLands.required }}</strong>
           </div>
           <div v-if="info.current && info.next" class="land-detail-condition">
             <span>当前地块为{{ info.current.name }}</span><span class="land-detail-improved">已满足</span>
@@ -97,7 +108,7 @@ function format(value: unknown) {
               <img v-if="cost.image" :src="cost.image" alt="" width="28" height="28"><span>{{ cost.name }}</span>
             </div>
             <div class="land-detail-cost-amount">
-              <strong>{{ format(cost.count) }}</strong><span :class="cost.missing === 0n ? 'land-detail-improved' : 'land-detail-missing'">{{ cost.missing === null ? '余额待同步' : cost.missing > 0n ? `还差 ${format(cost.missing)}` : '余额充足' }}</span>
+              <strong class="land-detail-number">{{ format(cost.count) }}</strong><span class="land-detail-number" :class="cost.missing === 0n ? 'land-detail-improved' : 'land-detail-missing'">{{ cost.missing === null ? '余额待同步' : cost.missing > 0n ? `还差 ${format(cost.missing)}` : '余额充足' }}</span>
             </div>
           </div>
           <p v-if="info.unknown" class="land-detail-missing">
@@ -117,17 +128,40 @@ function format(value: unknown) {
 
 <style scoped>
 .land-detail-modal {
-  width: min(480px, calc(100vw - 24px));
+  width: min(400px, calc(100vw - 24px));
   max-height: calc(100dvh - 32px);
+  overflow-x: auto;
   overflow-y: auto;
-  border-radius: 20px;
+  border-radius: 16px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+.land-detail-modal :deep(*) {
+  white-space: nowrap;
+}
+.land-detail-modal :deep(.n-card-header) {
+  padding: 14px 16px 8px;
+}
+.land-detail-modal :deep(.n-card__content) {
+  padding: 0 16px 14px;
+}
+.land-detail-number {
+  font-family: inherit;
+  font-size: 1.1em;
+  font-variant-numeric: normal;
+  font-weight: var(--fw-600);
+}
+.land-detail-number--id {
+  margin-left: 4px;
+  font-size: 16px;
+  opacity: 0.65;
 }
 .land-detail-levels {
   display: grid;
   justify-content: center;
   align-items: center;
-  gap: 12px;
-  padding: 0 0 18px;
+  gap: 8px;
+  padding: 0 0 12px;
 }
 .land-detail-levels--compare {
   grid-template-columns: 1fr auto 1fr;
@@ -136,19 +170,44 @@ function format(value: unknown) {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 8px;
+  gap: 5px;
 }
 .land-detail-soil img {
+  width: 64px;
+  height: 54px;
   object-fit: contain;
+}
+.land-detail-upgrade {
+  min-width: 46px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px;
+  border-radius: 8px;
+  color: #278452;
+  background: rgba(69, 155, 93, 0.1);
+  font-size: 10px;
+  font-weight: var(--fw-600);
+}
+.land-detail-upgrade > span:first-child {
+  font-size: 17px;
+}
+.land-detail-upgrade:hover:not(:disabled) {
+  background: rgba(69, 155, 93, 0.2);
+}
+.land-detail-upgrade:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
 }
 .land-detail-metrics {
   width: 100%;
   border-collapse: collapse;
-  font-variant-numeric: tabular-nums;
 }
 .land-detail-metrics th,
 .land-detail-metrics td {
-  padding: 9px 4px;
+  padding: 6px 3px;
   text-align: right;
 }
 .land-detail-metrics th:first-child {
@@ -162,28 +221,28 @@ function format(value: unknown) {
   opacity: 0.65;
 }
 .land-detail-requirements {
-  margin-top: 16px;
-  padding-top: 16px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--n-border-color);
 }
 .land-detail-requirements h3 {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   font-weight: var(--fw-700);
 }
 .land-detail-condition {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px 12px;
-  margin: 8px 0;
+  margin: 6px 0;
 }
 .land-detail-cost {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-top: 12px;
+  margin-top: 8px;
 }
 .land-detail-cost-name {
   display: flex;
@@ -195,12 +254,12 @@ function format(value: unknown) {
 }
 .land-detail-cost-amount {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   text-align: right;
-  font-variant-numeric: tabular-nums;
 }
 .land-detail-cost-amount span {
-  font-size: 12px;
+  font-size: 13px;
 }
 .land-detail-improved {
   color: var(--n-color-target, #278452);
@@ -209,8 +268,8 @@ function format(value: unknown) {
   color: #c87138;
 }
 .land-detail-max {
-  margin-top: 20px;
-  padding: 10px;
+  margin-top: 12px;
+  padding: 8px;
   text-align: center;
   border-radius: 12px;
   background: rgba(69, 155, 93, 0.12);

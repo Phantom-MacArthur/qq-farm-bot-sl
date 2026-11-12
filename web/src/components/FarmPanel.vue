@@ -45,8 +45,10 @@ const { settings } = storeToRefs(settingStore)
 const { status } = storeToRefs(statusStore)
 const detailLandId = ref<number | null>(null)
 const detailLand = computed(() => lands.value.find(land => land.id === detailLandId.value) || null)
+const detailUpgradePending = ref(false)
 watch(currentAccountId, () => {
   detailLandId.value = null
+  detailUpgradePending.value = false
 })
 
 const currentAccountConnected = computed(() => {
@@ -63,7 +65,11 @@ const operating = ref(false)
 const fertilizerConfirmVisible = ref(false)
 const bulkFertilizerType = ref<FertilizerType>('normal')
 const bulkFertilizerOptions = [{ label: '普通化肥', value: 'normal' }, { label: '有机化肥', value: 'organic' }]
-const bulkFertilizerCount = computed(() => lands.value.filter(isFertilizeCandidate).length)
+const bulkFertilizerCount = computed(() => lands.value.filter(land => (
+  bulkFertilizerType.value === 'normal'
+    ? isNormalFertilizeCandidate(land)
+    : isFertilizeCandidate(land)
+)).length)
 let fertilizerUiSequence = 0
 watch(currentAccountId, () => {
   fertilizerUiSequence++
@@ -83,12 +89,15 @@ const lastInteractionResults = ref<Record<string, FriendInteractionResultDto[]>>
 const interactionConfirmVisible = ref(false)
 const interactionConfirmMessage = ref('')
 
-// ---- 选择土地：勾选后批量施肥、务农或使用道具 ----
+// ---- 选择土地：按操作类型筛选并批量处理目标地块 ----
+const showManualFertilizerButtons = computed(() => settings.value.automation?.show_manual_fertilizer !== false)
 const selecting = ref(!!route.query.interactionItem)
 const selectedIds = ref<string[]>([])
 const batchPending = ref(false)
-type BatchAction = FertilizerType | 'farming' | 'item'
-const batchAction = ref<BatchAction>(route.query.interactionItem ? 'item' : 'normal')
+const removeConfirmVisible = ref(false)
+const pendingRemoveLandIds = ref<number[]>([])
+type BatchAction = FertilizerType | 'harvest' | 'farming' | 'plant' | 'upgrade' | 'remove' | 'item'
+const batchAction = ref<BatchAction>(route.query.interactionItem ? 'item' : (showManualFertilizerButtons.value ? 'normal' : 'harvest'))
 
 const selectedInteractionItem = computed<FriendInteractionItemDto | null>(() => (
   interactionItems.value.find(item => String(item.itemId) === selectedInteractionItemId.value) || null
@@ -102,7 +111,6 @@ const interactionItemPlaceholder = computed(() => {
   return interactionItems.value.length ? '选择道具' : '背包暂无可用道具'
 })
 
-const showManualFertilizerButtons = computed(() => settings.value.automation?.show_manual_fertilizer !== false)
 const selectionBusy = computed(() => batchPending.value || fertilizePending.value || interactionUsePending.value || operating.value)
 const selectionLimit = computed(() => batchAction.value === 'item' ? Math.max(0, Math.floor(Number(selectedInteractionItem.value?.count) || 0)) : Infinity)
 const selectionOptions = computed<Array<{ value: BatchAction, label: string, icon: string }>>(() => [
@@ -112,7 +120,11 @@ const selectionOptions = computed<Array<{ value: BatchAction, label: string, ico
         { value: 'organic' as const, label: '有机肥', icon: 'i-carbon-sprout' },
       ]
     : []),
+  { value: 'harvest', label: '收获', icon: 'i-carbon-wheat' },
   { value: 'farming', label: '务农', icon: 'i-carbon-clean' },
+  { value: 'plant', label: '种植', icon: 'i-carbon-sprout' },
+  { value: 'upgrade', label: '升级', icon: 'i-carbon-upgrade' },
+  { value: 'remove', label: '铲除', icon: 'i-carbon-trash-can' },
   { value: 'item', label: '道具', icon: 'i-carbon-game-console' },
 ])
 
@@ -129,6 +141,37 @@ function isValidFarmingLand(land: any) {
     && !land?.occupiedByMaster
     && !!String(land?.plantName || '').trim()
     && !['locked', 'empty'].includes(String(land?.status || ''))
+}
+
+function isHarvestCandidate(land: any) {
+  return !!land?.unlocked
+    && !land?.occupiedByMaster
+    && String(land?.status || '') === 'harvestable'
+}
+
+function isPlantCandidate(land: any) {
+  return !!land?.unlocked
+    && !land?.occupiedByMaster
+    && ['empty', 'dead'].includes(String(land?.status || ''))
+}
+
+function isUpgradeCandidate(land: any) {
+  return !!land?.unlocked
+    && !land?.occupiedByMaster
+    && !!land?.couldUpgrade
+}
+
+function isRemoveCandidate(land: any) {
+  const status = String(land?.status || '')
+  return !!land?.unlocked
+    && !land?.occupiedByMaster
+    && !['locked', 'empty'].includes(status)
+    && Boolean(
+      String(land?.plantName || '').trim()
+      || land?.seedImage
+      || Number(land?.matureInSec) > 0
+      || ['dead', 'growing', 'harvestable', 'stealable'].includes(status),
+    )
 }
 
 const socialCleanupLandId = computed(() => {
@@ -166,10 +209,10 @@ function handleOperate(opType: string) {
 
   const confirmMap: Record<string, string> = {
     harvest: '确定要收获所有成熟作物吗？',
-    clear: '确定要一键务农吗？',
+    clear: '确定要务农吗？',
     plant: '确定要一键种植吗？(根据策略配置)',
     upgrade: '确定要升级所有可升级的土地吗？(消耗金币)',
-    all: '确定要一键全收吗？(包含收获、除草、种植等)',
+    all: '确定要一键打理吗？(包含收获、除草、种植等)',
   }
 
   confirmConfig.value = {
@@ -180,13 +223,38 @@ function handleOperate(opType: string) {
   confirmVisible.value = true
 }
 
-// 只有“一键全收”是主操作，其余保持同一层级，避免一排按钮各用一种颜色。
+async function upgradeDetailLand() {
+  const accountId = String(currentAccountId.value || '')
+  const land = detailLand.value
+  if (!accountId || !land?.couldUpgrade || detailUpgradePending.value)
+    return
+
+  detailUpgradePending.value = true
+  try {
+    const result = await farmStore.operate(accountId, 'upgrade', Number(land.id))
+    if (currentAccountId.value !== accountId)
+      return
+    if (result?.hadWork)
+      toast.success(`土地#${land.id} 升级完成`)
+    else
+      toast.info(`土地#${land.id} 当前暂不可升级`)
+  }
+  catch (error) {
+    if (currentAccountId.value === accountId)
+      toast.error(error instanceof Error ? error.message : '土地升级失败')
+  }
+  finally {
+    detailUpgradePending.value = false
+  }
+}
+
+// 只有“一键打理”是主操作，其余保持同一层级，避免一排按钮各用一种颜色。
 const operations = [
   { type: 'harvest', label: '收获', icon: 'i-carbon-wheat', buttonType: 'default' },
-  { type: 'clear', label: '一键务农', icon: 'i-carbon-clean', buttonType: 'default' },
+  { type: 'clear', label: '务农', icon: 'i-carbon-clean', buttonType: 'default' },
   { type: 'plant', label: '种植', icon: 'i-carbon-sprout', buttonType: 'default' },
-  { type: 'upgrade', label: '升级土地', icon: 'i-carbon-upgrade', buttonType: 'default' },
-  { type: 'all', label: '一键全收', icon: 'i-carbon-flash', buttonType: 'primary' },
+  { type: 'upgrade', label: '升级', icon: 'i-carbon-upgrade', buttonType: 'default' },
+  { type: 'all', label: '一键打理', icon: 'i-carbon-flash', buttonType: 'primary' },
 ] as const
 
 function interactionSelectionKey(itemId: unknown = selectedInteractionItemId.value) {
@@ -217,12 +285,22 @@ function landByRootId(id: string) {
 
 function canSelectLand(land: any) {
   const root = land?.occupiedByMaster ? landByRootId(rootIdOf(land)) : land
+  if (!root || !root.unlocked || root.occupiedByMaster)
+    return false
+  if (batchAction.value === 'harvest')
+    return isHarvestCandidate(root)
+  if (batchAction.value === 'plant')
+    return isPlantCandidate(root)
+  if (batchAction.value === 'upgrade')
+    return isUpgradeCandidate(root)
+  if (batchAction.value === 'remove')
+    return isRemoveCandidate(root)
   if (!isValidFarmingLand(root))
     return false
   if (batchAction.value === 'normal')
-    return isFertilizeCandidate(root)
+    return isNormalFertilizeCandidate(root)
   if (batchAction.value === 'organic')
-    return isFertilizeCandidate(root) && canOrganicFertilize(root)
+    return isFertilizeCandidate(root)
   if (batchAction.value === 'farming')
     return isLandFarmingCandidate(root)
   const item = selectedInteractionItem.value
@@ -235,13 +313,23 @@ function selectReason(land: any) {
     return ''
   if (!land?.unlocked)
     return '未解锁'
-  if (!String(land?.plantName || '').trim())
-    return '空地无需操作'
   const root = landByRootId(rootIdOf(land))
   if (!root)
     return '合种主地状态待同步'
-  if (batchAction.value === 'normal' || batchAction.value === 'organic')
-    return isFertilizeCandidate(root) ? '有机化肥次数已用完' : '当前作物无需施肥'
+  if (batchAction.value === 'harvest')
+    return '当前作物不可收获'
+  if (batchAction.value === 'plant')
+    return '当前土地不可种植'
+  if (batchAction.value === 'upgrade')
+    return '当前土地不可升级'
+  if (batchAction.value === 'remove')
+    return '当前土地没有可铲除的作物'
+  if (!String(land?.plantName || '').trim())
+    return '空地无需操作'
+  if (batchAction.value === 'normal')
+    return isFertilizeCandidate(root) ? '普通肥本季可用次数已用完' : '当前作物无需施肥'
+  if (batchAction.value === 'organic')
+    return '当前作物无需施肥'
   if (batchAction.value === 'farming')
     return '当前无需务农'
   return selectedInteractionItem.value ? '当前作物不可使用此道具，或已经使用过' : '请先选择道具'
@@ -272,6 +360,12 @@ function selectAllLands() {
     .slice(0, selectionLimit.value)
 }
 
+function clearSelectedLands() {
+  if (selectionBusy.value)
+    return
+  selectedIds.value = []
+}
+
 function exitSelecting() {
   if (selectionBusy.value)
     return
@@ -283,18 +377,27 @@ function enterSelecting() {
   if (selectionBusy.value)
     return
   selecting.value = true
+  if (batchAction.value !== 'item')
+    selectAllLands()
 }
 
 function chooseBatchAction(action: BatchAction) {
   if (selectionBusy.value)
     return
   batchAction.value = action
+  if (action !== 'item')
+    selectAllLands()
 }
 
 const selectedLands = computed(() => selectedIds.value.map(landByRootId).filter(Boolean) as any[])
-const normalTargets = computed(() => selectedLands.value.filter(isFertilizeCandidate))
-const organicTargets = computed(() => normalTargets.value.filter(canOrganicFertilize))
+const normalTargets = computed(() => selectedLands.value.filter(isNormalFertilizeCandidate))
+const organicTargets = computed(() => selectedLands.value.filter(isFertilizeCandidate))
+const harvestTargets = computed(() => selectedLands.value.filter(isHarvestCandidate))
 const farmingTargets = computed(() => selectedLands.value.filter(isLandFarmingCandidate))
+const plantTargets = computed(() => selectedLands.value.filter(isPlantCandidate))
+const upgradeTargets = computed(() => selectedLands.value.filter(isUpgradeCandidate))
+const removeTargets = computed(() => selectedLands.value.filter(isRemoveCandidate))
+const removeConfirmMessage = computed(() => `确定铲除选中的 ${pendingRemoveLandIds.value.length} 块土地上的作物吗？此操作不可恢复。`)
 // 道具：只取所选土地中对当前道具有效、未使用过的，按编号取前“库存”个。
 const itemTargets = computed(() => {
   const item = selectedInteractionItem.value
@@ -306,10 +409,27 @@ const itemTargets = computed(() => {
     .slice(0, item.count)
 })
 
-const availableSelectionCount = computed(() => lands.value.filter(land => !land.occupiedByMaster && canSelectLand(land)).length)
 const selectedPlotCount = computed(() => lands.value.filter(isLandSelected).length)
-const activeTargets = computed(() => ({ normal: normalTargets.value, organic: organicTargets.value, farming: farmingTargets.value, item: itemTargets.value })[batchAction.value])
-const applyLabel = computed(() => ({ normal: '施用普通化肥', organic: '施用有机化肥', farming: '开始务农', item: '使用道具' })[batchAction.value])
+const activeTargets = computed(() => ({
+  normal: normalTargets.value,
+  organic: organicTargets.value,
+  harvest: harvestTargets.value,
+  farming: farmingTargets.value,
+  plant: plantTargets.value,
+  upgrade: upgradeTargets.value,
+  remove: removeTargets.value,
+  item: itemTargets.value,
+})[batchAction.value])
+const applyLabel = computed(() => ({
+  normal: '施肥',
+  organic: '施肥',
+  harvest: '收获',
+  farming: '务农',
+  plant: '种植',
+  upgrade: '升级',
+  remove: '铲除',
+  item: '使用',
+})[batchAction.value])
 
 watch([lands, batchAction, selectedInteractionItem, selectionBusy, showManualFertilizerButtons], () => {
   if (selectionBusy.value)
@@ -326,8 +446,32 @@ async function applySelection() {
     await fertilizeSelected(batchAction.value)
   else if (batchAction.value === 'farming')
     await farmSelected()
+  else if (batchAction.value === 'remove')
+    requestRemoveSelected()
+  else if (batchAction.value === 'harvest' || batchAction.value === 'plant' || batchAction.value === 'upgrade')
+    await operateSelected(batchAction.value, activeTargets.value)
   else
     requestUseInteractionItem()
+}
+
+function requestRemoveSelected() {
+  const landIds = removeTargets.value.map(land => Number(land.id)).filter(Boolean)
+  if (!currentAccountId.value || !landIds.length)
+    return
+  pendingRemoveLandIds.value = landIds
+  removeConfirmVisible.value = true
+}
+
+function cancelRemoveSelected() {
+  removeConfirmVisible.value = false
+  pendingRemoveLandIds.value = []
+}
+
+async function executeRemoveSelected() {
+  const landIds = [...pendingRemoveLandIds.value]
+  removeConfirmVisible.value = false
+  pendingRemoveLandIds.value = []
+  await operateSelected('remove', landIds.map(id => ({ id })))
 }
 
 function selectedInteractionIds() {
@@ -362,8 +506,8 @@ useResizeObserver(gridEl, ([entry]) => {
   })
 })
 const GRID_GAP = 12
-const CARD_MIN = 128
-const CARD_MAX = 230
+const CARD_MIN = 180
+const CARD_MAX = 250
 const gridColumns = computed(() => {
   const width = gridWidth.value
   const count = (lands.value || []).length
@@ -385,9 +529,13 @@ function isFertilizeCandidate(land: any) {
     && Number(land?.matureInSec) > 0
 }
 
-function canOrganicFertilize(land: any) {
+function canNormalFertilize(land: any) {
   const left = land?.leftInorcFertTimes
-  return left == null || Number(left) > 0
+  return left != null && Number(left) > 0
+}
+
+function isNormalFertilizeCandidate(land: any) {
+  return isFertilizeCandidate(land) && canNormalFertilize(land)
 }
 
 function formatFertilizerRemaining(sec: number) {
@@ -433,7 +581,7 @@ async function handleFertilizeAll() {
     return
   fertilizerConfirmVisible.value = false
   if (!result) {
-    toast.error(fertilizeError.value || '一键施肥失败，请刷新土地确认最新状态')
+    toast.error(fertilizeError.value || '施肥失败，请刷新土地确认最新状态')
     return
   }
   if (!result.successCount) {
@@ -481,6 +629,53 @@ async function farmSelected() {
     toast.warning(parts)
   else
     toast.success(parts || '所选土地无需务农')
+}
+
+async function operateSelected(opType: 'harvest' | 'plant' | 'upgrade' | 'remove', targets: any[]) {
+  const landIds = targets.map(land => Number(land.id)).filter(Boolean)
+  if (!currentAccountId.value || batchPending.value || operating.value || !landIds.length)
+    return
+  const accountId = currentAccountId.value
+  const actionLabel = { harvest: '收获', plant: '种植', upgrade: '升级', remove: '铲除' }[opType]
+  batchPending.value = true
+  let done = 0
+  let idle = 0
+  let failed = 0
+  const isCandidate = {
+    harvest: isHarvestCandidate,
+    plant: isPlantCandidate,
+    upgrade: isUpgradeCandidate,
+    remove: isRemoveCandidate,
+  }[opType]
+  try {
+    for (const landId of landIds) {
+      const land = lands.value.find(item => Number(item.id) === landId)
+      if (!land || !isCandidate(land)) {
+        idle++
+        continue
+      }
+      try {
+        const result = await farmStore.operate(accountId, opType, landId)
+        if (result?.hadWork)
+          done++
+        else
+          idle++
+      }
+      catch {
+        failed++
+      }
+      if (currentAccountId.value !== accountId)
+        return
+    }
+  }
+  finally {
+    batchPending.value = false
+  }
+  const parts = [done && `${done} 块${actionLabel}完成`, idle && `${idle} 块无需${actionLabel}`, failed && `${failed} 块失败`].filter(Boolean).join('，')
+  if (failed)
+    toast.warning(parts)
+  else
+    toast.success(parts || `所选土地无需${actionLabel}`)
 }
 
 function requestUseInteractionItem() {
@@ -612,19 +807,47 @@ onUnmounted(() => {
 <template>
   <div class="personal-panel">
     <div class="personal-panel__card cartoon-card farm-card rounded-2xl bg-white shadow-lg dark:bg-gray-800 !p-0">
-      <!-- Header with Title and Actions -->
-      <div class="farm-head panel-sticky flex shrink-0 flex-col gap-3 border-b border-gray-100 p-4 lg:flex-row lg:items-center lg:justify-between dark:border-gray-700 sm:p-5" :class="{ 'is-selecting': selecting }">
-        <div class="farm-heading flex items-center justify-between gap-3">
-          <h3 class="flex items-center gap-2 text-lg font-bold">
-            <span class="i-carbon-sprout text-green-600" /> 土地详情
-          </h3>
-          <div class="farm-mobile-actions">
-            <NButton size="small" :type="selecting ? 'default' : 'primary'" :secondary="!selecting" :disabled="selectionBusy || !currentAccountRunning || !loaded || !!error" @click="selecting ? exitSelecting() : enterSelecting()">
-              {{ selecting ? '退出选择' : '批量操作' }}
-            </NButton>
-            <NPopover v-if="!selecting" trigger="click" placement="bottom-end" :show-arrow="false">
+      <div class="farm-head panel-sticky flex shrink-0 flex-col gap-3 border-b border-gray-100 p-4 dark:border-gray-700">
+        <div class="farm-actions">
+          <NButton
+            type="primary"
+            aria-label="刷新"
+            title="刷新"
+            :loading="manualRefreshing"
+            :disabled="selectionBusy || !currentAccountId || !currentAccountRunning"
+            @click="refreshFarm"
+          >
+            <template #icon>
+              <span class="i-carbon-renew" />
+            </template>
+            <span class="farm-action-label">刷新</span>
+          </NButton>
+          <NButton
+            v-if="!selecting"
+            aria-label="施肥"
+            title="施肥"
+            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning || !loaded || !!error || !lands.some(isFertilizeCandidate)"
+            @click="fertilizerConfirmVisible = true"
+          >
+            <span class="i-carbon-soil-moisture" />
+            <span class="farm-action-label">施肥</span>
+          </NButton>
+          <NButton
+            v-for="op in (selecting ? [] : operations)"
+            :key="op.type"
+            :type="op.buttonType"
+            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning"
+            :aria-label="op.label"
+            :title="op.label"
+            @click="handleOperate(op.type)"
+          >
+            <span :class="op.icon" />
+            <span class="farm-action-label">{{ op.label }}</span>
+          </NButton>
+          <div class="farm-mobile-summary">
+            <NPopover v-if="!selecting" trigger="click" placement="bottom-start" :show-arrow="false">
               <template #trigger>
-                <NButton size="small" circle quaternary title="土地概况与操作" aria-label="土地概况与操作">
+                <NButton size="small" circle quaternary title="土地概况" aria-label="土地概况">
                   <template #icon>
                     <span class="i-carbon-overflow-menu-horizontal" />
                   </template>
@@ -637,59 +860,26 @@ onUnmounted(() => {
                   <span>空闲 {{ loaded && !error ? (summary?.empty || 0) : '--' }}</span>
                   <span>枯萎 {{ loaded && !error ? (summary?.dead || 0) : '--' }}</span>
                 </div>
-                <div class="grid grid-cols-2 gap-2 border-t border-gray-100 pt-3 dark:border-gray-700">
-                  <NButton size="small" :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning || !loaded || !!error || !lands.some(isFertilizeCandidate)" @click="fertilizerConfirmVisible = true">
-                    一键施肥
-                  </NButton>
-                  <NButton v-for="op in operations" :key="op.type" size="small" :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning" @click="handleOperate(op.type)">
-                    {{ op.label }}
-                  </NButton>
-                </div>
               </div>
             </NPopover>
           </div>
           <NButton
-            circle
-            quaternary
-            title="刷新土地"
-            aria-label="刷新土地"
-            :loading="manualRefreshing"
-            :disabled="selectionBusy || !currentAccountId || !currentAccountRunning"
-            @click="refreshFarm"
+            class="farm-selection-toggle"
+            :type="selecting ? 'default' : 'primary'"
+            :secondary="!selecting"
+            :aria-label="selecting ? '取消' : '多选'"
+            :title="selecting ? '取消' : '多选'"
+            :disabled="selectionBusy || !currentAccountRunning || !loaded || !!error"
+            @click="selecting ? exitSelecting() : enterSelecting()"
           >
-            <template #icon>
-              <span class="i-carbon-renew" />
-            </template>
-          </NButton>
-        </div>
-        <div class="farm-actions" :class="{ 'is-selecting': selecting }">
-          <NButton :type="selecting ? 'default' : 'primary'" :secondary="!selecting" :disabled="selectionBusy || !currentAccountRunning || !loaded || !!error" @click="selecting ? exitSelecting() : enterSelecting()">
             <span class="i-carbon-checkbox-checked" />
-            {{ selecting ? '退出选择' : '批量操作' }}
-          </NButton>
-          <NButton
-            v-if="!selecting"
-            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning || !loaded || !!error || !lands.some(isFertilizeCandidate)"
-            @click="fertilizerConfirmVisible = true"
-          >
-            <span class="i-carbon-soil-moisture" />
-            一键施肥
-          </NButton>
-          <NButton
-            v-for="op in (selecting ? [] : operations)"
-            :key="op.type"
-            :type="op.buttonType"
-            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning"
-            @click="handleOperate(op.type)"
-          >
-            <span :class="op.icon" />
-            {{ op.label }}
+            <span class="farm-action-label">{{ selecting ? '取消' : '多选' }}</span>
           </NButton>
         </div>
       </div>
 
       <!-- Summary：当前土地状态；颜色只留给图标 -->
-      <div class="farm-summary shrink-0 border-b border-gray-100 px-4 py-3 dark:border-gray-700 sm:px-5">
+      <div class="farm-summary shrink-0 border-b border-gray-100 px-4 py-3 dark:border-gray-700">
         <div class="farm-summary__states">
           <span v-for="item in summaryItems" :key="item.key" class="farm-state" :class="{ 'is-zero': item.value === 0 }">
             <svg v-if="item.path" :class="item.icon" class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -702,7 +892,7 @@ onUnmounted(() => {
       </div>
 
       <!-- Grid -->
-      <div class="personal-panel__card p-4 sm:p-5">
+      <div class="personal-panel__card p-4">
         <div v-if="loading || !currentAccountId || !currentAccountRunning || error || !loaded || !lands?.length" class="personal-panel__scroll custom-scrollbar" role="region" aria-label="土地状态" tabindex="0">
           <div v-if="loading" class="flex justify-center py-12">
             <div class="i-svg-spinners-90-ring-with-bg text-4xl text-green-500" />
@@ -734,7 +924,7 @@ onUnmounted(() => {
         <div v-else class="personal-panel__card">
           <div v-if="selecting" class="farm-selection-setup">
             <div class="farm-selection-row">
-              <div class="farm-mode-switch" role="group" aria-label="批量操作类型">
+              <div class="farm-mode-switch" role="group" aria-label="多选操作类型">
                 <button v-for="option in selectionOptions" :key="option.value" type="button" :aria-pressed="batchAction === option.value" :disabled="selectionBusy" @click="chooseBatchAction(option.value)">
                   <span :class="option.icon" aria-hidden="true" />{{ option.label }}
                 </button>
@@ -743,12 +933,12 @@ onUnmounted(() => {
                 <div class="farm-selectbar__info" aria-live="polite">
                   <span>已选 <b>{{ selectedIds.length }}</b> 株<span v-if="selectedPlotCount > selectedIds.length" class="farm-selectbar__coverage"> · {{ selectedPlotCount }} 块地</span></span>
                   <span class="farm-selectbar__links">
-                    <button type="button" :disabled="selectionBusy || !availableSelectionCount" @click="selectAllLands">全选</button>
-                    <button type="button" :disabled="selectionBusy || !selectedIds.length" @click="selectedIds = []">清空</button>
+                    <button type="button" @click="selectAllLands">全选</button>
+                    <button type="button" @click="clearSelectedLands">清空</button>
                   </span>
                 </div>
                 <NButton type="primary" :disabled="selectionBusy || !currentAccountConnected || !activeTargets.length" :loading="selectionBusy" @click="applySelection">
-                  {{ applyLabel }}<span v-if="activeTargets.length" class="farm-selectbar__total">{{ activeTargets.length }}{{ batchAction === 'item' ? '个' : '株' }}</span>
+                  {{ applyLabel }}
                 </NButton>
               </div>
             </div>
@@ -793,8 +983,10 @@ onUnmounted(() => {
                 :selected="isLandSelected(land)"
                 :selection-disabled="!canSelectLand(land)"
                 :selection-label="selectReason(land)"
+                :farm-disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning"
                 @open="detailLandId = $event.id"
                 @select="toggleLand(land)"
+                @farm="handleOperate('clear')"
               />
             </div>
           </div>
@@ -802,11 +994,18 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <LandDetailModal :land="detailLand" :player="status?.status" :connected="currentAccountConnected" @close="detailLandId = null" />
+    <LandDetailModal
+      :land="detailLand"
+      :player="status?.status"
+      :connected="currentAccountConnected"
+      :upgrade-pending="detailUpgradePending"
+      @upgrade="upgradeDetailLand"
+      @close="detailLandId = null"
+    />
 
     <ConfirmModal
       :show="fertilizerConfirmVisible"
-      title="一键施肥"
+      title="施肥"
       message="将为所有生长中的作物施用一次所选化肥，确认施肥吗？"
       confirm-text="确认施肥"
       :loading="fertilizePending"
@@ -824,6 +1023,17 @@ onUnmounted(() => {
       :message="confirmConfig.message"
       @confirm="executeOperate"
       @cancel="confirmVisible = false"
+    />
+
+    <ConfirmModal
+      :show="removeConfirmVisible"
+      title="确认铲除"
+      :message="removeConfirmMessage"
+      confirm-text="确认铲除"
+      type="danger"
+      :loading="batchPending"
+      @confirm="executeRemoveSelected"
+      @cancel="cancelRemoveSelected"
     />
 
     <ConfirmModal
@@ -861,12 +1071,11 @@ onUnmounted(() => {
 }
 
 .farm-mode-switch {
-  display: grid;
-  width: min(320px, 100%);
+  display: flex;
+  width: min(620px, 100%);
   min-width: 0;
-  flex: 0 1 320px;
-  grid-auto-columns: minmax(0, 1fr);
-  grid-auto-flow: column;
+  flex: 0 1 620px;
+  flex-wrap: wrap;
   gap: 3px;
   padding: 3px;
   border: 1px solid var(--ui-border);
@@ -877,6 +1086,7 @@ onUnmounted(() => {
 .farm-mode-switch button {
   display: inline-flex;
   min-width: 0;
+  flex: 1 1 auto;
   align-items: center;
   justify-content: center;
   gap: 5px;
@@ -967,6 +1177,13 @@ onUnmounted(() => {
 .farm-selectbar__links button {
   color: var(--ui-primary);
   font-size: 12px;
+  transition:
+    transform 120ms ease,
+    color 120ms ease;
+}
+
+.farm-selectbar__links button:active {
+  transform: scale(0.92);
 }
 
 .farm-mode-switch button:disabled,
@@ -976,18 +1193,10 @@ onUnmounted(() => {
 }
 
 .farm-selectbar :deep(.n-button) {
-  min-width: 150px;
+  min-width: 64px;
   height: 36px;
   flex: none;
   border-radius: 10px;
-}
-
-.farm-selectbar__total {
-  margin-left: 10px;
-  padding-left: 10px;
-  border-left: 1px solid rgba(255, 255, 255, 0.35);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
 }
 
 @media (max-width: 1023px) {
@@ -997,6 +1206,7 @@ onUnmounted(() => {
 
   .farm-mode-switch {
     width: min(360px, 100%);
+    flex-basis: 360px;
   }
 
   .farm-selectbar {
@@ -1028,6 +1238,12 @@ onUnmounted(() => {
   .farm-mode-switch button > span {
     display: none;
   }
+}
+
+.farm-head {
+  container-type: inline-size;
+  border-top-left-radius: var(--ui-radius-card);
+  border-top-right-radius: var(--ui-radius-card);
 }
 
 .farm-summary {
@@ -1067,69 +1283,52 @@ onUnmounted(() => {
 }
 
 .farm-actions {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.farm-mobile-actions {
-  display: none;
+  display: flex;
   align-items: center;
-  gap: 4px;
-  margin-left: auto;
-}
-
-@media (max-width: 479px) {
-  .farm-heading {
-    gap: 6px;
-  }
-
-  .farm-heading h3 {
-    flex: none;
-    font-size: 16px;
-    white-space: nowrap;
-  }
-
-  .farm-mobile-actions {
-    display: flex;
-  }
-
-  .farm-actions,
-  .farm-summary {
-    display: none;
-  }
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .farm-actions :deep(.n-button) {
-  width: 100%;
+  flex: 0 0 auto;
+  width: auto;
 }
 
 .farm-actions :deep(.n-button__content) {
   gap: 4px;
+  white-space: nowrap;
 }
 
-@media (min-width: 480px) {
-  .farm-head.is-selecting {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
+.farm-selection-toggle {
+  margin-left: auto;
+}
 
-  .farm-actions.is-selecting {
-    display: flex;
-    justify-content: flex-end;
+.farm-action-label {
+  white-space: nowrap;
+}
+
+.farm-mobile-summary {
+  display: none;
+  flex: 0 0 auto;
+}
+
+@container (max-width: 700px) {
+  .farm-action-label {
+    display: none;
   }
 }
 
-@media (min-width: 640px) {
-  .farm-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
+@media (max-width: 479px) {
+  .farm-summary {
+    display: none;
   }
 
-  .farm-actions :deep(.n-button) {
-    width: auto;
+  .farm-mobile-summary {
+    display: flex;
   }
 }
 </style>

@@ -21,7 +21,7 @@ export const menuRoutes: MenuItem[] = [
     path: 'personal',
     name: 'personal',
     label: '个人',
-    icon: 'i-carbon-sprout',
+    icon: 'i-carbon-user',
     component: () => import('@/views/Personal.vue'),
   },
   {

@@ -96,7 +96,7 @@ useResizeObserver(scrollEl, measureScrollbar)
 
 /* 页头和内容共用左右留白，顶栏透出页面原有的渐变背景。 */
 .app-content {
-  --page-pad: 24px;
+  --page-pad: 12px;
   --sticky-top: 0px;
 }
 
@@ -128,6 +128,7 @@ useResizeObserver(scrollEl, measureScrollbar)
   min-height: 0;
   padding: 0 var(--page-pad) var(--page-pad);
   isolation: isolate;
+  scrollbar-gutter: stable;
 }
 
 .page-scroll > :deep(*) {
@@ -137,10 +138,8 @@ useResizeObserver(scrollEl, measureScrollbar)
   margin-inline: auto;
 }
 
-@media (min-width: 1024px) {
-  .page-scroll--dashboard > :deep(.dashboard-page) {
-    flex: 1 0 auto;
-  }
+.page-scroll--dashboard > :deep(.dashboard-page) {
+  flex: 1 0 auto;
 }
 
 /* 活动详情隐藏通用页头；普通详情沿用页面滚动，游戏外壳保留内部滚动。 */
@@ -175,6 +174,7 @@ useResizeObserver(scrollEl, measureScrollbar)
 @media (max-width: 1023px) {
   .app-content {
     --page-pad: 12px;
+    padding-bottom: calc(66px + max(12px, env(safe-area-inset-bottom)) + var(--page-pad));
   }
 
   .page-header-bar {
@@ -182,9 +182,8 @@ useResizeObserver(scrollEl, measureScrollbar)
   }
 
   .page-scroll {
-    /* 底部导航是悬浮的，留出它的高度，最后一张卡片和按钮不会被挡住。 */
-    padding: 0 var(--page-pad) calc(104px + env(safe-area-inset-bottom));
-    scroll-padding-bottom: calc(104px + env(safe-area-inset-bottom));
+    padding: 0 var(--page-pad) 0;
+    scroll-padding-bottom: 0;
   }
 
   .page-scroll:not(.page-scroll--fill) > :deep(*) {

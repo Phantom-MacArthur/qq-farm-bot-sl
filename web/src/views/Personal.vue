@@ -28,18 +28,22 @@ watch(currentTab, (tab) => {
 
 <template>
   <div class="page-stack flex flex-col">
-    <PageTabs v-model:value="currentTab" animated>
+    <PageTabs
+      v-model:value="currentTab"
+      class="personal-tabs"
+      animated
+    >
       <NTab name="farm">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-sprout" />我的农场</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-grid" />农场</span>
       </NTab>
       <NTab name="pet">
         <span class="inline-flex items-center gap-2"><span class="i-carbon-dog-walker" />宠物</span>
       </NTab>
       <NTab name="bag">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-box" />我的背包</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-box" />背包</span>
       </NTab>
       <NTab name="task">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-task" />我的任务</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-task" />任务</span>
       </NTab>
     </PageTabs>
 

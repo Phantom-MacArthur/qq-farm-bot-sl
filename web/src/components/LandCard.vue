@@ -45,35 +45,58 @@ const land = computed(() => props.land)
 // 上游资源已统一按变异 ID 命名；仍保留加载失败回退，兼容尚无 PNG 的变异。
 const failedMutantIcons = ref(new Set<string>())
 
-const mutantEffects = computed(() => {
-  const effects = Array.isArray(land.value?.mutantEffects) ? land.value.mutantEffects : []
-  if (effects.length > 0) {
-    return effects
-      .flatMap((effect: any) => {
-        const normalized = { id: Number(effect?.id) || 0, name: String(effect?.name || effect?.effect_name || '').trim(), icon: String(effect?.icon || '').trim(), description: String(effect?.description || effect?.desc || effect?.tips || '').trim(), key: String(effect.id), image: '' }
-        return normalized.id === 18 && Array.isArray(effect.collections) && effect.collections.length
-          ? effect.collections.map((item: any) => ({ ...normalized, key: `18:${item.seriesId}:${item.itemId}`, name: `藏品 · ${item.name}`, image: item.image || '' }))
-          : [normalized]
-      })
-      .filter((effect: { name: string }) => !!effect.name)
-  }
-  const ids = Array.isArray(land.value?.mutantConfigIds) ? land.value.mutantConfigIds : []
-  return ids
-    .map((id: any) => {
-      const numericId = Number(id) || 0
-      return {
-        id: numericId,
-        name: numericId > 0 ? `变异 #${numericId}` : '',
-        icon: '',
-        description: '',
-      }
-    })
-    .filter((effect: { name: string }) => !!effect.name)
-})
-
 const purpleCrystalResonancePercent = computed(() => (
   Math.max(0, Number(land.value?.purpleCrystalResonanceExpBonus) || 0) / 100
 ))
+
+const mutantEffects = computed(() => {
+  const effects = Array.isArray(land.value?.mutantEffects) ? land.value.mutantEffects : []
+  let normalized: Array<{
+    id: number
+    key: string
+    name: string
+    icon: string
+    description: string
+    image?: string
+    isPurpleCrystalResonance?: boolean
+  }>
+  if (effects.length > 0) {
+    normalized = effects
+      .flatMap((effect: any) => {
+        const normalizedEffect = { id: Number(effect?.id) || 0, name: String(effect?.name || effect?.effect_name || '').trim(), icon: String(effect?.icon || '').trim(), description: String(effect?.description || effect?.desc || effect?.tips || '').trim(), key: String(effect.id), image: '' }
+        return normalizedEffect.id === 18 && Array.isArray(effect.collections) && effect.collections.length
+          ? effect.collections.map((item: any) => ({ ...normalizedEffect, key: `18:${item.seriesId}:${item.itemId}`, name: `藏品 · ${item.name}`, image: String(item.image || '') }))
+          : [normalizedEffect]
+      })
+      .filter((effect: { name: string }) => !!effect.name)
+  }
+  else {
+    const ids = Array.isArray(land.value?.mutantConfigIds) ? land.value.mutantConfigIds : []
+    normalized = ids
+      .map((id: any) => {
+        const numericId = Number(id) || 0
+        return {
+          id: numericId,
+          key: String(numericId),
+          name: numericId > 0 ? `变异 #${numericId}` : '',
+          icon: '',
+          description: '',
+        }
+      })
+      .filter((effect: { name: string }) => !!effect.name)
+  }
+  if (purpleCrystalResonancePercent.value > 0) {
+    normalized.push({
+      id: 0,
+      key: 'purple-crystal-resonance',
+      name: '紫晶共鸣',
+      icon: 'crystal',
+      description: `变异作物经验 +${purpleCrystalResonancePercent.value}%`,
+      isPurpleCrystalResonance: true,
+    })
+  }
+  return normalized
+})
 
 const growProgress = computed(() => {
   const matureInSec = land.value.matureInSec || 0
@@ -386,85 +409,84 @@ function markMutantIconFailed(effect: any) {
     </div>
 
     <!-- Status Badges (game-style) -->
-    <div class="mt-auto flex flex-wrap items-center justify-center gap-1 pt-1">
-      <span
-        v-if="purpleCrystalResonancePercent > 0"
-        class="badge-purple-crystal inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-        :title="`紫金土地上的任意变异作物经验 +${purpleCrystalResonancePercent}%`"
-      >
-        <span class="i-carbon-flash-filled" /> 紫晶共鸣
-      </span>
-      <span
-        v-for="effect in mutantEffects"
-        :key="effect.key || effect.id || effect.name"
-        class="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-        :class="mutantBadgeClass(effect)"
-        :title="effect.description || effect.name"
-      >
-        <img
-          v-if="showMutantImage(effect)"
-          :src="mutantIconUrl(effect)"
-          :alt="effect.name"
-          class="h-3 w-3 object-contain"
-          @error="markMutantIconFailed(effect)"
+    <div class="mt-auto w-full flex flex-col items-center gap-1 pt-1">
+      <div v-if="mutantEffects.length" class="w-full flex flex-wrap items-center justify-center gap-1">
+        <strong class="text-[10px] font-bold">变异 : </strong>
+        <span
+          v-for="effect in mutantEffects"
+          :key="effect.key || effect.id || effect.name"
+          class="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+          :class="mutantBadgeClass(effect)"
+          :title="effect.description || effect.name"
         >
-        <span v-else-if="Number(effect.id) === 18" class="i-carbon-trophy" />
-        <span v-else-if="mutantIconName(effect) === 'lightning'" class="i-carbon-lightning" />
-        <span v-else-if="mutantIconName(effect) === 'butterfly'" class="i-carbon-bee" />
-        <span v-else class="i-carbon-star" />
-        {{ effect.name }}
-      </span>
-      <span
-        v-for="effect in interactionEffectBadges(land)"
-        :key="effect.itemId"
-        class="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-        :class="interactionBadgeClass(effect.itemId)"
-        :title="effect.title"
-      >
-        <span class="i-carbon-checkmark-outline" /> {{ effect.name }}
-      </span>
-      <span
-        v-if="land.needWater"
-        class="badge-water inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-      >
-        <span class="i-carbon-rain-drop" /> 缺水
-      </span>
-      <span
-        v-if="land.needWeed"
-        class="inline-flex items-center gap-0.5 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] text-green-700 font-bold dark:bg-green-900/40 dark:text-green-300"
-      >
-        <span class="i-carbon-clean" /> 杂草
-      </span>
-      <span
-        v-if="land.needBug"
-        class="badge-bug inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-      >
-        <span class="i-carbon-debug" /> 虫害
-      </span>
-      <span
-        v-if="land.status === 'harvestable'"
-        class="badge-harvest inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
-      >
-        <span class="i-carbon-wheat" /> 收获
-      </span>
-      <span
-        v-if="land.status === 'stealable'"
-        class="inline-flex items-center gap-0.5 rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] text-purple-700 font-bold dark:bg-purple-900/40 dark:text-purple-300"
-      >
-        <span class="i-carbon-touch-1" /> 可偷
-      </span>
-      <span
-        v-if="land.status === 'harvested'"
-        class="inline-flex items-center gap-0.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-700 font-bold dark:bg-gray-700 dark:text-gray-200"
-      >
-        <span class="i-carbon-wheat" /> 成熟不可偷
-      </span>
-      <span
-        v-if="showFertilizerActions && normalRemainingText"
-        class="inline-flex items-center gap-0.5 rounded-full bg-lime-100 px-1.5 py-0.5 text-[10px] text-lime-800 font-bold dark:bg-lime-900/40 dark:text-lime-300"
-      >
-        <span class="i-carbon-chemistry" /> {{ normalRemainingText }}
-      </span>
+          <img
+            v-if="showMutantImage(effect)"
+            :src="mutantIconUrl(effect)"
+            :alt="effect.name"
+            class="h-3 w-3 object-contain"
+            @error="markMutantIconFailed(effect)"
+          >
+          <span v-else-if="Number(effect.id) === 18" class="i-carbon-trophy" />
+          <span v-else-if="effect.isPurpleCrystalResonance" class="i-carbon-flash-filled" />
+          <span v-else-if="mutantIconName(effect) === 'lightning'" class="i-carbon-lightning" />
+          <span v-else-if="mutantIconName(effect) === 'butterfly'" class="i-carbon-bee" />
+          <span v-else class="i-carbon-star" />
+          {{ effect.name }}
+        </span>
+      </div>
+      <div class="w-full flex flex-wrap items-center justify-center gap-1">
+        <span
+          v-for="effect in interactionEffectBadges(land)"
+          :key="effect.itemId"
+          class="inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+          :class="interactionBadgeClass(effect.itemId)"
+          :title="effect.title"
+        >
+          <span class="i-carbon-checkmark-outline" /> {{ effect.name }}
+        </span>
+        <span
+          v-if="land.needWater"
+          class="badge-water inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+        >
+          <span class="i-carbon-rain-drop" /> 缺水
+        </span>
+        <span
+          v-if="land.needWeed"
+          class="inline-flex items-center gap-0.5 rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] text-green-700 font-bold dark:bg-green-900/40 dark:text-green-300"
+        >
+          <span class="i-carbon-clean" /> 杂草
+        </span>
+        <span
+          v-if="land.needBug"
+          class="badge-bug inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+        >
+          <span class="i-carbon-debug" /> 虫害
+        </span>
+        <span
+          v-if="land.status === 'harvestable'"
+          class="badge-harvest inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+        >
+          <span class="i-carbon-wheat" /> 收获
+        </span>
+        <span
+          v-if="land.status === 'stealable'"
+          class="inline-flex items-center gap-0.5 rounded-full bg-purple-100 px-1.5 py-0.5 text-[10px] text-purple-700 font-bold dark:bg-purple-900/40 dark:text-purple-300"
+        >
+          <span class="i-carbon-touch-1" /> 可偷
+        </span>
+        <span
+          v-if="land.status === 'harvested'"
+          class="inline-flex items-center gap-0.5 rounded-full bg-gray-100 px-1.5 py-0.5 text-[10px] text-gray-700 font-bold dark:bg-gray-700 dark:text-gray-200"
+        >
+          <span class="i-carbon-wheat" /> 成熟不可偷
+        </span>
+        <span
+          v-if="showFertilizerActions && normalRemainingText"
+          class="inline-flex items-center gap-0.5 rounded-full bg-lime-100 px-1.5 py-0.5 text-[10px] text-lime-800 font-bold dark:bg-lime-900/40 dark:text-lime-300"
+        >
+          <span class="i-carbon-chemistry" /> {{ normalRemainingText }}
+        </span>
+      </div>
     </div>
 
     <div v-if="showFarmingAction" class="farming-action-wrap mt-2 w-full" @click.stop>
@@ -984,19 +1006,6 @@ function markMutantIconFailed(effect: any) {
 .badge-bug,
 .badge-harvest {
   animation: none;
-}
-
-.badge-purple-crystal {
-  color: #6d3da0;
-  border: 1px solid rgba(146, 103, 190, 0.35);
-  background: linear-gradient(135deg, rgba(239, 225, 255, 0.96), rgba(218, 244, 255, 0.92));
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
-}
-
-.dark .badge-purple-crystal {
-  color: #e9d5ff;
-  border-color: rgba(196, 151, 255, 0.34);
-  background: linear-gradient(135deg, rgba(88, 49, 121, 0.58), rgba(33, 82, 102, 0.52));
 }
 
 .land-details-link {

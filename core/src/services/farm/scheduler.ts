@@ -11,7 +11,7 @@ const { toNum, log, logWarn, randomDelay } = require('../../utils/utils');
 const { createScheduler } = require('../scheduler');
 const { runExclusiveAutomationTask } = require('../automation-lock');
 const { recordOperation } = require('../stats');
-const { getAllLands, harvest, farming, unlockLand, upgradeLand } = require('./api');
+const { getAllLands, harvest, farming, unlockLand, upgradeLand, removePlant } = require('./api');
 const {
     analyzeLands,
     getCleanableFarmSocialEventItemIds,
@@ -168,7 +168,7 @@ async function harvestMatureOwnLandsOnce(actions: string[], propagateErrors: boo
 
 /**
  * 手动/自动执行农场操作
- * @param opType - 'all', 'harvest', 'clear', 'plant', 'upgrade'
+ * @param opType - 'all', 'harvest', 'clear', 'plant', 'upgrade', 'remove'
  */
 async function runFarmOperation(
     opType: string,
@@ -197,8 +197,25 @@ async function runFarmOperation(
     if (hasTargetLandId && (!Number.isSafeInteger(targetLandId) || targetLandId <= 0)) {
         throw new Error('地块编号无效');
     }
-    if (hasTargetLandId && opType !== 'clear') {
-        throw new Error('指定地块仅支持单点务农');
+    if (opType === 'remove' && !hasTargetLandId) {
+        throw new Error('铲除操作必须指定地块');
+    }
+    if (hasTargetLandId && !['clear', 'harvest', 'plant', 'upgrade', 'remove'].includes(opType)) {
+        throw new Error('指定地块仅支持务农、收获、种植、升级或铲除');
+    }
+    if (hasTargetLandId && opType === 'harvest' && !status.harvestable.includes(targetLandId)) {
+        throw new Error(`土地#${targetLandId} 当前不能收获`);
+    }
+    if (hasTargetLandId && opType === 'plant'
+        && !status.empty.includes(targetLandId) && !status.dead.includes(targetLandId)) {
+        throw new Error(`土地#${targetLandId} 当前不能种植`);
+    }
+    if (hasTargetLandId && opType === 'upgrade' && !status.upgradable.includes(targetLandId)) {
+        throw new Error(`土地#${targetLandId} 当前不能升级`);
+    }
+    if (hasTargetLandId && opType === 'remove'
+        && ![...status.growing, ...status.harvestable, ...status.dead].includes(targetLandId)) {
+        throw new Error(`土地#${targetLandId} 当前没有可铲除的作物`);
     }
 
     // 摘要
@@ -215,6 +232,28 @@ async function runFarmOperation(
     statusParts.push(`长:${status.growing.length}`);
 
     const actions: string[] = [];
+
+    if (opType === 'remove') {
+        try {
+            await removePlant([targetLandId]);
+            log('铲除', `已铲除土地#${targetLandId}上的作物`, {
+                module: 'farm',
+                event: '铲除植物',
+                result: 'ok',
+                count: 1,
+                landId: targetLandId,
+            });
+            actions.push('铲除1');
+        } catch (e: any) {
+            logWarn('铲除', `土地#${targetLandId}铲除失败: ${e.message}`, {
+                module: 'farm',
+                event: '铲除植物',
+                result: 'error',
+                landId: targetLandId,
+            });
+            if (propagateErrors) throw e;
+        }
+    }
 
     // 执行一键务农 (除草+除虫+浇水) - 串行执行以降低并发压力
     if (opType === 'all' || opType === 'clear') {
@@ -269,7 +308,9 @@ async function runFarmOperation(
     let harvestReply: any = null;
     let postHarvest: any = null;
     if (opType === 'all' || opType === 'harvest') {
-        const harvestable = opType === 'all' ? autoHarvestLandIds(status) : status.harvestable;
+        const harvestable = opType === 'all'
+            ? autoHarvestLandIds(status)
+            : hasTargetLandId ? status.harvestable.filter((id: number) => id === targetLandId) : status.harvestable;
         if (harvestable.length > 0) {
             try {
                 harvestReply = await harvest(harvestable);
@@ -301,8 +342,11 @@ async function runFarmOperation(
 
     // 执行种植
     if (opType === 'all' || opType === 'plant') {
-        const allEmptyLands: number[] = [...new Set(status.empty)] as number[];
-        let allDeadLands: number[] = [...new Set(status.dead)] as number[];
+        const targetLandIds = hasTargetLandId ? [targetLandId] : undefined;
+        const allEmptyLands: number[] = [...new Set(status.empty)]
+            .filter((id: number) => !hasTargetLandId || id === targetLandId) as number[];
+        let allDeadLands: number[] = [...new Set(status.dead)]
+            .filter((id: number) => !hasTargetLandId || id === targetLandId) as number[];
 
         if (opType === 'all' && harvestedLandIds.length > 0) {
             // 收获后延迟再铲除枯地
@@ -316,6 +360,7 @@ async function runFarmOperation(
                 if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: actions.length > 0, actions };
                 const plantResult = await autoPlantEmptyLands(allDeadLands, allEmptyLands, {
                     propagateErrors, knownLands: lands,
+                    targetLandIds,
                     pacing: automatic ? automatic.pacing : { lastPlantAt: null, delaySeconds: 0 },
                 });
                 const plantedCount = Array.isArray(plantResult?.plantedLands) ? plantResult.plantedLands.length : 0;
@@ -338,9 +383,13 @@ async function runFarmOperation(
     // 执行土地解锁/升级（手动 upgrade 总是执行；自动 all 受开关控制）
     const shouldAutoUpgrade = opType === 'all' && isAutomationOn('land_upgrade');
     if (shouldAutoUpgrade || opType === 'upgrade') {
-        if (status.unlockable.length > 0) {
+        const unlockable = hasTargetLandId ? [] : status.unlockable;
+        const upgradable = hasTargetLandId
+            ? status.upgradable.filter((id: number) => id === targetLandId)
+            : status.upgradable;
+        if (unlockable.length > 0) {
             let unlocked: number = 0;
-            for (const landId of status.unlockable) {
+            for (const landId of unlockable) {
                 try {
                     await unlockLand(landId, false);
                     log('解锁', `土地#${landId} 解锁成功`, {
@@ -360,9 +409,9 @@ async function runFarmOperation(
             }
         }
 
-        if (status.upgradable.length > 0) {
+        if (upgradable.length > 0) {
             let upgraded: number = 0;
-            for (const landId of status.upgradable) {
+            for (const landId of upgradable) {
                 try {
                     const reply = await upgradeLand(landId);
                     const newLevel = reply.land ? toNum(reply.land.level) : '?';

@@ -39,6 +39,8 @@ const {
 const useCounts = reactive<Record<number, number>>({})
 const tokenRef = useStorage('admin_token', '')
 const showProtectLogs = ref(false)
+const showPetEncyclopedia = ref(true)
+const showFeedingModal = ref(false)
 
 const isConnected = computed(() => !!status.value?.connection?.connected)
 const maxDuration = computed(() => Number(snapshot.value?.maxProtectDuration || 30 * 86400))
@@ -46,6 +48,10 @@ const protectDuration = computed(() => Math.max(0, Number(snapshot.value?.protec
 const durationPercent = computed(() => Math.min(100, Math.round((protectDuration.value / maxDuration.value) * 100)))
 const pendingGiftCount = computed(() => Math.max(0, Number(snapshot.value?.pendingGiftCount || 0)))
 const ownedCount = computed(() => dogs.value.filter(dog => dog.owned).length)
+const orderedDogs = computed(() => [
+  ...dogs.value.filter(dog => dog.active),
+  ...dogs.value.filter(dog => !dog.active),
+])
 const durationLow = computed(() => !!activeDog.value && protectDuration.value < 86400)
 
 function formatDuration(secondsInput: unknown) {
@@ -228,20 +234,27 @@ function setUseCount(food: DogFoodInfo, value: number | null) {
 onMounted(loadPetInfo)
 watch(currentAccountId, () => {
   showProtectLogs.value = false
+  showFeedingModal.value = false
   petStore.clear()
   void loadPetInfo()
 })
 </script>
 
 <template>
-  <div class="personal-panel pet-page">
-    <!-- 工具栏：外层页签已经写着“宠物”，这里只放统计与操作 -->
-    <div class="pet-toolbar">
-      <span class="pet-toolbar__count">
-        <template v-if="snapshot">已获得 <b>{{ ownedCount }}</b> / {{ dogs.length }} 只宠物</template>
-      </span>
+  <div class="personal-panel pet-page pet-panel-card farm-card rounded-2xl">
+    <div class="pet-toolbar panel-sticky shrink-0">
       <NButton
-        class="pet-toolbar__logs" size="small" secondary :loading="protectLogsLoading"
+        type="primary" :loading="loading || statusLoading"
+        title="刷新宠物信息" aria-label="刷新宠物信息"
+        :disabled="!currentAccountId || !isConnected || !tokenRef" @click="refreshPetInfo"
+      >
+        <template #icon>
+          <span class="i-carbon-renew" />
+        </template>
+        <span class="pet-toolbar__refresh-label">刷新</span>
+      </NButton>
+      <NButton
+        class="pet-toolbar__logs" secondary :loading="protectLogsLoading"
         title="守护记录" aria-label="守护记录"
         :disabled="!currentAccountId || !isConnected || !snapshot?.guardianRecordsSupported" @click="openProtectLogs"
       >
@@ -251,14 +264,77 @@ watch(currentAccountId, () => {
         <span class="pet-toolbar__label">守护记录</span>
       </NButton>
       <NButton
-        circle quaternary size="small" title="刷新宠物信息" aria-label="刷新宠物信息" :loading="loading || statusLoading"
-        :disabled="!currentAccountId || !isConnected || !tokenRef" @click="refreshPetInfo"
+        class="pet-toolbar__encyclopedia" secondary
+        title="宠物图鉴" aria-label="宠物图鉴"
+        :aria-expanded="showPetEncyclopedia" aria-controls="pet-encyclopedia"
+        @click="showPetEncyclopedia = !showPetEncyclopedia"
       >
         <template #icon>
-          <span class="i-carbon-renew" />
+          <span class="i-carbon-book" />
         </template>
+        <span class="pet-toolbar__label">宠物图鉴</span>
+      </NButton>
+      <NButton
+        class="pet-toolbar__feeding" secondary
+        title="喂食" aria-label="喂食"
+        @click="showFeedingModal = true"
+      >
+        <template #icon>
+          <span class="i-carbon-restaurant" />
+        </template>
+        <span class="pet-toolbar__label">喂食</span>
       </NButton>
     </div>
+
+    <section
+      v-show="showPetEncyclopedia && !loading && !statusLoading"
+      id="pet-encyclopedia"
+      class="pet-roster"
+      aria-labelledby="pet-roster-title"
+    >
+      <h3 id="pet-roster-title" class="pet-roster__title">
+        全部宠物<small>({{ ownedCount }}/{{ dogs.length }})</small>
+      </h3>
+      <EmptyState v-if="!dogs.length" bare title="暂无宠物" icon="i-carbon-dog-walker" />
+      <ul v-else class="pet-list">
+        <li
+          v-for="pet in orderedDogs" :key="pet.id" class="pet-row"
+          :class="{ 'is-active': pet.active, 'is-locked': !pet.owned && !pet.activatable }"
+        >
+          <div class="pet-row__avatar">
+            <img :src="pet.image" :alt="pet.name" loading="lazy">
+            <span v-if="!pet.owned && !pet.activatable" class="pet-row__lock i-carbon-locked" aria-hidden="true" />
+          </div>
+          <div class="pet-row__name">
+            <strong>{{ pet.name }}</strong>
+            <span class="pet-rarity" :class="rarityTone(pet)">{{ pet.rarityLabel }}</span>
+            <span class="pet-row__status" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }">
+              <span class="pet-dot" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }" aria-hidden="true" />{{ dogStatusLabel(pet) }}
+            </span>
+          </div>
+          <ul class="pet-skills pet-row__skills">
+            <li v-for="skill in pet.skills" :key="skill.name">
+              <strong>{{ skill.name }}</strong>
+              <span v-if="skill.remainingCount !== undefined && skill.dailyLimit" class="pet-usage">今日剩余 {{ skill.remainingCount }}/{{ skill.dailyLimit }}</span>
+              <p>{{ skill.description }}</p>
+            </li>
+          </ul>
+          <div class="pet-row__obtain">
+            <small>获得条件</small>
+            <p>{{ pet.obtainCondition || '—' }}</p>
+          </div>
+          <NButton
+            class="pet-row__action" size="small"
+            :type="dogActionType(pet)"
+            secondary
+            :loading="operatingDogId === pet.id" :disabled="(!pet.owned && !pet.activatable) || !!operatingDogId"
+            :title="operationTitle(pet)" @click="handlePetOperation(pet)"
+          >
+            {{ dogActionLabel(pet) }}
+          </NButton>
+        </li>
+      </ul>
+    </section>
 
     <EmptyState v-if="loading || statusLoading" title="正在读取宠物信息" icon="i-svg-spinners-90-ring-with-bg" />
     <EmptyState v-else-if="!currentAccountId" title="请先选择账号" description="选择账号后查看宠物与狗粮" icon="i-carbon-dog-walker" />
@@ -278,57 +354,20 @@ watch(currentAccountId, () => {
               <img :src="activeDog.image" :alt="activeDog.name">
             </div>
             <div class="pet-home__info">
-              <p class="pet-home__eyebrow">
-                <span class="pet-dot is-active" aria-hidden="true" />看家中
-              </p>
               <h3>
                 {{ activeDog.name }}<span class="pet-rarity" :class="rarityTone(activeDog)">{{ activeDog.rarityLabel }}</span>
               </h3>
-              <ul class="pet-skills">
-                <li v-for="skill in activeDog.skills" :key="skill.name">
-                  <strong>{{ skill.name }}</strong>
-                  <span v-if="skill.remainingCount !== undefined && skill.dailyLimit" class="pet-usage">今日剩余 {{ skill.remainingCount }}/{{ skill.dailyLimit }}</span>
-                  <p>{{ skill.description }}</p>
-                </li>
-              </ul>
+              <p class="pet-home__eyebrow">
+                <span class="pet-dot is-active" aria-hidden="true" />看家中
+              </p>
             </div>
-          </div>
-
-          <div class="pet-bowl">
-            <div class="pet-bowl__meter">
-              <div class="pet-bowl__label">
-                <span>狗粮剩余</span>
-                <strong :class="{ 'is-low': durationLow }">{{ formatDuration(protectDuration) }}</strong>
-              </div>
-              <div
-                class="pet-bowl__track" :class="{ 'is-low': durationLow }" role="progressbar" aria-label="狗粮剩余时间"
-                aria-valuemin="0" aria-valuemax="100" :aria-valuenow="durationPercent"
-              >
-                <span :style="{ width: `${durationPercent}%` }" />
-              </div>
-              <small>上限 {{ formatFoodDuration(maxDuration) }} · 已存 {{ durationPercent }}%</small>
-            </div>
-
-            <ul v-if="foods.length" class="pet-foods" aria-label="狗盆里的狗粮">
-              <li v-for="food in foods" :key="food.id" class="pet-food">
-                <img :src="food.image" :alt="food.name" loading="lazy">
-                <div class="pet-food__copy">
-                  <strong>{{ food.name }}</strong>
-                  <span>每份 +{{ formatFoodDuration(food.duration) }} · 库存 {{ food.count }}</span>
-                </div>
-                <NInputNumber
-                  :value="selectedCount(food)" :min="1" :max="Math.max(1, maxUsableCount(food))" size="small"
-                  :disabled="!canUseFood(food)" class="pet-food__count" :aria-label="`${food.name}喂食份数`"
-                  @update:value="value => setUseCount(food, value)"
-                />
-                <NButton size="small" type="primary" :loading="usingFood" :disabled="!canUseFood(food)" :title="feedTitle(food)" @click="handleUseFood(food)">
-                  喂食
-                </NButton>
+            <ul class="pet-skills pet-home__skills">
+              <li v-for="skill in activeDog.skills" :key="skill.name">
+                <strong>{{ skill.name }}</strong>
+                <span v-if="skill.remainingCount !== undefined && skill.dailyLimit" class="pet-usage">今日剩余 {{ skill.remainingCount }}/{{ skill.dailyLimit }}</span>
+                <p>{{ skill.description }}</p>
               </li>
             </ul>
-            <p v-else class="pet-bowl__empty">
-              狗盆里暂无狗粮
-            </p>
           </div>
         </template>
 
@@ -337,7 +376,7 @@ watch(currentAccountId, () => {
           <span class="pet-idle__avatar" aria-hidden="true"><span class="i-carbon-dog-walker" /></span>
           <div class="pet-idle__copy">
             <h3>还没有宠物看家</h3>
-            <p>{{ ownedCount ? '在下方「全部宠物」中选一只上场，好友来偷菜时它会帮你看护。' : '还没有可上场的宠物，可在下方查看各宠物的获得条件。' }}</p>
+            <p>{{ ownedCount ? '在「宠物图鉴」中选一只上场，好友来偷菜时它会帮你看护。' : '还没有可上场的宠物，可在「宠物图鉴」中查看各宠物的获得条件。' }}</p>
           </div>
           <div class="pet-idle__stock">
             <small>狗盆库存</small>
@@ -361,52 +400,6 @@ watch(currentAccountId, () => {
             全部拾取
           </NButton>
         </div>
-      </section>
-
-      <!-- 全部宠物：一行一只，列对齐，行高随内容 -->
-      <section class="pet-roster" aria-labelledby="pet-roster-title">
-        <h3 id="pet-roster-title" class="pet-roster__title">
-          全部宠物<small>{{ dogs.length }}</small>
-        </h3>
-        <EmptyState v-if="!dogs.length" bare title="暂无宠物" icon="i-carbon-dog-walker" />
-        <ul v-else class="pet-list">
-          <li
-            v-for="pet in dogs" :key="pet.id" class="pet-row"
-            :class="{ 'is-active': pet.active, 'is-locked': !pet.owned && !pet.activatable }"
-          >
-            <div class="pet-row__avatar">
-              <img :src="pet.image" :alt="pet.name" loading="lazy">
-              <span v-if="!pet.owned && !pet.activatable" class="pet-row__lock i-carbon-locked" aria-hidden="true" />
-            </div>
-            <div class="pet-row__name">
-              <strong>{{ pet.name }}</strong>
-              <span class="pet-rarity" :class="rarityTone(pet)">{{ pet.rarityLabel }}</span>
-              <span class="pet-row__status" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }">
-                <span class="pet-dot" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }" aria-hidden="true" />{{ dogStatusLabel(pet) }}
-              </span>
-            </div>
-            <ul class="pet-skills pet-row__skills">
-              <li v-for="skill in pet.skills" :key="skill.name">
-                <strong>{{ skill.name }}</strong>
-                <span v-if="skill.remainingCount !== undefined && skill.dailyLimit" class="pet-usage">今日剩余 {{ skill.remainingCount }}/{{ skill.dailyLimit }}</span>
-                <p>{{ skill.description }}</p>
-              </li>
-            </ul>
-            <div class="pet-row__obtain">
-              <small>获得条件</small>
-              <p>{{ pet.obtainCondition || '—' }}</p>
-            </div>
-            <NButton
-              class="pet-row__action" size="small"
-              :type="dogActionType(pet)"
-              secondary
-              :loading="operatingDogId === pet.id" :disabled="(!pet.owned && !pet.activatable) || !!operatingDogId"
-              :title="operationTitle(pet)" @click="handlePetOperation(pet)"
-            >
-              {{ dogActionLabel(pet) }}
-            </NButton>
-          </li>
-        </ul>
       </section>
     </template>
 
@@ -434,6 +427,55 @@ watch(currentAccountId, () => {
         </li>
       </ul>
     </NModal>
+
+    <NModal
+      v-model:show="showFeedingModal"
+      preset="card"
+      title="喂食"
+      class="pet-feeding-modal"
+      :bordered="false"
+      :style="{ width: 'min(640px, calc(100vw - 32px))', maxHeight: 'min(760px, calc(100vh - 32px))' }"
+    >
+      <div class="pet-bowl pet-feeding-bowl">
+        <div v-if="activeDog" class="pet-bowl__meter">
+          <div class="pet-bowl__label">
+            <span>狗粮剩余</span>
+            <strong :class="{ 'is-low': durationLow }">{{ formatDuration(protectDuration) }}</strong>
+          </div>
+          <div
+            class="pet-bowl__track" :class="{ 'is-low': durationLow }" role="progressbar" aria-label="狗粮剩余时间"
+            aria-valuemin="0" aria-valuemax="100" :aria-valuenow="durationPercent"
+          >
+            <span :style="{ width: `${durationPercent}%` }" />
+          </div>
+          <small>上限 {{ formatFoodDuration(maxDuration) }} · 已存 {{ durationPercent }}%</small>
+        </div>
+        <p v-else class="pet-bowl__empty">
+          请先让一只宠物上场，再进行喂食
+        </p>
+
+        <ul v-if="foods.length" class="pet-foods" aria-label="狗盆里的狗粮">
+          <li v-for="food in foods" :key="food.id" class="pet-food">
+            <img :src="food.image" :alt="food.name" loading="lazy">
+            <div class="pet-food__copy">
+              <strong>{{ food.name }}</strong>
+              <span>每份 +{{ formatFoodDuration(food.duration) }} · 库存 {{ food.count }}</span>
+            </div>
+            <NInputNumber
+              :value="selectedCount(food)" :min="1" :max="Math.max(1, maxUsableCount(food))" size="small"
+              :disabled="!canUseFood(food)" class="pet-food__count" :aria-label="`${food.name}喂食份数`"
+              @update:value="value => setUseCount(food, value)"
+            />
+            <NButton size="small" type="primary" :loading="usingFood" :disabled="!canUseFood(food)" :title="feedTitle(food)" @click="handleUseFood(food)">
+              喂食
+            </NButton>
+          </li>
+        </ul>
+        <p v-else class="pet-bowl__empty">
+          狗盆里暂无狗粮
+        </p>
+      </div>
+    </NModal>
   </div>
 </template>
 
@@ -443,6 +485,14 @@ watch(currentAccountId, () => {
   color: var(--ui-ink);
 }
 
+.pet-panel-card {
+  --pet-panel-pad: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: var(--pet-panel-pad);
+}
+
 h3,
 p {
   margin: 0;
@@ -450,22 +500,29 @@ p {
 
 /* —— 工具栏 —— */
 .pet-toolbar {
+  container-type: inline-size;
   display: flex;
   align-items: center;
   gap: 8px;
+  margin: calc(-1 * var(--pet-panel-pad)) calc(-1 * var(--pet-panel-pad)) 0;
+  padding: 16px var(--pet-panel-pad);
+  border-radius: var(--ui-radius-card) var(--ui-radius-card) 0 0;
+  border-bottom: 1px solid var(--ui-border);
+  background: var(--ui-table-head);
 }
 
-.pet-toolbar__count {
-  min-width: 0;
-  flex: 1;
-  color: var(--ui-muted);
-  font-size: 13px;
+.pet-toolbar :deep(.n-button) {
+  width: auto;
+  flex: 0 0 auto;
 }
 
-.pet-toolbar__count b {
-  color: var(--ui-ink);
-  font-weight: var(--fw-650);
-  font-variant-numeric: tabular-nums;
+.pet-toolbar :deep(.n-button__content) {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.pet-toolbar__refresh-label {
+  white-space: nowrap;
 }
 
 /* —— 通用小件 —— */
@@ -479,6 +536,9 @@ p {
   font-weight: var(--fw-600);
   line-height: 18px;
   white-space: nowrap;
+  .pet-toolbar__refresh-label {
+    display: none;
+  }
 }
 
 .pet-rarity.is-gold {
@@ -558,7 +618,7 @@ p {
 /* —— 看家状态卡 —— */
 .pet-home {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 480px);
+  grid-template-columns: minmax(0, 1fr);
   overflow: hidden;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-card);
@@ -569,11 +629,39 @@ p {
 }
 
 .pet-home__dog {
-  display: flex;
+  display: grid;
   min-width: 0;
-  align-items: center;
-  gap: 20px;
+  grid-template-areas:
+    'avatar info'
+    'skills skills';
+  grid-template-columns: 104px minmax(0, 1fr);
+  align-items: start;
+  gap: 16px 20px;
   padding: 22px 24px;
+}
+
+.pet-home__avatar {
+  grid-area: avatar;
+}
+
+.pet-home__info {
+  grid-area: info;
+}
+
+.pet-home__skills {
+  grid-area: skills;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.pet-home__skills > li {
+  min-width: 0;
+  flex: 1 1 180px;
+  padding: 12px 14px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface-soft);
 }
 
 .pet-home__avatar {
@@ -732,6 +820,11 @@ p {
   padding: 20px 22px;
   border-left: 1px solid var(--ui-border);
   background: var(--ui-surface-soft);
+}
+
+.pet-feeding-bowl {
+  border-left: 0;
+  border-radius: var(--ui-radius-card);
 }
 
 .pet-bowl__meter {
@@ -1125,11 +1218,6 @@ p {
   .pet-home {
     grid-template-columns: minmax(0, 1fr);
   }
-
-  .pet-bowl {
-    border-top: 1px solid var(--ui-border);
-    border-left: 0;
-  }
 }
 
 @media (max-width: 520px) {
@@ -1137,12 +1225,15 @@ p {
     display: none;
   }
 
-  .pet-toolbar__logs.n-button :deep(.n-button__icon) {
+  .pet-toolbar__logs.n-button :deep(.n-button__icon),
+  .pet-toolbar__encyclopedia.n-button :deep(.n-button__icon),
+  .pet-toolbar__feeding.n-button :deep(.n-button__icon) {
     margin-right: 0;
   }
 
   .pet-home__dog {
     align-items: flex-start;
+    grid-template-columns: 72px minmax(0, 1fr);
     gap: 14px;
     padding: 16px;
   }

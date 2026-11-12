@@ -611,7 +611,7 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         if (!id) return res.status(400).json({ ok: false });
 
         try {
-            const { opType, landId } = req.body; // 'harvest', 'clear', 'plant', 'all'; landId 用于单点务农
+            const { opType, landId } = req.body; // landId 将支持的操作限定到单块土地
             const data = await ctx.provider.doFarmOp(id, opType, landId);
             res.json({ ok: true, data });
         } catch (e: any) {

@@ -885,6 +885,19 @@ select:focus-visible {
   margin: 8px 0 0 !important;
 }
 
+.personal-tabs.n-tabs.n-tabs--line-type {
+  --n-tab-gap: 0px !important;
+}
+
+.personal-tabs .n-tabs-tab-wrapper {
+  flex: 0 0 100px;
+}
+
+.personal-tabs .n-tabs-tab {
+  width: 100%;
+  justify-content: center;
+}
+
 @media (min-width: 1024px) {
   .panel-sticky {
     position: sticky;

@@ -5,6 +5,7 @@ const { PlantPhase } = require('../dist/config/config');
 const { getPlantById, getPlantGrowPhases } = require('../dist/config/gameConfig');
 const {
     analyzeLands,
+    buildLandDetail,
     classifyHarvestedLandsByMap,
     getCurrentPhase,
     getNormalFertilizerTargetsFromLands,
@@ -56,6 +57,21 @@ test('getCurrentPhase maps a final configured 盛开 remaining phase to MATURE',
         { phase: PlantPhase.GERMINATION, begin_time: now - 10 },
     ], false, '', MORNING_GLORY_ID);
     assert.equal(current.phase, PlantPhase.MATURE);
+});
+
+test('buildLandDetail exposes current and next phase times for the crop progress bar', () => {
+      const now = Math.floor(Date.now() / 1000);
+      const detail = buildLandDetail(land(1, {
+          id: RADISH_ID,
+          season: 1,
+          phases: [
+              { phase: PlantPhase.GERMINATION, begin_time: now - 10 },
+              { phase: PlantPhase.MATURE, begin_time: now + 3600 },
+          ],
+      }), { nowSec: now });
+
+      assert.equal(detail.phaseStartTime, now - 10);
+      assert.equal(detail.phaseEndTime, now + 3600);
 });
 
 test('classifyHarvestedLandsByMap: dead and empty go to removable, missing land stays unknown', () => {

@@ -367,6 +367,13 @@ function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: 
     const totalSeason = Math.max(1, toNum(plantCfg?.seasons) || 1);
     const currentSeasonRaw = toNum(plant.season);
     const currentSeason = currentSeasonRaw > 0 ? Math.min(currentSeasonRaw, totalSeason) : 1;
+    const phaseStartTime = toTimeSec(currentPhase.begin_time);
+    const nextPhase = phaseStartTime > 0
+        ? plant.phases
+            .filter((phase: any) => phase && toTimeSec(phase.begin_time) > phaseStartTime)
+            .sort((left: any, right: any) => toTimeSec(left.begin_time) - toTimeSec(right.begin_time))[0]
+        : null;
+    const phaseEndTime = nextPhase ? toTimeSec(nextPhase.begin_time) : 0;
     const maturePhase = Array.isArray(plant.phases)
         ? plant.phases
             .filter((phase: any) => phase && toTimeSec(phase.begin_time) > 0)
@@ -397,6 +404,8 @@ function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: 
         currentSeason,
         totalSeason,
         matureInSec,
+        phaseStartTime,
+        phaseEndTime,
         totalGrowTime: getPlantGrowTime(plantId),
         needWater: statusFlags.needWater,
         needWeed: statusFlags.needWeed,

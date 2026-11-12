@@ -751,16 +751,20 @@ async function resolveLandTypeMapForBagSeeds(knownLands: any[]): Promise<Map<num
 async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[], options: {
     propagateErrors?: boolean;
     knownLands?: any[];
+    targetLandIds?: number[];
     pacing?: PlantingPacing;
 } = {}): Promise<any> {
     const pacing: PlantingPacing = options.pacing || { lastPlantAt: null };
+    const targetLandIds = Array.isArray(options.targetLandIds)
+        ? new Set(options.targetLandIds.map((id: any) => toNum(id)).filter((id: number) => id > 0))
+        : null;
     pacing.deferred = false;
     if ((deadLandIds.length > 0 || emptyLandIds.length > 0) && isSlicedPlanting(pacing) && getRemainingPlantDelayMs(pacing) > 0) {
         pacing.deferred = true;
         return { plantedLands: [] };
     }
     let landsToPlant: number[] = [...new Set<number>((Array.isArray(emptyLandIds) ? emptyLandIds : [])
-        .map((id: any) => toNum(id)).filter((id: number) => id > 0))];
+        .map((id: any) => toNum(id)).filter((id: number) => id > 0 && (!targetLandIds || targetLandIds.has(id))))];
     let latestLands: any[] = Array.isArray(options.knownLands) ? options.knownLands : [];
     const state = getUserState();
 
@@ -774,7 +778,8 @@ async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[]
             try {
                 const latest = await getAllLands();
                 latestLands = Array.isArray(latest && latest.lands) ? latest.lands : [];
-                landsToPlant = analyzeLands(latestLands).empty;
+                landsToPlant = analyzeLands(latestLands).empty
+                    .filter((id: number) => !targetLandIds || targetLandIds.has(id));
             } catch (e: any) {
                 logWarn('铲除', `铲除后确认土地失败，保留原有空地且不使用枯死地块: ${e.message}`, {
                     module: 'farm', event: '铲除植物', result: 'confirm_error'
@@ -798,10 +803,12 @@ async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[]
         let bagResult: any;
         try {
             const landTypeById = await resolveLandTypeMapForBagSeeds(latestLands);
-            const allUnlockedLandIds = latestLands
-                .filter((land: any) => !!(land && land.unlocked))
-                .map((land: any) => toNum(land.id))
-                .filter((id: number) => id > 0);
+            const allUnlockedLandIds = targetLandIds
+                ? [...landsToPlant]
+                : latestLands
+                    .filter((land: any) => !!(land && land.unlocked))
+                    .map((land: any) => toNum(land.id))
+                    .filter((id: number) => id > 0);
             bagResult = await plantFromBagSeeds(landsToPlant, landTypeById, {
                 propagateErrors: options.propagateErrors,
                 allUnlockedLandIds,

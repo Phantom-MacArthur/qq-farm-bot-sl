@@ -119,7 +119,7 @@ const confirmModal = ref({
   message: '',
   type: 'primary' as 'primary' | 'danger',
   loading: false,
-  action: '' as 'sell' | 'use' | 'batchSell' | 'batchLock' | 'batchUnlock',
+  action: '' as 'sell' | 'use' | 'batchSell' | 'batchLock' | 'batchUnlock' | 'batchUse',
   item: null as any,
   useCount: 1,
   selectedItems: [] as any[],
@@ -160,10 +160,11 @@ function setUseCount(value: unknown) {
   confirmModal.value.useCount = Math.max(1, Math.min(count, maxUseCount.value))
 }
 
-type BatchAction = 'sell' | 'lock' | 'unlock'
+type BatchAction = 'sell' | 'lock' | 'unlock' | 'use'
 
 const batchAction = ref<BatchAction | null>(null)
 const batchMode = computed(() => batchAction.value !== null)
+const multiSelectEnabled = ref(false)
 const selectedForBatch = ref<Set<string>>(new Set())
 const batchSellResult = ref<{ gold: number, goldBean: number } | null>(null)
 
@@ -171,15 +172,14 @@ const selectedBatchCount = computed(() => {
   return selectedForBatch.value.size
 })
 
-const lockModeAvailable = computed(() => ['fruit', 'mutant', 'seed'].includes(selectedCategory.value))
-const sellModeAvailable = computed(() => ['all', 'fruit', 'mutant'].includes(selectedCategory.value))
-
 const batchActionLabel = computed(() => {
   if (batchAction.value === 'sell')
     return '出售'
   if (batchAction.value === 'lock')
     return '锁定'
-  return '解锁'
+  if (batchAction.value === 'unlock')
+    return '解锁'
+  return '使用'
 })
 
 const confirmButtonText = computed(() => {
@@ -189,6 +189,8 @@ const confirmButtonText = computed(() => {
     return '确认锁定'
   if (confirmModal.value.action === 'batchUnlock')
     return '确认解锁'
+  if (confirmModal.value.action === 'batchUse')
+    return '确认使用'
   if (confirmModal.value.action === 'use' && isDogFood(confirmModal.value.item))
     return '确认喂食'
   return '确认使用'
@@ -249,15 +251,10 @@ function canUnlock(item: any) {
   return isLockable(item) && item?.locked === true
 }
 
-// 批量模式下不可选的物品给出原因，避免用户以为“点了没反应”。
-function batchIneligibleReason(item: any) {
-  if (batchAction.value === 'sell')
-    return getSellStatusText(item)
-  if (batchAction.value === 'lock')
-    return item?.locked === true ? '已锁定' : '不可锁定'
-  if (batchAction.value === 'unlock')
-    return item?.locked === true ? '不可解锁' : '未锁定'
-  return ''
+function canBatchUse(item: any) {
+  return canUse(item)
+    && Number(item?.count || 0) > 0
+    && (!isDogFood(item) || dogFoodMaxUseCount(item) > 0)
 }
 
 function isBatchEligible(item: any) {
@@ -267,6 +264,8 @@ function isBatchEligible(item: any) {
     return canLock(item)
   if (batchAction.value === 'unlock')
     return canUnlock(item)
+  if (batchAction.value === 'use')
+    return canBatchUse(item)
   return false
 }
 
@@ -461,6 +460,63 @@ async function handleConfirm() {
         toastStore.error(`${locked ? '锁定' : '解锁'}失败: ${res.error || '未知错误'}`)
       }
     }
+    else if (action === 'batchUse' && selectedItems) {
+      let successCount = 0
+      let usedItemCount = 0
+      const failures: string[] = []
+      for (const selectedItem of selectedItems) {
+        const count = isDogFood(selectedItem)
+          ? dogFoodMaxUseCount(selectedItem)
+          : Math.max(0, Math.trunc(Number(selectedItem.count) || 0))
+        if (count <= 0) {
+          failures.push(`${selectedItem.name || `物品${selectedItem.id}`}: 当前可使用数量为 0`)
+          continue
+        }
+        try {
+          if (isDogFood(selectedItem)) {
+            const result = await petStore.useDogFood(
+              currentAccountId.value,
+              Number(selectedItem.id),
+              count,
+              Number(selectedItem.uid) || 0,
+            )
+            if (!result) {
+              failures.push(`${selectedItem.name || `物品${selectedItem.id}`}: ${petError.value || '使用失败'}`)
+              continue
+            }
+          }
+          else {
+            const res = await bagStore.useItem(
+              currentAccountId.value,
+              Number(selectedItem.id),
+              count,
+              Number(selectedItem.uid) || 0,
+            )
+            if (!res.ok) {
+              failures.push(`${selectedItem.name || `物品${selectedItem.id}`}: ${res.error || '使用失败'}`)
+              continue
+            }
+          }
+          successCount++
+          usedItemCount += count
+        }
+        catch (cause: any) {
+          failures.push(`${selectedItem.name || `物品${selectedItem.id}`}: ${getApiErrorMessage(cause, '使用失败')}`)
+        }
+      }
+
+      selectedForBatch.value.clear()
+      batchAction.value = null
+      await loadBag()
+      if (failures.length) {
+        const details = failures.slice(0, 3).join('；')
+        const remaining = failures.length > 3 ? `；另有 ${failures.length - 3} 种失败` : ''
+        toastStore.warning(`成功使用 ${successCount} 种、${usedItemCount} 个；失败 ${failures.length} 种：${details}${remaining}`)
+      }
+      else {
+        toastStore.success(`已批量使用 ${successCount} 种物品，共 ${usedItemCount} 个`)
+      }
+    }
     else if (action === 'use' && item) {
       const useLimit = isDogFood(item) ? dogFoodMaxUseCount(item) : Number(item.count || 1)
       if (useLimit <= 0) {
@@ -505,13 +561,22 @@ function handleCancel() {
 }
 
 function toggleBatchMode(action: BatchAction) {
-  batchAction.value = batchAction.value === action ? null : action
+  batchAction.value = action
   selectedForBatch.value.clear()
   batchSellResult.value = null
+  selectAllEligible()
+}
+
+function toggleMultiSelect() {
+  multiSelectEnabled.value = !multiSelectEnabled.value
+  selectedForBatch.value.clear()
+  batchSellResult.value = null
+  batchAction.value = multiSelectEnabled.value ? 'sell' : null
+  if (multiSelectEnabled.value)
+    selectAllEligible()
 }
 
 const batchEligibleCount = computed(() => filteredItems.value.filter((item: any) => isBatchEligible(item)).length)
-
 function selectAllEligible() {
   selectedForBatch.value.clear()
   for (const item of filteredItems.value) {
@@ -602,6 +667,56 @@ function handleBatchLockClick(locked: boolean) {
   }
 }
 
+async function handleBatchUseClick() {
+  const selectedList = Array.from(selectedForBatch.value)
+  if (selectedList.length === 0) {
+    toastStore.warning('请先选择要使用的物品')
+    return
+  }
+  const selectedItems = filteredItems.value.filter((item: any) => (
+    selectedList.includes(itemKey(item)) && canBatchUse(item)
+  ))
+  if (selectedItems.length === 0) {
+    toastStore.warning('没有可使用的物品')
+    return
+  }
+
+  const dogFoodItems = selectedItems.filter(isDogFood)
+  if (dogFoodItems.length) {
+    const accountId = String(currentAccountId.value || '')
+    const hasCurrentSnapshot = petStore.accountId === accountId && !!petSnapshot.value
+    const loaded = hasCurrentSnapshot || await petStore.fetchPetInfo(accountId)
+    if (!loaded || !petSnapshot.value) {
+      toastStore.error(petError.value || '读取宠物看护时间失败')
+      return
+    }
+    if (!activeDog.value) {
+      toastStore.warning('请先在宠物页选择一只已获得的宠物上场')
+      return
+    }
+    if (dogFoodItems.some(item => dogFoodMaxUseCount(item) <= 0)) {
+      toastStore.warning('当前看护时间已接近 30 天上限，无法使用所选狗粮')
+      return
+    }
+  }
+
+  const totalCount = selectedItems.reduce((sum: number, item: any) => {
+    const count = isDogFood(item) ? dogFoodMaxUseCount(item) : Number(item.count || 0)
+    return sum + Math.max(0, Math.trunc(count))
+  }, 0)
+  confirmModal.value = {
+    show: true,
+    title: '批量使用',
+    message: `确定逐项使用选中的 ${selectedItems.length} 种物品吗？共使用最多 ${totalCount} 个；狗粮受 30 天看护时长上限限制。`,
+    type: 'primary',
+    loading: false,
+    action: 'batchUse',
+    item: null,
+    useCount: 1,
+    selectedItems,
+  }
+}
+
 function handleBatchActionClick() {
   if (batchAction.value === 'sell')
     handleBatchSellClick()
@@ -609,6 +724,8 @@ function handleBatchActionClick() {
     handleBatchLockClick(true)
   else if (batchAction.value === 'unlock')
     handleBatchLockClick(false)
+  else if (batchAction.value === 'use')
+    void handleBatchUseClick()
 }
 
 async function loadBag() {
@@ -634,14 +751,17 @@ onMounted(() => {
 })
 
 watch(currentAccountId, () => {
+  multiSelectEnabled.value = false
   batchAction.value = null
   selectedForBatch.value.clear()
   loadBag()
 })
 
 watch(selectedCategory, () => {
-  batchAction.value = null
   selectedForBatch.value.clear()
+  batchAction.value = multiSelectEnabled.value ? (batchAction.value || 'sell') : null
+  if (multiSelectEnabled.value)
+    selectAllEligible()
 })
 
 useIntervalFn(loadBag, 60000)
@@ -649,39 +769,11 @@ useIntervalFn(loadBag, 60000)
 
 <template>
   <div class="personal-panel">
-    <div class="flex shrink-0 items-center justify-between gap-3">
-      <h2 class="flex items-center gap-2 text-lg font-bold">
-        <span class="i-carbon-box" /> 背包
-      </h2>
-      <div class="flex items-center gap-2">
-        <div v-if="items.length" class="text-sm text-gray-500">
-          共 {{ items.length }} 种物品
-        </div>
-        <NButton
-          circle
-          quaternary
-          size="small"
-          title="刷新背包"
-          :loading="bagLoading"
-          :disabled="!currentAccountId || !status?.connection?.connected"
-          @click="loadBag"
-        >
-          <template #icon>
-            <span class="i-carbon-renew" />
-          </template>
-        </NButton>
-      </div>
-    </div>
-
-    <div v-if="bagLoading || statusLoading" class="flex justify-center py-12">
-      <span class="i-carbon-circle-dash animate-spin text-4xl" />
-    </div>
-
-    <div v-else-if="!currentAccountId" class="farm-card rounded-xl p-8 text-center text-gray-500">
+    <div v-if="!currentAccountId" class="farm-card rounded-xl p-8 text-center text-gray-500">
       请选择账号后查看背包
     </div>
 
-    <div v-else-if="statusError" class="rounded-xl bg-red-50 p-8 text-center text-red-500 dark:bg-red-900/20" style="border: 2px solid rgba(239, 68, 68, 0.2)">
+    <div v-else-if="statusError && !statusLoading" class="rounded-xl bg-red-50 p-8 text-center text-red-500 dark:bg-red-900/20" style="border: 2px solid rgba(239, 68, 68, 0.2)">
       <div class="mb-2 text-lg font-bold">
         获取数据失败
       </div>
@@ -690,94 +782,109 @@ useIntervalFn(loadBag, 60000)
       </div>
     </div>
 
-    <EmptyState v-else-if="!status?.connection?.connected" title="账号未运行" description="启动账号后读取背包物品" icon="i-carbon-connection-signal-off" />
+    <EmptyState v-else-if="!statusLoading && !status?.connection?.connected" title="账号未运行" description="启动账号后读取背包物品" icon="i-carbon-connection-signal-off" />
 
     <div v-else class="personal-panel__card bag-panel-card farm-card rounded-2xl">
-      <div v-if="items.length === 0" class="farm-card rounded-xl p-8 text-center text-gray-500">
+      <div v-if="items.length > 0 || bagLoading || statusLoading" class="bag-toolbar panel-sticky shrink-0">
+        <div class="bag-refresh-row">
+          <NButton
+            type="primary"
+            aria-label="刷新"
+            title="刷新背包"
+            :loading="bagLoading || statusLoading"
+            :disabled="!currentAccountId || !status?.connection?.connected"
+            @click="loadBag"
+          >
+            <template #icon>
+              <span class="i-carbon-renew" />
+            </template>
+            <span class="bag-action-label">刷新</span>
+          </NButton>
+          <NButton
+            class="bag-selection-toggle"
+            :type="multiSelectEnabled ? 'default' : 'primary'"
+            :secondary="!multiSelectEnabled"
+            :disabled="!currentAccountId || !status?.connection?.connected || !items.length"
+            :aria-label="multiSelectEnabled ? '取消' : '多选'"
+            :title="multiSelectEnabled ? '取消' : '多选'"
+            @click="toggleMultiSelect"
+          >
+            <span class="i-carbon-checkbox-checked" />
+            <span class="bag-action-label">{{ multiSelectEnabled ? '取消' : '多选' }}</span>
+          </NButton>
+        </div>
+      </div>
+
+      <div v-if="bagLoading || statusLoading" class="flex justify-center py-12">
+        <span class="i-carbon-circle-dash animate-spin text-4xl" />
+      </div>
+
+      <div v-else-if="items.length === 0" class="farm-card rounded-xl p-8 text-center text-gray-500">
         无可展示物品
       </div>
 
       <template v-else>
-        <div class="bag-toolbar panel-sticky shrink-0">
-          <div class="bag-categories custom-scrollbar" role="group" aria-label="背包分类">
-            <NButton
-              v-for="cat in CATEGORY_OPTIONS"
-              :key="cat.value"
-              :type="selectedCategory === cat.value ? 'primary' : 'default'"
-              :secondary="selectedCategory !== cat.value"
-              size="small"
-              @click="selectedCategory = cat.value"
-            >
-              <span v-if="cat.value === 'fruit'" class="i-carbon-apple mr-1.5" />
-              <span v-else-if="cat.value === 'mutant'" class="i-carbon-flash mr-1.5" />
-              <span v-else-if="cat.value === 'seed'" class="i-carbon-tree mr-1.5" />
-              <span v-else-if="cat.value === 'tool'" class="i-carbon-tool-box mr-1.5" />
-              <span v-else class="i-carbon-list-boxes mr-1.5" />
-              {{ cat.label }}
-              <span class="ml-1 text-xs opacity-70">({{ categoryCounts[cat.value] || 0 }})</span>
-            </NButton>
-          </div>
-          <div v-if="sellModeAvailable || lockModeAvailable" class="bag-actions flex flex-wrap items-center gap-2">
-            <NButton
-              v-if="sellModeAvailable"
-              :type="batchAction === 'sell' ? 'warning' : 'default'"
-              :secondary="batchAction !== 'sell'"
-              size="small"
-              @click="toggleBatchMode('sell')"
-            >
-              <span v-if="batchAction === 'sell'" class="i-carbon-close mr-1" />
-              <span v-else class="i-carbon-shopping-cart-arrow-down mr-1" />
-              {{ batchAction === 'sell' ? '取消出售' : '批量出售' }}
-            </NButton>
-            <NButton
-              v-if="lockModeAvailable"
-              :type="batchAction === 'lock' ? 'primary' : 'default'"
-              :secondary="batchAction !== 'lock'"
-              size="small"
-              @click="toggleBatchMode('lock')"
-            >
-              <span v-if="batchAction === 'lock'" class="i-carbon-close mr-1" />
-              <span v-else class="i-carbon-locked mr-1" />
-              {{ batchAction === 'lock' ? '取消锁定' : '批量锁定' }}
-            </NButton>
-            <NButton
-              v-if="lockModeAvailable"
-              :type="batchAction === 'unlock' ? 'primary' : 'default'"
-              :secondary="batchAction !== 'unlock'"
-              size="small"
-              @click="toggleBatchMode('unlock')"
-            >
-              <span v-if="batchAction === 'unlock'" class="i-carbon-close mr-1" />
-              <span v-else class="i-carbon-unlocked mr-1" />
-              {{ batchAction === 'unlock' ? '取消解锁' : '批量解锁' }}
-            </NButton>
-            <template v-if="batchMode">
-              <span class="bag-batch-hint" role="status">
-                <template v-if="batchEligibleCount">已选 <b>{{ selectedBatchCount }}</b> / 可选 {{ batchEligibleCount }}</template>
-                <template v-else>当前分类没有可{{ batchActionLabel }}的物品</template>
-              </span>
-              <NButton type="primary" secondary size="small" :disabled="!batchEligibleCount" @click="selectAllEligible">
-                <span class="i-carbon-checkmark-outline mr-1" />
-                全选可{{ batchActionLabel }}项
-              </NButton>
+        <div class="bag-categories custom-scrollbar" role="group" aria-label="背包分类">
+          <NButton
+            v-for="cat in CATEGORY_OPTIONS"
+            :key="cat.value"
+            :type="selectedCategory === cat.value ? 'primary' : 'default'"
+            :secondary="selectedCategory !== cat.value"
+            size="small"
+            @click="selectedCategory = cat.value"
+          >
+            <span v-if="cat.value === 'fruit'" class="i-carbon-apple mr-1.5" />
+            <span v-else-if="cat.value === 'mutant'" class="i-carbon-flash mr-1.5" />
+            <span v-else-if="cat.value === 'seed'" class="i-carbon-tree mr-1.5" />
+            <span v-else-if="cat.value === 'tool'" class="i-carbon-tool-box mr-1.5" />
+            <span v-else class="i-carbon-list-boxes mr-1.5" />
+            {{ cat.label }}
+            <span class="ml-1 text-xs opacity-70">({{ categoryCounts[cat.value] || 0 }})</span>
+          </NButton>
+        </div>
+
+        <div v-if="multiSelectEnabled" class="farm-selection-setup">
+          <div class="farm-selection-row">
+            <div class="farm-mode-switch" role="group" aria-label="多选操作类型">
+              <button type="button" :aria-pressed="batchAction === 'sell'" @click="toggleBatchMode('sell')">
+                <span class="i-carbon-shopping-cart-arrow-down" aria-hidden="true" />出售
+              </button>
+              <button type="button" :aria-pressed="batchAction === 'lock'" @click="toggleBatchMode('lock')">
+                <span class="i-carbon-locked" aria-hidden="true" />锁定
+              </button>
+              <button type="button" :aria-pressed="batchAction === 'unlock'" @click="toggleBatchMode('unlock')">
+                <span class="i-carbon-unlocked" aria-hidden="true" />解锁
+              </button>
+              <button type="button" :aria-pressed="batchAction === 'use'" @click="toggleBatchMode('use')">
+                <span class="i-carbon-play" aria-hidden="true" />使用
+              </button>
+            </div>
+            <div v-if="batchMode" class="farm-selectbar" role="toolbar" aria-label="所选物品操作">
+              <div class="farm-selectbar__info" role="status" aria-live="polite">
+                <span>已选 <b>{{ selectedBatchCount }}/{{ batchEligibleCount }}</b></span>
+                <span class="farm-selectbar__links">
+                  <button type="button" @click="selectAllEligible">全选</button>
+                  <button type="button" @click="selectedForBatch.clear()">清空</button>
+                </span>
+              </div>
               <NButton
                 :type="batchAction === 'sell' ? 'error' : 'primary'"
-                size="small"
                 :disabled="selectedBatchCount === 0"
                 @click="handleBatchActionClick"
               >
-                <span v-if="batchAction === 'sell'" class="i-carbon-shopping-cart-arrow-down mr-1" />
-                <span v-else-if="batchAction === 'lock'" class="i-carbon-locked mr-1" />
-                <span v-else class="i-carbon-unlocked mr-1" />
-                {{ batchActionLabel }} ({{ selectedBatchCount }})
+                <span v-if="batchAction === 'sell'" class="i-carbon-shopping-cart-arrow-down" />
+                <span v-else-if="batchAction === 'lock'" class="i-carbon-locked" />
+                <span v-else-if="batchAction === 'unlock'" class="i-carbon-unlocked" />
+                <span v-else class="i-carbon-play" />
+                {{ batchActionLabel }}
               </NButton>
-            </template>
+            </div>
           </div>
         </div>
 
         <div :key="selectedCategory" class="personal-panel__scroll custom-scrollbar" role="region" aria-label="背包物品列表" tabindex="0">
           <EmptyState v-if="!filteredItems.length" bare title="这个分类暂无物品" icon="i-carbon-box" />
-          <div v-else class="bag-grid">
+          <div v-else class="bag-grid" :class="{ 'is-selecting': batchMode }">
             <article
               v-for="item in filteredItems"
               :key="itemKey(item)"
@@ -791,7 +898,7 @@ useIntervalFn(loadBag, 60000)
               :aria-checked="batchMode && isBatchEligible(item) ? selectedForBatch.has(itemKey(item)) : undefined"
               @click="batchMode && toggleBatchSelection(item)"
             >
-              <!-- 右上角只在批量模式下出现：可选项显示复选框，不可选项写明原因 -->
+              <!-- 右上角仅显示可选项的选择状态。 -->
               <template v-if="batchMode">
                 <span
                   v-if="isBatchEligible(item)"
@@ -801,7 +908,6 @@ useIntervalFn(loadBag, 60000)
                 >
                   <span v-if="selectedForBatch.has(itemKey(item))" class="i-carbon-checkmark" />
                 </span>
-                <span v-else class="bag-ineligible bag-item__cue">{{ batchIneligibleReason(item) }}</span>
               </template>
 
               <!-- 数量以角标形式贴在图标右下角，与游戏背包的习惯一致 -->
@@ -1150,31 +1256,168 @@ useIntervalFn(loadBag, 60000)
   padding: var(--bag-panel-pad);
 }
 
-@media (min-width: 640px) {
-  .bag-panel-card {
-    --bag-panel-pad: 20px;
-  }
+.bag-grid.is-selecting {
+  padding-bottom: 8px;
 }
 
-.bag-toolbar {
+.farm-selection-setup {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.farm-selection-row {
   display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: calc(-1 * var(--bag-panel-pad)) calc(-1 * var(--bag-panel-pad)) 14px;
-  padding: 12px var(--bag-panel-pad);
-  border-radius: var(--ui-radius-card) var(--ui-radius-card) 0 0;
-  background: var(--ui-table-head);
-  box-shadow: 0 1px 0 var(--ui-border);
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
 }
 
-.bag-batch-hint {
+.farm-mode-switch {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-soft);
+}
+
+.farm-mode-switch button {
+  display: inline-flex;
+  width: 76px;
+  min-width: 0;
+  flex: 0 0 76px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 6px;
+  border-radius: 9px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.farm-mode-switch button[aria-pressed='true'] {
+  color: var(--ui-primary);
+  background: var(--ui-surface-strong);
+  box-shadow: 0 1px 4px rgba(32, 58, 43, 0.08);
+  font-weight: var(--fw-650);
+}
+
+.farm-mode-switch button:focus-visible,
+.farm-selectbar__links button:focus-visible {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 2px;
+}
+
+.farm-selectbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-left: auto;
+}
+
+.farm-selectbar__info {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ui-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.farm-selectbar__info b {
+  color: var(--ui-ink);
+  font-weight: var(--fw-700);
   font-variant-numeric: tabular-nums;
 }
 
-.bag-batch-hint b {
-  color: var(--ui-ink);
+.farm-selectbar__links {
+  display: inline-flex;
+  flex: none;
+  gap: 14px;
+}
+
+.farm-selectbar__links button {
+  color: var(--ui-primary);
+  font-size: 12px;
+  transition:
+    transform 120ms ease,
+    color 120ms ease;
+}
+
+.farm-selectbar__links button:active {
+  transform: scale(0.92);
+}
+
+.farm-mode-switch button:disabled,
+.farm-selectbar__links button:disabled {
+  color: var(--ui-subtle);
+  cursor: not-allowed;
+}
+
+.farm-selectbar :deep(.n-button) {
+  min-width: 64px;
+  height: 36px;
+  flex: none;
+  border-radius: 10px;
+}
+
+.bag-toolbar {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: calc(-1 * var(--bag-panel-pad)) calc(-1 * var(--bag-panel-pad)) 0;
+  padding: 16px var(--bag-panel-pad);
+  border-radius: var(--ui-radius-card) var(--ui-radius-card) 0 0;
+  background: var(--ui-table-head);
+  border-bottom: 1px solid var(--ui-border);
+}
+
+.bag-refresh-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.bag-refresh-row :deep(.n-button) {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.bag-refresh-row :deep(.n-button__content) {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.bag-selection-toggle {
+  margin-left: auto;
+}
+
+.bag-action-label {
+  white-space: nowrap;
+}
+
+@container (max-width: 700px) {
+  .bag-action-label {
+    display: none;
+  }
 }
 
 /* 批量选择：选中用 outline，避免被卡片的全局阴影覆盖。 */
@@ -1219,31 +1462,59 @@ useIntervalFn(loadBag, 60000)
   background: var(--ui-primary-fill);
 }
 
-.bag-ineligible {
-  margin: 2px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  color: var(--ui-muted);
-  background: var(--ui-surface-soft);
-  font-size: 11px;
-  line-height: 18px;
-}
-
 .bag-categories {
   min-width: 0;
   display: flex;
+  margin-bottom: 14px;
+  padding: 10px 0;
   gap: 8px;
   overflow-x: auto;
   overscroll-behavior-x: contain;
+  border-bottom: 1px solid var(--ui-border);
 }
 
 .bag-categories :deep(.n-button) {
   flex: none;
 }
 
-@media (max-width: 520px) {
-  .bag-actions :deep(.n-button) {
-    padding-inline: 6px;
+@media (max-width: 1023px) {
+  .farm-selection-row {
+    display: block;
+  }
+
+  .farm-mode-switch {
+    width: fit-content;
+    flex-basis: auto;
+  }
+
+  .farm-selectbar {
+    position: fixed;
+    z-index: 30;
+    right: 12px;
+    bottom: calc(88px + env(safe-area-inset-bottom));
+    left: 12px;
+    flex-direction: column;
+    align-items: stretch;
+    margin: 0;
+    padding: 12px 14px;
+    border: 1px solid var(--ui-border);
+    border-radius: 14px;
+    background: var(--ui-surface-strong);
+    box-shadow: var(--ui-shadow-lg);
+  }
+
+  .bag-grid.is-selecting {
+    padding-bottom: 110px;
+  }
+}
+
+@media (max-width: 479px) {
+  .farm-mode-switch {
+    width: 100%;
+  }
+
+  .farm-mode-switch button > span {
+    display: none;
   }
 }
 

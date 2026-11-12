@@ -126,7 +126,7 @@ function formatGiftProgress(gift: any) {
 </script>
 
 <template>
-  <section class="personal-panel__card farm-card rounded-xl p-4">
+  <section class="task-daily-section">
     <h3 class="mb-3 flex shrink-0 items-center gap-2 font-medium" style="color: var(--theme-primary, #ec4899)">
       <span class="i-carbon-gift" />
       <span>每日礼包 & 任务</span>
@@ -204,3 +204,15 @@ function formatGiftProgress(gift: any) {
     </div>
   </section>
 </template>
+
+<style scoped>
+.task-daily-section {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  margin-inline: calc(-1 * var(--task-panel-pad, 16px));
+  padding: 16px 0;
+  padding-inline: var(--task-panel-pad, 16px);
+  border-bottom: 1px solid var(--ui-border);
+}
+</style>

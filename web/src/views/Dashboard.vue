@@ -578,7 +578,7 @@ useIntervalFn(() => {
 </script>
 
 <template>
-  <div class="dashboard-page page-stack flex flex-col gap-5">
+  <div class="dashboard-page page-stack flex flex-col">
     <!-- Overview -->
     <div class="overview-grid">
       <!-- 账号：身份、在线状态与等级进度 -->
@@ -680,7 +680,7 @@ useIntervalFn(() => {
     </div>
 
     <!-- 下次巡查倒计时 + 今日统计（并排展示，位于日志之上） -->
-    <div class="overview-followup flex flex-col gap-6 md:flex-row">
+    <div class="overview-followup flex flex-col md:flex-row">
       <!-- Next Checks：两环倒计时（sl 的帮助/偷菜共用同一个好友任务循环，合并为一环） -->
       <div class="overview-followup__countdown flex flex-col farm-card rounded-2xl bg-white p-5 shadow-md">
         <h3 class="mb-3 flex items-center gap-2 text-lg font-display font-medium">
@@ -864,27 +864,29 @@ useIntervalFn(() => {
 </template>
 
 <style scoped>
-@media (min-width: 1024px) {
-  .dashboard-log-card {
-    min-height: 0;
-    flex: 1 1 0;
-  }
+.dashboard-log-card {
+  min-height: 0;
+  flex: 1 1 0;
+}
+
+.dashboard-page,
+.overview-followup {
+  gap: min(var(--page-pad), 12px);
 }
 
 .overview-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 16px;
+  gap: min(var(--page-pad), 12px);
 }
 
 @media (min-width: 768px) {
   .overview-grid {
     grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-    gap: 24px;
   }
 
   .overview-followup__countdown {
-    flex: 0 0 calc(40% - 9.6px);
+    flex: 0 0 calc(40% - 4.8px);
   }
 }
 
