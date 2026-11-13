@@ -20,6 +20,12 @@ interface DataProviderOptions {
     startWorker: (account: any) => boolean;
     stopWorker: (accountId: string) => void;
     restartWorker: (account: any) => void;
+    scheduleAutoCodeRefresh?: (accountId: string) => void;
+    rescheduleAllAutoCodeRefresh?: () => void;
+    stopAutoCodeRefresh?: (accountId: string) => void;
+    pauseAutoCodeRefreshPolling?: (accountId: string) => void;
+    resumeAutoCodeRefreshPolling?: (accountId: string) => void;
+    refreshAccountCode?: (accountId: string, reason?: string) => Promise<boolean>;
 }
 
 function createDataProvider(options: DataProviderOptions) {
@@ -41,6 +47,12 @@ function createDataProvider(options: DataProviderOptions) {
         startWorker,
         stopWorker,
         restartWorker,
+        scheduleAutoCodeRefresh,
+        rescheduleAllAutoCodeRefresh,
+        stopAutoCodeRefresh,
+        pauseAutoCodeRefreshPolling,
+        resumeAutoCodeRefreshPolling,
+        refreshAccountCode,
     } = options;
 
     function getStoredAccountsList(): any[] {
@@ -391,6 +403,33 @@ function createDataProvider(options: DataProviderOptions) {
             broadcastConfigToWorkers(accountId);
         },
 
+        /** 保存后立即重建所有账号的调度，间隔修改不需要重启进程就生效。 */
+        saveAutoCodeRefresh: async (config: any) => {
+            const data = store.setAutoCodeRefresh(config || {});
+            if (typeof rescheduleAllAutoCodeRefresh === 'function') rescheduleAllAutoCodeRefresh();
+            return { autoCodeRefresh: data };
+        },
+
+        /** 账号被删除后必须拆掉它的定时取码与凭证保活，否则任务会一直空转。 */
+        unscheduleAutoCodeRefresh: (accountRef: string) => {
+            const accountId = resolveAccountRefId(accountRef);
+            if (!accountId) return false;
+            if (typeof stopAutoCodeRefresh === 'function') stopAutoCodeRefresh(accountId);
+            return true;
+        },
+
+        refreshAccountCode: async (accountRef: string) => {
+            const accountId = resolveAccountRefId(accountRef);
+            if (!accountId) throw new Error('Missing x-account-id');
+            if (typeof refreshAccountCode !== 'function') throw new Error('自动刷新服务不可用');
+            // 页面上的“立即刷新”是显式意图：取完码账号会被重启，顺手把它重新交回轮询管理，
+            // 否则只会停在“在跑但不轮询”的中间态。
+            if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(accountId);
+            const ok = await refreshAccountCode(accountId, 'manual');
+            if (ok && typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(accountId);
+            return { ok };
+        },
+
         broadcastGameConfigReload: () => {
             if (typeof broadcastGameConfigReloadOpt === 'function') broadcastGameConfigReloadOpt();
         },
@@ -404,11 +443,20 @@ function createDataProvider(options: DataProviderOptions) {
             }
         },
 
+        /**
+         * 账号列表下发前脱敏：loginBuffer / refreshtoken / accesstoken 只留在服务端，
+         * 页面只需要知道该账号能否自动刷新。
+         */
         getAccounts: () => {
-            const data = getAccounts();
+            const data = store.maskWxCredentialsForClient(getAccounts());
             data.accounts.forEach((a: any) => {
                 const worker = workers[a.id];
                 a.running = !!worker;
+                /**
+                 * running 只说明 worker 进程还在，登录是否成功要由 worker 上报的 connection.connected 决定。
+                 * 页面在确认上线之前必须继续显示离线，不能拿进程状态冒充在线。
+                 */
+                a.online = !!(worker && worker.status && worker.status.connection && worker.status.connection.connected === true);
                 if (worker && worker.status && worker.status.status && worker.status.status.name) {
                     a.nick = worker.status.status.name;
                 }
@@ -419,10 +467,21 @@ function createDataProvider(options: DataProviderOptions) {
             return data;
         },
 
-        startAccount: (accountRef: string) => {
+        /**
+         * 启动账号。微信账号会先注册定时刷新/凭证保活，再尝试用持久化凭证换新 Code；
+         * 刷新失败时退回用现有 Code 启动，让常规的失效恢复链路接手。
+         */
+        startAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
+            // 显式启动代表“这个账号重新交给后台管理”，先解除手动停止的轮询门禁。
+            if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(acc.id);
+            if (typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(acc.id);
+            if (acc.platform === 'wx' && acc.loginBuffer && typeof refreshAccountCode === 'function') {
+                const refreshed = await refreshAccountCode(acc.id, 'manual_start');
+                if (refreshed) return true;
+            }
             startWorker(acc);
             return true;
         },
@@ -432,6 +491,8 @@ function createDataProvider(options: DataProviderOptions) {
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
             if (accountId) stopWorker(accountId);
+            // 退出轮询：用户手动停掉的账号不能又被定时刷新拉起来。
+            if (typeof pauseAutoCodeRefreshPolling === 'function') pauseAutoCodeRefreshPolling(acc.id);
             return true;
         },
 
@@ -439,6 +500,8 @@ function createDataProvider(options: DataProviderOptions) {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
+            if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(acc.id);
+            if (typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(acc.id);
             restartWorker(acc);
             return true;
         },

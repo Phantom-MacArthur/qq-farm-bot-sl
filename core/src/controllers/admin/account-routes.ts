@@ -10,6 +10,7 @@ const store = require('../../models/store');
 const { addOrUpdateAccount, deleteAccount } = store;
 const { findAccountByRef } = require('../../services/account-resolver');
 const { updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig, getDevicePresets, getTimeZoneOptions } = require('../../config/config');
+const wxLoginAdapter = require('../../services/wx-login/adapter');
 
 const {
     getAccId,
@@ -55,7 +56,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             if (ctx.provider && ctx.provider.addAccountLog) {
                 ctx.provider.addAccountLog('update', `更新账号备注: ${remark}`, accountId, remark);
             }
-            res.json({ ok: true, data });
+            res.json({ ok: true, data: store.maskWxCredentialsForClient(data) });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -65,7 +66,9 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
         try {
             const rawBody = (req.body && typeof req.body === 'object') ? req.body : {};
             const requestedName = typeof rawBody.name === 'string' ? rawBody.name.trim() : '';
-            const body = typeof rawBody.name === 'string' ? { ...rawBody, name: requestedName } : rawBody;
+            // 微信凭证只能由服务端写入，客户端提交的同名字段先整体丢弃。
+            const clientBody = store.stripProtectedWxCredentials(rawBody);
+            const body = typeof clientBody.name === 'string' ? { ...clientBody, name: requestedName } : clientBody;
             if (!requestedName) {
                 return res.status(400).json({ ok: false, error: '账号备注不能为空' });
             }
@@ -78,28 +81,52 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const isUpdate = !!updateRef;
 
             const resolvedUpdateId = isUpdate ? resolveAccId(ctx, updateRef) : '';
-            const payload = isUpdate ? { ...body, id: resolvedUpdateId || String(updateRef) } : body;
+            const payload: any = isUpdate ? { ...body, id: resolvedUpdateId || String(updateRef) } : { ...body };
+            // wxSessionId 只是本次扫码的一次性凭据，不是账号字段，不能落盘。
+            const wxSessionId = String(payload.wxSessionId || '').trim();
+            delete payload.wxSessionId;
+
             let wasRunning = false;
             if (isUpdate && ctx.provider.isAccountRunning) {
                 wasRunning = ctx.provider.isAccountRunning(payload.id);
             }
 
+            const oldAccount = isUpdate
+                ? (ctx.provider.getAccounts().accounts || []).find((a: any) => a.id === String(payload.id))
+                : null;
+
+            // 只有携带尚未消费的待绑定扫码会话时才能写入凭证。
+            let boundWxInfo: any = null;
+            if (wxSessionId && payload.wxid) {
+                boundWxInfo = wxLoginAdapter.peekPendingWxInfo(wxSessionId, String(payload.wxid));
+                if (!boundWxInfo) {
+                    return res.status(400).json({ ok: false, error: '扫码会话已过期，请重新扫码后保存' });
+                }
+                payload.loginBuffer = boundWxInfo.loginBuffer;
+                payload.refreshtoken = boundWxInfo.refreshtoken;
+                payload.accesstoken = boundWxInfo.accesstoken;
+            } else if (isUpdate && payload.wxid !== undefined && String(oldAccount?.wxid || '') !== String(payload.wxid || '')) {
+                // 换绑微信号却没带新会话时，必须清掉旧凭证，否则会用上一个微信号的登录凭据操作该账号。
+                payload.loginBuffer = '';
+                payload.refreshtoken = '';
+                payload.accesstoken = '';
+            }
+
             // 检查是否仅修改了备注信息
             let onlyRemarkChanged = false;
-            if (isUpdate) {
-                const oldAccounts = ctx.provider.getAccounts();
-                const oldAccount = oldAccounts.accounts.find((a: any) => a.id === payload.id);
-                if (oldAccount) {
-                    // 检查 payload 中是否只包含 id 和 name 字段
-                    const payloadKeys = Object.keys(payload);
-                    const onlyIdAndName = payloadKeys.length === 2 && payloadKeys.includes('id') && payloadKeys.includes('name');
-                    if (onlyIdAndName) {
-                        onlyRemarkChanged = true;
-                    }
+            if (isUpdate && oldAccount) {
+                // 检查 payload 中是否只包含 id 和 name 字段
+                const payloadKeys = Object.keys(payload);
+                const onlyIdAndName = payloadKeys.length === 2 && payloadKeys.includes('id') && payloadKeys.includes('name');
+                if (onlyIdAndName) {
+                    onlyRemarkChanged = true;
                 }
             }
 
             const data = addOrUpdateAccount(payload);
+            if (boundWxInfo) {
+                wxLoginAdapter.consumePendingWxInfo(wxSessionId, String(payload.wxid || ''));
+            }
             if (ctx.provider.addAccountLog) {
                 const accountId = isUpdate ? String(payload.id) : String((data.accounts.at(-1) || {}).id || '');
                 const accountName = payload.name || '';
@@ -115,7 +142,14 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             // 如果是新增，自动启动
             if (!isUpdate) {
                 const newAcc = data.accounts.at(-1);
-                if (newAcc) ctx.provider.startAccount(newAcc.id);
+                if (newAcc) {
+                    // startAccount 可能是异步取码流程，这里保持原有的不阻塞响应语义，仅记录失败
+                    void Promise.resolve(ctx.provider.startAccount(newAcc.id)).catch((error: any) => {
+                        if (ctx.provider.addAccountLog) {
+                            ctx.provider.addAccountLog('start_error', `账号启动失败: ${error?.message || error}`, String(newAcc.id), newAcc.name || '');
+                        }
+                    });
+                }
             } else if (isRemarkRelogin) {
                 // Adding with an existing remark is a relogin operation, including for stopped accounts.
                 ctx.provider.restartAccount(payload.id);
@@ -123,7 +157,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 // 如果是更新，且之前在运行，且不是仅修改备注，则重启
                 ctx.provider.restartAccount(payload.id);
             }
-            res.json({ ok: true, data });
+            res.json({ ok: true, data: store.maskWxCredentialsForClient(data) });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -136,11 +170,15 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const before = ctx.provider.getAccounts();
             const target = findAccountByRef(before.accounts || [], req.params.id);
             ctx.provider.stopAccount(resolvedId);
+            // 先拆调度再删账号：一旦记录没了，就再也没人能根据 id 找到这个账号的任务了。
+            if (ctx.provider && typeof ctx.provider.unscheduleAutoCodeRefresh === 'function') {
+                ctx.provider.unscheduleAutoCodeRefresh(resolvedId);
+            }
             const data = deleteAccount(resolvedId);
             if (ctx.provider.addAccountLog) {
                 ctx.provider.addAccountLog('delete', `删除账号: ${(target && target.name) || req.params.id}`, resolvedId, target ? target.name : '');
             }
-            res.json({ ok: true, data });
+            res.json({ ok: true, data: store.maskWxCredentialsForClient(data) });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -396,6 +434,36 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 return res.status(500).json({ ok: false, error: '无法获取默认配置' });
             }
             res.json({ ok: true, data: defaultConfig });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 微信 code 定时刷新与自动重登设置（全局，对所有账号生效）
+    app.get('/api/settings/auto-code-refresh', (_req: Request, res: Response) => {
+        try {
+            res.json({ ok: true, data: store.getAutoCodeRefresh() });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    app.post('/api/settings/auto-code-refresh', async (req: Request, res: Response) => {
+        try {
+            const result = await ctx.provider.saveAutoCodeRefresh(req.body || {});
+            const data = result && result.autoCodeRefresh ? result.autoCodeRefresh : result;
+            res.json({ ok: true, data: data || {} });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    app.post('/api/settings/auto-code-refresh/run', async (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+        try {
+            const data = await ctx.provider.refreshAccountCode(id);
+            res.json({ ok: true, data: data || {} });
         } catch (e: any) {
             handleApiError(res, e);
         }

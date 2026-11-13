@@ -1456,17 +1456,17 @@ useIntervalFn(loadBag, 60000)
   opacity: 0.5;
 }
 
+/* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
 .bag-check {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   display: grid;
-  margin: 2px;
   place-items: center;
   border: 1.5px solid var(--ui-border-strong);
-  border-radius: 6px;
+  border-radius: 50%;
   color: #fff;
   background: var(--ui-surface-strong);
-  font-size: 13px;
+  font-size: 10px;
   transition:
     background-color 0.15s ease,
     border-color 0.15s ease;

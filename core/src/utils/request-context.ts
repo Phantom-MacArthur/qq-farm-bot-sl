@@ -36,8 +36,9 @@ function getAmbientRequestClass(): string | null {
 /**
  * 调度器命名空间 → 请求班次。
  *
- * - network / ace / worker_manager 是基础设施：它们自己会显式声明 criticalLane 或
- *   由具体业务再包一层，这里返回 null 表示「不注入班次」；
+ * - network / ace / worker_manager / auto_code_refresh 是基础设施：它们自己会显式声明 criticalLane，
+ *   或者根本不走分层队列（微信凭证刷新用的是裸 fetch 和 MMTLS 长连接），
+ *   所以这里返回 null 表示「不注入班次」；
  * - worker 命名空间的统一 tick 同时驱动农场和好友两种任务，所以只能给它一个保守的
  *   默认值（farm），真正的区分由 checkFarm / checkFriends / runFriendPetSync 三个入口
  *   各自显式包裹完成。
@@ -45,7 +46,7 @@ function getAmbientRequestClass(): string | null {
 function classForSchedulerNamespace(namespace: any): string | null {
     const name = String(namespace || '').trim();
     if (!name) return null;
-    if (name === 'network' || name === 'ace' || name === 'worker_manager') return null;
+    if (name === 'network' || name === 'ace' || name === 'worker_manager' || name === 'auto_code_refresh') return null;
     if (name === 'friend-pet-sync') return 'background';
     if (name.startsWith('friend')) return 'friend';
     return 'farm';

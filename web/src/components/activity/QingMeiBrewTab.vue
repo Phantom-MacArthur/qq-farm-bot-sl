@@ -381,15 +381,18 @@ function itemCount(uid: string) {
   color: #708277;
   font-size: 11px;
 }
+/* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
 .selection-mark {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   display: grid !important;
+  flex: none;
   place-items: center;
   border: 1px solid #91aa99;
-  border-radius: 7px;
+  border-radius: 50%;
   color: white;
   background: white;
+  font-size: 10px;
 }
 .ingredient-choice.selected .selection-mark {
   border-color: #2e8a66;

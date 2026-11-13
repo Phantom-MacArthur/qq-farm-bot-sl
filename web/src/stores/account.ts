@@ -1,7 +1,7 @@
 import { useStorage } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import api from '@/api'
+import api, { getApiErrorMessage } from '@/api'
 
 export interface Account {
   id: string
@@ -10,7 +10,12 @@ export interface Account {
   uin?: number
   avatar?: string
   platform?: string
+  // worker 进程存在，不代表已经登录成功
   running?: boolean
+  // worker 上报的连接状态，即“已确认上线”
+  online?: boolean
+  // 服务端脱敏后只下发这个标记，页面据此判断账号能否自动刷新 Code
+  hasWxCredential?: boolean
   // Add other fields as discovered
 }
 
@@ -37,11 +42,22 @@ export function getPlatformClass(p?: string) {
   return ''
 }
 
+export type AccountPendingAction = 'start' | 'stop'
+
+// 启动包含取码、拉起进程和登录，给足确认时间；停止只等子进程退出。
+const START_CONFIRM_TIMEOUT_MS = 45000
+const STOP_CONFIRM_TIMEOUT_MS = 15000
+const CONFIRM_POLL_INTERVAL_MS = 800
+// 微信账号的启动请求本身就要经过一次取码，默认的 10s 请求超时会把正常启动误报成失败
+const START_REQUEST_TIMEOUT_MS = 60000
+
 export const useAccountStore = defineStore('account', () => {
   const accounts = ref<Account[]>([])
   const currentAccountId = useStorage('current_account_id', '')
   const loading = ref(false)
   const logs = ref<AccountLog[]>([])
+  // 账号 id -> 进行中的启动/停止操作，结果确认之前按钮保持不可用
+  const pendingActions = ref<Record<string, AccountPendingAction>>({})
   let accountsRequestSequence = 0
 
   const currentAccount = computed(() =>
@@ -106,14 +122,106 @@ export const useAccountStore = defineStore('account', () => {
     }
   }
 
-  async function startAccount(id: string) {
-    await api.post(`/api/accounts/${id}/start`)
-    await fetchAccounts()
+  /**
+   * 确认轮询用的刷新：不动 loading、不因单次失败清空列表，
+   * 也不占用 fetchAccounts 的序号，避免全量刷新回不来。
+   */
+  async function refreshAccountsSilently() {
+    if (loading.value)
+      return accounts.value
+    const sequence = accountsRequestSequence
+    try {
+      const res = await api.get('/api/accounts')
+      if (sequence !== accountsRequestSequence)
+        return accounts.value
+      if (res.data?.ok && res.data.data?.accounts)
+        accounts.value = res.data.data.accounts
+    }
+    catch {
+      // 单次轮询失败就保留上一次状态，等下一轮
+    }
+    return accounts.value
   }
 
-  async function stopAccount(id: string) {
-    await api.post(`/api/accounts/${id}/stop`)
-    await fetchAccounts()
+  function findAccount(id: string) {
+    return accounts.value.find(acc => String(acc.id) === String(id))
+  }
+
+  function sleep(ms: number) {
+    return new Promise<void>(resolve => setTimeout(resolve, ms))
+  }
+
+  /** 反复刷账号列表，直到达到目标状态或超时；返回是否真正确认。 */
+  async function waitForAccountState(
+    id: string,
+    isConfirmed: (account?: Account) => boolean,
+    { timeoutMs, intervalMs }: { timeoutMs: number, intervalMs: number },
+  ) {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      await refreshAccountsSilently()
+      if (isConfirmed(findAccount(id)))
+        return true
+      if (Date.now() >= deadline)
+        return false
+      await sleep(intervalMs)
+    }
+  }
+
+  async function runAccountAction(
+    id: string,
+    action: AccountPendingAction,
+    request: () => Promise<any>,
+    isConfirmed: (account?: Account) => boolean,
+    { timeoutMs, intervalMs }: { timeoutMs: number, intervalMs: number },
+  ): Promise<{ ok: boolean, confirmed: boolean, error?: string }> {
+    const accountId = String(id || '')
+    if (!accountId)
+      return { ok: false, confirmed: false, error: '未选择账号' }
+    // 同一账号的启动/停止不得并发，否则先后两次确认会互相覆盖
+    if (pendingActions.value[accountId])
+      return { ok: false, confirmed: false, error: '该账号已有进行中的操作' }
+
+    pendingActions.value = { ...pendingActions.value, [accountId]: action }
+    try {
+      const res = await request()
+      // 软错会以 HTTP 200 + ok:false 下发，不能当成成功去等确认
+      if (res?.data && res.data.ok === false)
+        throw new Error(getApiErrorMessage(res.data))
+      const confirmed = await waitForAccountState(accountId, isConfirmed, { timeoutMs, intervalMs })
+      return { ok: true, confirmed }
+    }
+    catch (e: any) {
+      // 失败也只需静默同步一次状态：拉不到就保留现有列表，不能把账号“洗空”
+      await refreshAccountsSilently()
+      return { ok: false, confirmed: false, error: getApiErrorMessage(e) }
+    }
+    finally {
+      const next = { ...pendingActions.value }
+      delete next[accountId]
+      pendingActions.value = next
+    }
+  }
+
+  async function startAccount(id: string, options: { timeoutMs?: number, intervalMs?: number } = {}) {
+    return runAccountAction(
+      id,
+      'start',
+      () => api.post(`/api/accounts/${id}/start`, undefined, { timeout: START_REQUEST_TIMEOUT_MS }),
+      account => !!account && account.online === true,
+      { timeoutMs: options.timeoutMs ?? START_CONFIRM_TIMEOUT_MS, intervalMs: options.intervalMs ?? CONFIRM_POLL_INTERVAL_MS },
+    )
+  }
+
+  async function stopAccount(id: string, options: { timeoutMs?: number, intervalMs?: number } = {}) {
+    return runAccountAction(
+      id,
+      'stop',
+      () => api.post(`/api/accounts/${id}/stop`),
+      // 账号被删除也当已停：卡片都消失了，不该再弹“未确认”
+      account => !account || account.running !== true,
+      { timeoutMs: options.timeoutMs ?? STOP_CONFIRM_TIMEOUT_MS, intervalMs: options.intervalMs ?? CONFIRM_POLL_INTERVAL_MS },
+    )
   }
 
   async function deleteAccount(id: string) {
@@ -165,7 +273,9 @@ export const useAccountStore = defineStore('account', () => {
     currentAccount,
     loading,
     logs,
+    pendingActions,
     fetchAccounts,
+    refreshAccountsSilently,
     selectAccount,
     startAccount,
     stopAccount,

@@ -5,7 +5,7 @@ import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 
 const props = defineProps<{
-  variant?: 'primary' | 'secondary' | 'danger' | 'success' | 'ghost' | 'outline' | 'text'
+  variant?: 'primary' | 'secondary' | 'danger' | 'success' | 'ghost' | 'outline' | 'text' | 'soft' | 'soft-success' | 'soft-danger'
   size?: 'sm' | 'md' | 'lg'
   loading?: boolean
   disabled?: boolean
@@ -27,15 +27,21 @@ const naiveSize = computed<ButtonProps['size']>(() => {
   return 'medium'
 })
 
-const naiveType = computed<ButtonProps['type']>(() => {
-  if (props.variant === 'danger')
+const buttonType = computed<ButtonProps['type']>(() => {
+  if (props.variant === 'danger' || props.variant === 'soft-danger')
     return 'error'
-  if (props.variant === 'success')
+  if (props.variant === 'success' || props.variant === 'soft-success')
     return 'success'
   if (!props.variant || props.variant === 'primary')
     return 'primary'
   return 'default'
 })
+
+// soft* 是带类型色的浅底按钮：卡片里需要“有背景但不到实心”的动作入口
+const isSecondary = computed(() => props.variant === 'secondary'
+  || props.variant === 'soft'
+  || props.variant === 'soft-success'
+  || props.variant === 'soft-danger')
 
 function handleClick(event: MouseEvent) {
   if (!props.disabled && !props.loading)
@@ -57,12 +63,12 @@ function handleRouterClick(event: MouseEvent, navigate: (event?: MouseEvent) => 
     :tag="href ? 'a' : 'button'"
     :href="href"
     :attr-type="type || 'button'"
-    :type="naiveType"
+    :type="buttonType"
     :size="naiveSize"
     :loading="loading"
     :disabled="disabled"
     :block="block"
-    :secondary="variant === 'secondary'"
+    :secondary="isSecondary"
     :quaternary="variant === 'ghost'"
     :ghost="variant === 'outline'"
     :text="variant === 'text'"
@@ -78,12 +84,12 @@ function handleRouterClick(event: MouseEvent, navigate: (event?: MouseEvent) => 
       class="base-button"
       tag="a"
       :href="routerHref"
-      :type="naiveType"
+      :type="buttonType"
       :size="naiveSize"
       :loading="loading"
       :disabled="disabled"
       :block="block"
-      :secondary="variant === 'secondary'"
+      :secondary="isSecondary"
       :quaternary="variant === 'ghost'"
       :ghost="variant === 'outline'"
       :text="variant === 'text'"

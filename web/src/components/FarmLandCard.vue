@@ -753,9 +753,10 @@ const ariaLabel = computed(() => {
   font-size: 10px;
   font-weight: var(--fw-700);
 }
+/* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
 .plot__check {
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   display: grid;
   flex: none;
   grid-column: 6;
@@ -765,7 +766,7 @@ const ariaLabel = computed(() => {
   border-radius: 50%;
   color: #fff;
   background: color-mix(in srgb, var(--ui-surface-strong) 65%, transparent);
-  font-size: 12px;
+  font-size: 10px;
 }
 .plot--selected .plot__check {
   border-color: var(--ui-primary-fill);

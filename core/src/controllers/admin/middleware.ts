@@ -47,8 +47,10 @@ function getAccountList(ctx: AdminContext): any[] {
     } catch {
         // Fall back to persistent storage.
     }
+    // provider 不可用时仍走持久化存储，这里同样不能把服务端微信凭证透给页面。
     const data = store.getAccounts ? store.getAccounts() : { accounts: [] };
-    return Array.isArray(data.accounts) ? data.accounts : [];
+    const masked = store.maskWxCredentialsForClient(data);
+    return Array.isArray(masked.accounts) ? masked.accounts : [];
 }
 
 function getAccountIds(ctx: AdminContext): string[] {

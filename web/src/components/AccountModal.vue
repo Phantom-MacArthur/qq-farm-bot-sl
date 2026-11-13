@@ -41,6 +41,9 @@ let wxPollController: AbortController | undefined
 let wxPollInFlight: Promise<void> | undefined
 let wxPollKey = ''
 let wxPendingCode = ''
+// 扫码确认后服务端登记的待绑定凭证会话，仅用于告知后端“这个账号可以拿这份登录凭据”
+let wxPendingSessionId = ''
+let wxPendingWxid = ''
 const qqTaskId = ref('')
 const qqStatus = ref('')
 const qqError = ref('')
@@ -364,12 +367,20 @@ async function submitPendingQrAccount(platform: 'wx' | 'qq') {
   }
 
   const payload: any = { name, code, platform, loginType: 'manual' }
+  if (platform === 'wx' && wxPendingSessionId && wxPendingWxid) {
+    payload.wxSessionId = wxPendingSessionId
+    payload.wxid = wxPendingWxid
+  }
   const saved = await addAccount(payload, !!props.editData)
   if (!saved && props.show && activeLoginTab.value === `${platform}_qr`) {
     if (platform === 'wx')
       wxPendingCode = code
     else
       qqPendingCode = code
+  }
+  else if (saved && platform === 'wx') {
+    wxPendingSessionId = ''
+    wxPendingWxid = ''
   }
 }
 
@@ -468,6 +479,8 @@ function resetWxLogin() {
   wxQrUrl.value = ''
   wxLoading.value = false
   wxPendingCode = ''
+  wxPendingSessionId = ''
+  wxPendingWxid = ''
   clearQrNameSubmitTimer()
 }
 
@@ -485,6 +498,9 @@ async function getWxCodeAndAdd(taskId: string, flowVersion: number) {
   const nickname = String(codeResult.data?.data?.nickname || '').trim()
   if (!code)
     throw new Error('未获取到登录 Code')
+
+  wxPendingSessionId = String(codeResult.data?.data?.session_id || taskId).trim()
+  wxPendingWxid = String(codeResult.data?.data?.openid || '').trim()
 
   await addQrAccount('wx', code, nickname)
 }

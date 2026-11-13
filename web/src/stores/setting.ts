@@ -69,6 +69,12 @@ export interface UIConfig {
   theme?: string
 }
 
+export interface AutoCodeRefreshConfig {
+  enabled: boolean
+  intervalMinutes: number
+  maxRetries: number
+}
+
 export interface SettingsState {
   plantingStrategy: string
   preferredSeedId: number
@@ -188,6 +194,14 @@ function createDefaultSettings(): SettingsState {
   }
 }
 
+function createDefaultAutoCodeRefresh(): AutoCodeRefreshConfig {
+  return {
+    enabled: true,
+    intervalMinutes: 2,
+    maxRetries: 8,
+  }
+}
+
 function cloneValue<T>(value: T): T {
   if (value === undefined || value === null)
     return value
@@ -198,6 +212,8 @@ export const useSettingStore = defineStore('setting', () => {
   const settings = ref<SettingsState>(createDefaultSettings())
   const loading = ref(false)
   const loadedAccountId = ref('')
+  const autoCodeRefresh = ref<AutoCodeRefreshConfig>(createDefaultAutoCodeRefresh())
+  const autoCodeRefreshLoading = ref(false)
   let pendingRequests = 0
   let fetchRevision = 0
   let latestRequestedAccountId = ''
@@ -336,6 +352,65 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
+  /** 刷新设置是全局的，不依当前账号，所以不能用带账号头的 loading。 */
+  async function fetchAutoCodeRefresh() {
+    autoCodeRefreshLoading.value = true
+    try {
+      const { data } = await api.get('/api/settings/auto-code-refresh')
+      if (!data?.ok)
+        return { ok: false, error: getApiErrorMessage(data, '读取失败') }
+      autoCodeRefresh.value = {
+        ...createDefaultAutoCodeRefresh(),
+        ...(data.data || {}),
+      }
+      return { ok: true }
+    }
+    catch (error: any) {
+      return { ok: false, error: getApiErrorMessage(error, '读取失败') }
+    }
+    finally {
+      autoCodeRefreshLoading.value = false
+    }
+  }
+
+  async function saveAutoCodeRefresh(config: AutoCodeRefreshConfig) {
+    autoCodeRefreshLoading.value = true
+    try {
+      const { data } = await api.post('/api/settings/auto-code-refresh', config)
+      if (data && data.ok) {
+        autoCodeRefresh.value = {
+          ...createDefaultAutoCodeRefresh(),
+          ...(data.data || config),
+        }
+        return { ok: true }
+      }
+      return { ok: false, error: getApiErrorMessage(data, '保存失败') }
+    }
+    catch (error: any) {
+      return { ok: false, error: getApiErrorMessage(error, '保存失败') }
+    }
+    finally {
+      autoCodeRefreshLoading.value = false
+    }
+  }
+
+  async function runAutoCodeRefresh(accountId: string) {
+    if (!accountId)
+      return { ok: false, error: '未选择账号' }
+    try {
+      const { data } = await api.post('/api/settings/auto-code-refresh/run', {}, {
+        headers: { 'x-account-id': accountId },
+        timeout: 60000,
+      })
+      if (data && data.ok && data.data?.ok !== false)
+        return { ok: true }
+      return { ok: false, error: getApiErrorMessage(data, '刷新失败') }
+    }
+    catch (error: any) {
+      return { ok: false, error: getApiErrorMessage(error, '刷新失败') }
+    }
+  }
+
   async function saveOfflineConfig(config: OfflineConfig) {
     beginRequest()
     try {
@@ -354,5 +429,17 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
-  return { settings, loading, loadedAccountId, fetchSettings, saveSettings, saveOfflineConfig }
+  return {
+    settings,
+    loading,
+    loadedAccountId,
+    autoCodeRefresh,
+    autoCodeRefreshLoading,
+    fetchSettings,
+    saveSettings,
+    saveOfflineConfig,
+    fetchAutoCodeRefresh,
+    saveAutoCodeRefresh,
+    runAutoCodeRefresh,
+  }
 })

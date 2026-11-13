@@ -31,6 +31,8 @@ interface WorkerManagerOptions {
     sendConfiguredPush?: (payload: any) => Promise<void> | void;
     addOrUpdateAccount: (acc: any) => any;
     deleteAccount: (id: string) => void;
+    scheduleAutoRelogin?: (accountId: string, reason?: string) => boolean;
+    refreshAccountCode?: (accountId: string, reason?: string) => Promise<boolean>;
     onStatusSync?: (accountId: string, status: any, accountName?: string) => void;
     onWorkerLog?: (entry: any, accountId: string, accountName?: string) => void;
 }
@@ -54,10 +56,14 @@ function createWorkerManager(options: WorkerManagerOptions) {
         sendConfiguredPush,
         addOrUpdateAccount,
         deleteAccount,
+        scheduleAutoRelogin,
+        refreshAccountCode,
         onStatusSync,
         onWorkerLog,
     } = options;
     const managerScheduler = createScheduler('worker_manager');
+    // 同一次失效可能同时收到 ws_400 和断开事件，凭证刷新必须全局只跑一次。
+    const credentialRefreshes = new Map<string, Promise<unknown>>();
     const useThreadRuntime = runtimeMode === 'thread' && !(processRef as any).pkg && typeof WorkerThread === 'function';
 
     function createThreadWorker(account: any): any {
@@ -362,6 +368,24 @@ function createWorkerManager(options: WorkerManagerOptions) {
                     accountId,
                     worker.name,
                 );
+                // Code 失效先当场刷一次，省掉一个重试间隔；刷失败再交给延迟重登排队。
+                if (typeof refreshAccountCode === 'function' && !credentialRefreshes.has(accountId)) {
+                    const task = Promise.resolve(refreshAccountCode(accountId, 'ws_400'))
+                        .then((ok) => {
+                            if (!ok && typeof scheduleAutoRelogin === 'function') {
+                                scheduleAutoRelogin(accountId, 'ws_400_refresh_failed');
+                            }
+                        })
+                        .catch((error: any) => {
+                            log('错误', `账号 ${worker.name} 刷新 Code 失败: ${error && error.message ? error.message : error}`, {
+                                accountId: String(accountId),
+                                accountName: worker.name,
+                            });
+                            if (typeof scheduleAutoRelogin === 'function') scheduleAutoRelogin(accountId, 'ws_400_refresh_failed');
+                        })
+                        .finally(() => { credentialRefreshes.delete(accountId); });
+                    credentialRefreshes.set(accountId, task);
+                }
             }
         } else if (msg.type === 'account_kicked') {
             if (worker.terminalHandled) return;
@@ -378,6 +402,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             });
             addAccountLog('kickout_stop', `账号 ${worker.name} 被踢下线，已自动停止`, accountId, worker.name, { reason, reasonCode, diagnostics });
             stopWorker(accountId);
+            if (typeof scheduleAutoRelogin === 'function') scheduleAutoRelogin(accountId, `kickout:${reason}`);
         } else if (msg.type === 'account_disconnected') {
             if (worker.terminalHandled) return;
             worker.terminalHandled = true;
@@ -416,6 +441,10 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 { source, disconnectCode: code, reason, phase, connectionId: Number(msg.connectionId) || 0, diagnostics: msg.diagnostics || null },
             );
             stopWorker(accountId);
+            // 上面那句「等待 Helper 刷新 Code」不能只是日志：这里真的把恢复动作排进去。
+            if (typeof scheduleAutoRelogin === 'function') {
+                scheduleAutoRelogin(accountId, `disconnect:${source}:${phase}:${code}`);
+            }
         } else if (msg.type === 'api_response') {
             const { id, result, error } = msg;
             managerScheduler.clear(`api_timeout_${accountId}_${id}`);

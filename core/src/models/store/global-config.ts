@@ -1,4 +1,4 @@
-import type { CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
+import type { AutoCodeRefreshConfig, CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
 export {};
 
 const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
@@ -10,6 +10,7 @@ const {
     DEFAULT_OFFLINE_REMINDER,
     DEFAULT_LOGIN_SETTINGS,
     DEFAULT_CAPTURE_SETTINGS,
+    DEFAULT_AUTO_CODE_REFRESH,
     globalConfig,
     normalizeAccountConfig,
     cloneAccountConfig,
@@ -105,6 +106,31 @@ function setLoginSettings(cfg: Partial<LoginSettings> | undefined): LoginSetting
     }
     saveGlobalConfig({ loginSettings: next });
     return getLoginSettings();
+}
+
+function normalizeAutoCodeRefresh(input: unknown): AutoCodeRefreshConfig {
+    const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
+    const intervalMinutes = Number(src.intervalMinutes);
+    const maxRetries = Number(src.maxRetries);
+    return {
+        enabled: src.enabled !== false,
+        intervalMinutes: Math.max(1, Math.min(1440, Number.isFinite(intervalMinutes)
+            ? Math.round(intervalMinutes)
+            : DEFAULT_AUTO_CODE_REFRESH.intervalMinutes)),
+        maxRetries: Math.max(1, Math.min(100, Number.isFinite(maxRetries)
+            ? Math.round(maxRetries)
+            : DEFAULT_AUTO_CODE_REFRESH.maxRetries)),
+    };
+}
+
+function getAutoCodeRefresh(): AutoCodeRefreshConfig {
+    return normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh);
+}
+
+function setAutoCodeRefresh(cfg: Partial<AutoCodeRefreshConfig> | undefined): AutoCodeRefreshConfig {
+    const next = normalizeAutoCodeRefresh({ ...getAutoCodeRefresh(), ...(cfg || {}) });
+    saveGlobalConfig({ autoCodeRefresh: next });
+    return getAutoCodeRefresh();
 }
 
 function normalizeCaptureSettings(input: unknown): CaptureSettings {
@@ -205,6 +231,7 @@ loadGlobalConfig();
 globalConfig.offlineReminder = normalizeOfflineReminder(globalConfig.offlineReminder);
 globalConfig.loginSettings = normalizeLoginSettings(globalConfig.loginSettings);
 globalConfig.captureSettings = normalizeCaptureSettings(globalConfig.captureSettings);
+globalConfig.autoCodeRefresh = normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh);
 if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
     saveGlobalConfig();
     sharedState.systemConfigMigrated = false;
@@ -219,6 +246,9 @@ module.exports = {
     getCaptureSettings,
     setCaptureSettings,
     normalizeCaptureSettings,
+    getAutoCodeRefresh,
+    setAutoCodeRefresh,
+    normalizeAutoCodeRefresh,
     getOfflineReminder,
     setOfflineReminder,
     getSystemConfig,

@@ -578,18 +578,19 @@ function markMutantIconFailed(effect: any) {
 .selection-cue--disabled {
   color: #7d8782;
 }
+/* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
 .selection-cue__mark {
-  width: 22px;
-  height: 22px;
+  width: 16px;
+  height: 16px;
   display: grid;
   place-items: center;
   border: 1.5px solid currentColor;
-  border-radius: 6px;
+  border-radius: 50%;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 2px 7px rgba(40, 62, 53, 0.14);
 }
 .selection-cue__mark > span {
-  font-size: 15px;
+  font-size: 10px;
 }
 .selection-cue--selected .selection-cue__mark {
   color: #fff;

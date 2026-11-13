@@ -155,9 +155,21 @@ export interface SystemConfig {
   deviceInfo: DeviceInfo;
 }
 
+/**
+ * 微信 Code 定时刷新与自动重登（落在 store.json，对所有微信扫码账号统一生效）。
+ * intervalMinutes 同时是「凭证失效后延迟重登」的等待时长；maxRetries 是每账号每天的
+ * 恢复重试上限（只统计 ws_400 / kickout / 重连失败 / 刷新失败这类恢复场景）。
+ */
+export interface AutoCodeRefreshConfig {
+  enabled: boolean;
+  intervalMinutes: number;
+  maxRetries: number;
+}
+
 export interface GlobalConfig {
   accountConfigs: Record<string, AccountConfig>;
   defaultAccountConfig: AccountConfig;
+  autoCodeRefresh: AutoCodeRefreshConfig;
   ui: UIConfig;
   loginSettings: LoginSettings;
   captureSettings: CaptureSettings;

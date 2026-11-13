@@ -1,4 +1,4 @@
-import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, CaptureSettings, FertilizerLandType, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
+import type { AccountConfig, AutoCodeRefreshConfig, AutomationConfig, BagSeedFallbackStrategy, CaptureSettings, FertilizerLandType, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
 export {};
 
 const { DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersion } = require('../../config/config');
@@ -51,6 +51,13 @@ const DEFAULT_LOGIN_SETTINGS: LoginSettings = {
 const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
     enabled: true,
     autoImportQqGids: true,
+};
+
+// 只对带内置登录凭据的微信扫码账号生效；QQ 账号在调度阶段会直接静默退出。
+const DEFAULT_AUTO_CODE_REFRESH: AutoCodeRefreshConfig = {
+    enabled: true,
+    intervalMinutes: 2,
+    maxRetries: 8,
 };
 
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
@@ -513,6 +520,7 @@ accountFallbackConfig = {
 const globalConfig: GlobalConfig = {
     accountConfigs: {},
     defaultAccountConfig: cloneAccountConfig(DEFAULT_ACCOUNT_CONFIG),
+    autoCodeRefresh: { ...DEFAULT_AUTO_CODE_REFRESH },
     ui: {
         theme: 'light',
     },
@@ -569,6 +577,20 @@ function loadGlobalConfig(): void {
                     napCatSignature: typeof data.loginSettings.napCatSignature === 'string'
                         ? data.loginSettings.napCatSignature.trim()
                         : DEFAULT_LOGIN_SETTINGS.napCatSignature,
+                };
+            }
+
+            if (data.autoCodeRefresh && typeof data.autoCodeRefresh === 'object') {
+                const intervalMinutes = Number(data.autoCodeRefresh.intervalMinutes);
+                const maxRetries = Number(data.autoCodeRefresh.maxRetries);
+                globalConfig.autoCodeRefresh = {
+                    enabled: data.autoCodeRefresh.enabled !== false,
+                    intervalMinutes: Math.max(1, Math.min(1440, Number.isFinite(intervalMinutes)
+                        ? Math.round(intervalMinutes)
+                        : DEFAULT_AUTO_CODE_REFRESH.intervalMinutes)),
+                    maxRetries: Math.max(1, Math.min(100, Number.isFinite(maxRetries)
+                        ? Math.round(maxRetries)
+                        : DEFAULT_AUTO_CODE_REFRESH.maxRetries)),
                 };
             }
 
@@ -648,6 +670,7 @@ module.exports = {
     DEFAULT_OFFLINE_REMINDER,
     DEFAULT_LOGIN_SETTINGS,
     DEFAULT_CAPTURE_SETTINGS,
+    DEFAULT_AUTO_CODE_REFRESH,
     DEFAULT_ACCOUNT_CONFIG,
     ALLOWED_AUTOMATION_KEYS,
     // Mutable shared state (by reference)

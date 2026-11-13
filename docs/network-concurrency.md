@@ -59,7 +59,7 @@ Gateway 是一条 WebSocket 长连接，所有业务共用它。这份文档说�
 
 | 调度器命名空间 | 班次 |
 | --- | --- |
-| `network` / `ace` / `worker_manager` | 不注入（这些请求自己声明 `criticalLane`） |
+| `network` / `ace` / `worker_manager` / `auto_code_refresh` | 不注入（前两者自己声明 `criticalLane`，后两者不做游戏请求） |
 | `friend-pet-sync` | `background` |
 | 其它 `friend*`（`friend`、`friend-pet-cache`） | `friend` |
 | 其它（`worker`、`farm`、`task`） | `farm` |

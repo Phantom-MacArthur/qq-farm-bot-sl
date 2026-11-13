@@ -52,6 +52,8 @@ module.exports = {
     setLoginSettings: globalConfig.setLoginSettings,
     getCaptureSettings: globalConfig.getCaptureSettings,
     setCaptureSettings: globalConfig.setCaptureSettings,
+    getAutoCodeRefresh: globalConfig.getAutoCodeRefresh,
+    setAutoCodeRefresh: globalConfig.setAutoCodeRefresh,
     getOfflineReminder: globalConfig.getOfflineReminder,
     setOfflineReminder: globalConfig.setOfflineReminder,
 
@@ -59,6 +61,8 @@ module.exports = {
     getAccounts: accounts.getAccounts,
     addOrUpdateAccount: accounts.addOrUpdateAccount,
     deleteAccount: accounts.deleteAccount,
+    stripProtectedWxCredentials: accounts.stripProtectedWxCredentials,
+    maskWxCredentialsForClient: accounts.maskWxCredentialsForClient,
 
     // System config
     getSystemConfig: globalConfig.getSystemConfig,

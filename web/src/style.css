@@ -422,6 +422,72 @@ th {
   line-height: 1.4;
 }
 
+/* 行内标签：说明文字放在控件左侧同一行，标签不参与压缩，控件吃掉剩余宽度。 */
+.base-field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+}
+
+.base-field--inline .base-field__label {
+  flex: none;
+  white-space: nowrap;
+}
+
+/* 控件是 naive-ui 根节点，这里只按“非标签的子节点”取宽度。
+   行内标签的字段不撑满整列；竖向步进已嵌进框内，4.25rem = 68px 仍能容纳四位数字。 */
+.base-field--inline > :not(.base-field__label) {
+  min-width: 0;
+  flex: 1 1 auto;
+  max-width: 4.25rem;
+}
+
+/* 竖向上下箭头走 naive 的 suffix 插槽嵌在框内；为了给四位数字让位，
+   左右内边距从默认 12px/8px 收到 6px。这里改的是 naive 的 --n-padding-* 变量，
+   跟文件底部 .n-input 的 --n-color 覆盖是同一套做法。 */
+.base-field__number--inset .n-input {
+  --n-padding-left: 6px !important;
+  --n-padding-right: 6px !important;
+}
+
+.base-field__stepper {
+  display: flex;
+  flex: none;
+  /* naive 的 suffix 容器没有给 align-items，默认会拉满整行高度把箭头顶到上下边界 */
+  align-self: center;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.base-field__stepper button {
+  display: inline-flex;
+  width: 12px;
+  /* 输入框 content 高 36px（heightMedium 38px 减上下 1px 边框），
+     两个 14px 按钮 + 1px 间隙 = 29px，上下各留 3.5px 不碰边框 */
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--theme-text);
+  font-size: 10px;
+  line-height: 1;
+  opacity: 0.5;
+  cursor: pointer;
+}
+
+.base-field__stepper button:hover:not(:disabled) {
+  background: var(--ui-border);
+  opacity: 0.85;
+}
+
+.base-field__stepper button:disabled {
+  opacity: 0.2;
+  cursor: not-allowed;
+}
+
 .base-switch {
   display: inline-flex;
   align-items: center;

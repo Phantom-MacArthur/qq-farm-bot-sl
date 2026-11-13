@@ -66,6 +66,10 @@ const router = createRouter({
 router.beforeEach(async (to, _from) => {
   NProgress.start()
 
+  // 系统设置已从“设置”页标签拆为独立栏目，旧的 tab 链接必须仍能直达新页面
+  if (to.name === 'Settings' && ['system', 'user'].includes(String(to.query.tab || '')))
+    return { name: 'SystemSettings' }
+
   if (to.name === 'login') {
     if (!adminToken.value) {
       validatedToken = ''

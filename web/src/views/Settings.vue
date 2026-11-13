@@ -1,14 +1,17 @@
 <script setup lang="ts">
+import type { AutoCodeRefreshConfig } from '@/stores/setting'
+import type { AccountBatchKind } from '@/utils/account-bulk-actions'
 import { NButton } from 'naive-ui/es/button'
 import { NTab } from 'naive-ui/es/tabs'
 import { NTimePicker } from 'naive-ui/es/time-picker'
 import { storeToRefs } from 'pinia'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import api, { getApiErrorMessage } from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import PageTabs from '@/components/PageTabs.vue'
+import AutoCodeRefreshCard from '@/components/settings/AutoCodeRefreshCard.vue'
 import AutomationSettingsForm from '@/components/settings/AutomationSettingsForm.vue'
 import BagSeedPriorityItem from '@/components/settings/BagSeedPriorityItem.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -19,6 +22,15 @@ import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/ac
 import { useSettingStore } from '@/stores/setting'
 import { useStatusStore } from '@/stores/status'
 import { useUserStore } from '@/stores/user'
+import {
+  allAccountIds,
+  formatAccountBatchSummary,
+  invertAccountSelection,
+  pickAccountBatchTargets,
+  runAccountBatch,
+  shouldRefreshCodeBeforeStart,
+  toggleSelectedAccountIds,
+} from '@/utils/account-bulk-actions'
 
 const fertilizerLandTypeOptions = [
   { label: '蓝晶土地', value: 'blue-crystal' },
@@ -36,37 +48,25 @@ const userStore = useUserStore()
 const settingStore = useSettingStore()
 const statusStore = useStatusStore()
 
-type SettingsTab = 'account' | 'strategy' | 'automation' | 'system'
-const storedTab = localStorage.getItem('settings-active-tab')
-const settingsTabKeys: SettingsTab[] = ['account', 'strategy', 'automation', 'system']
-const queryTab = String(route.query.tab || '')
-const initialTab = settingsTabKeys.includes(queryTab as SettingsTab)
-  ? queryTab as SettingsTab
-  : storedTab === 'user' ? 'system' : (storedTab as SettingsTab) || 'account'
-const activeTab = ref<SettingsTab>(initialTab)
-const webVersion = __APP_VERSION__
-const coreVersion = ref('')
-const coreVersionLoading = ref(true)
-const coreVersionError = ref('')
+type SettingsTab = 'account' | 'strategy' | 'automation'
+const settingsTabKeys: SettingsTab[] = ['account', 'strategy', 'automation']
+const isSystemSettingsPage = computed(() => route.name === 'SystemSettings')
 
-async function loadVersionInfo() {
-  coreVersionLoading.value = true
-  coreVersionError.value = ''
-  try {
-    const { data } = await api.get('/api/ping')
-    if (!data?.ok || !data?.data?.version)
-      throw new Error(getApiErrorMessage(data, 'Core 版本信息不可用'))
-    coreVersion.value = String(data.data.version)
-  }
-  catch (error: unknown) {
-    coreVersionError.value = getApiErrorMessage(error, '获取 Core 版本失败')
-  }
-  finally {
-    coreVersionLoading.value = false
-  }
+function getInitialSettingsTab(): SettingsTab {
+  if (isSystemSettingsPage.value)
+    return 'account'
+  const queryTab = String(route.query.tab || '')
+  if (settingsTabKeys.includes(queryTab as SettingsTab))
+    return queryTab as SettingsTab
+  const storedTab = localStorage.getItem('settings-active-tab') || ''
+  return settingsTabKeys.includes(storedTab as SettingsTab) ? storedTab as SettingsTab : 'account'
 }
 
+const activeTab = ref<SettingsTab>(getInitialSettingsTab())
+
 watch(activeTab, (newTab) => {
+  if (isSystemSettingsPage.value)
+    return
   localStorage.setItem('settings-active-tab', newTab)
   if (String(route.query.tab || '') !== newTab) {
     router.replace({
@@ -75,7 +75,13 @@ watch(activeTab, (newTab) => {
   }
 })
 
+watch(() => route.name, () => {
+  activeTab.value = getInitialSettingsTab()
+})
+
 watch(() => route.query.tab, (value) => {
+  if (isSystemSettingsPage.value)
+    return
   const nextTab = String(value || '')
   if (settingsTabKeys.includes(nextTab as SettingsTab) && nextTab !== activeTab.value)
     activeTab.value = nextTab as SettingsTab
@@ -85,7 +91,6 @@ const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-profile' },
   { key: 'strategy', label: '策略设置', icon: 'i-carbon-settings-adjust' },
   { key: 'automation', label: '自动控制', icon: 'i-carbon-settings-adjust' },
-  { key: 'system', label: '系统设置', icon: 'i-carbon-settings' },
 ] as const
 
 function setActiveTab(value: string) {
@@ -129,6 +134,7 @@ const editingAccount = ref<any>(null)
 const accountToDelete = ref<any>(null)
 const showClearStoppedConfirm = ref(false)
 const clearStoppedLoading = ref(false)
+const pendingCleanupIds = ref<string[]>([])
 const accountAvatarErrors = ref<Set<string>>(new Set())
 
 function getAccountAvatar(account: any) {
@@ -137,7 +143,12 @@ function getAccountAvatar(account: any) {
   const liveAvatar = accountId && accountId === liveAccountId
     ? String(runtimeStatus.value?.status?.avatarUrl || '').trim()
     : ''
-  return liveAvatar || String(account?.avatar || '').trim()
+  const direct = liveAvatar || String(account?.avatar || account?.avatarUrl || account?.avatar_url || '').trim()
+  if (direct)
+    return direct
+  // 与 origin 一致：配置里没有头像时按 QQ 号回退到 qlogo，行内不会出现空圈
+  const qq = String(account?.uin || account?.qq || '').trim()
+  return /^\d+$/.test(qq) ? `https://q1.qlogo.cn/g?b=qq&nk=${qq}&s=100` : ''
 }
 
 function canShowAccountAvatar(account: any) {
@@ -151,23 +162,158 @@ function handleAccountAvatarError(account: any) {
     accountAvatarErrors.value.add(accountId)
 }
 
-const stoppedAccounts = computed(() => accounts.value.filter((acc: any) => !acc.running))
-const stoppedAccountsCount = computed(() => stoppedAccounts.value.length)
+// ==================== 账号批量操作与多选 ====================
+const selectionMode = ref(false)
+const selectedAccountIds = ref<string[]>([])
+const bulkRunning = ref(false)
+const bulkKind = ref<AccountBatchKind | ''>('')
+// 刷新 Code 走的是取码接口，不占用 pendingActions，但同样要让卡片按钮进入等待态
+const codeRefreshingIds = ref<string[]>([])
+
+const startAllTargets = computed(() => pickAccountBatchTargets(accounts.value, 'start'))
+const stopAllTargets = computed(() => pickAccountBatchTargets(accounts.value, 'stop'))
+// 未勾选任何账号时的清理兜底：只挑已停止的，避免一句话就把正在跑的账号删掉
+const stoppedAccountTargets = computed(() => pickAccountBatchTargets(accounts.value, 'cleanup'))
+const selectedStartTargets = computed(() => pickAccountBatchTargets(accounts.value, 'start', selectedAccountIds.value))
+const selectedStopTargets = computed(() => pickAccountBatchTargets(accounts.value, 'stop', selectedAccountIds.value))
+
+// 账号可能在其他页面被删除，选中集要跟最新的账号列表对齐，避免把不存在 id 提交给后端
+watch(accounts, (list) => {
+  if (!selectionMode.value || selectedAccountIds.value.length === 0)
+    return
+  const validIds = new Set(allAccountIds(list))
+  const next = selectedAccountIds.value.filter(id => validIds.has(id))
+  if (next.length !== selectedAccountIds.value.length)
+    selectedAccountIds.value = next
+})
+
+function toggleSelectionMode() {
+  selectionMode.value = !selectionMode.value
+  // 退出多选即清空选择，下次进来不应该拖着一批旧账号
+  if (!selectionMode.value)
+    selectedAccountIds.value = []
+}
+
+function isAccountSelected(account: any) {
+  return selectedAccountIds.value.includes(String(account?.id || ''))
+}
+
+function toggleAccountSelection(account: any) {
+  const id = String(account?.id || '')
+  if (!id)
+    return
+  selectedAccountIds.value = toggleSelectedAccountIds(selectedAccountIds.value, id)
+}
+
+function selectAllAccounts() {
+  selectedAccountIds.value = allAccountIds(accounts.value)
+}
+
+function invertSelectedAccounts() {
+  selectedAccountIds.value = invertAccountSelection(accounts.value, selectedAccountIds.value)
+}
+
+async function runOneAccountBatchAction(kind: AccountBatchKind, id: string) {
+  if (kind === 'stop')
+    return accountStore.stopAccount(id)
+  if (kind === 'cleanup') {
+    await accountStore.deleteAccount(id)
+    return { ok: true, confirmed: true }
+  }
+  const account = accounts.value.find((acc: any) => String(acc.id) === id)
+  // 微信凭证账号直接取新 Code 重启，旧 Code 启动只会多挨一次 ws_400；
+  // QQ 与无凭证账号没有可刷的 Code，回到普通启动链路。
+  if (shouldRefreshCodeBeforeStart(account)) {
+    codeRefreshingIds.value = [...codeRefreshingIds.value, id]
+    try {
+      const result = await settingStore.runAutoCodeRefresh(id)
+      // 取码接口只报告命令已下发， worker 是否上线要下一轮列表才能确认
+      return { ok: result.ok, confirmed: false, error: result.error }
+    }
+    finally {
+      codeRefreshingIds.value = codeRefreshingIds.value.filter(item => item !== id)
+    }
+  }
+  return accountStore.startAccount(id)
+}
+
+async function runAccountBatchAction(kind: AccountBatchKind, ids: string[], skipped = 0, quiet = false) {
+  // 并发跑会把登录网关和 worker 拉起打满，也分不清是哪个账号先动，整批串行
+  // 按钮永远可用，所以没有可操作账号时只能在这里静默拦住，不发请求也不弹提
+  if (bulkRunning.value || ids.length === 0)
+    return
+  bulkRunning.value = true
+  bulkKind.value = kind
+  try {
+    const summary = await runAccountBatch(ids, id => runOneAccountBatchAction(kind, id))
+    // “全部启动”是常规操作，成功不再弹框打扰；失败仍必须可见，否则账号静默掉线无人知道
+    if (!quiet || summary.failed.length > 0) {
+      showAlert(
+        formatAccountBatchSummary(kind, summary, skipped),
+        summary.failed.length > 0 ? 'danger' : 'primary',
+      )
+    }
+    await accountStore.fetchAccounts()
+  }
+  finally {
+    bulkRunning.value = false
+    bulkKind.value = ''
+  }
+}
+
+function handleStartAll() {
+  void runAccountBatchAction('start', startAllTargets.value, 0, true)
+}
+
+function handleStopAll() {
+  // 与“全部启动”一致：成功不弹框，失败仍然必须可见
+  void runAccountBatchAction('stop', stopAllTargets.value, 0, true)
+}
+
+function handleBatchStart() {
+  if (selectedAccountIds.value.length === 0) {
+    showAlert('请先选择要启动的账号', 'primary')
+    return
+  }
+  void runAccountBatchAction('start', selectedStartTargets.value, selectedAccountIds.value.length - selectedStartTargets.value.length)
+}
+
+function handleBatchStop() {
+  if (selectedAccountIds.value.length === 0) {
+    showAlert('请先选择要停止的账号', 'primary')
+    return
+  }
+  void runAccountBatchAction('stop', selectedStopTargets.value, selectedAccountIds.value.length - selectedStopTargets.value.length)
+}
+
+function handleBatchCleanup() {
+  if (bulkRunning.value)
+    return
+  // 勾选了就按勾选全清，不再挑在线状态；删除接口本身会先停 worker。
+  // 只有没勾选时才退回“清理全部已停止账号”，避免不勾选时点下去什么都不发生。
+  const ids = selectedAccountIds.value.length > 0
+    ? [...selectedAccountIds.value]
+    : stoppedAccountTargets.value
+  if (ids.length === 0) {
+    showAlert('请先选择要清理的账号', 'primary')
+    return
+  }
+  pendingCleanupIds.value = ids
+  showClearStoppedConfirm.value = true
+}
 
 onMounted(async () => {
   await accountStore.fetchAccounts()
+  if (isSystemSettingsPage.value) {
+    await Promise.all([loadSystemConfig(), loadDevicePresets(), loadCaptureConfigSettings(), fetchAutoCodeRefresh()])
+    return
+  }
   if (!currentAccountId.value && accounts.value.length > 0 && accounts.value[0]) {
     accountStore.selectAccount(String(accounts.value[0].id))
   }
   if (currentAccountId.value)
     await loadStrategyData(currentAccountId.value)
-  await Promise.all([loadSystemConfig(), loadDevicePresets(), loadCaptureConfigSettings(), loadVersionInfo()])
 })
-
-function openSettings(account: any) {
-  accountStore.selectAccount(account.id)
-  router.push('/settings')
-}
 
 function openAddModal() {
   editingAccount.value = null
@@ -199,16 +345,81 @@ async function confirmDelete() {
 }
 
 async function toggleAccount(account: any) {
-  if (account.running) {
-    await accountStore.stopAccount(account.id)
+  const accountId = String(account?.id || '')
+  // 确认结果之前按钮保持不可用，避免连点把两次操作叠在一起
+  if (!accountId || bulkRunning.value || accountStore.pendingActions[accountId])
+    return
+  const shouldStop = !!account.running
+  const result = shouldStop
+    ? await accountStore.stopAccount(accountId)
+    : await accountStore.startAccount(accountId)
+  if (!result.ok) {
+    showAlert(`${shouldStop ? '停止' : '启动'}账号失败: ${result.error || '未知错误'}`, 'danger')
+    return
   }
-  else {
-    await accountStore.startAccount(account.id)
+  // 请求已完成但服务端还没给出确认信号：保持诚实，不把未上线说成运行中
+  if (!result.confirmed) {
+    showAlert(
+      shouldStop
+        ? '停止请求已发出，但尚未确认进程退出，请稍后刷新查看'
+        : '启动请求已发出，但尚未确认上线，请稍后刷新查看',
+      'primary',
+    )
   }
 }
 
-function handleSaved() {
-  accountStore.fetchAccounts()
+// 批量或单账号操作期间都不得叠加下一次启动/停止，否则两次确认会互相覆盖。
+// 卡片按钮不再显示中间态文案，就靠这个标记在动作结束前把点击吃掉。
+function isAccountPending(account: any) {
+  const accountId = String(account?.id || '')
+  return !!accountStore.pendingActions[accountId]
+    || codeRefreshingIds.value.includes(accountId)
+    || bulkRunning.value
+}
+
+// 新账号的头像要等 worker 登录上报后服务端才落库，保存当下的列表里必然还是空的，
+// 不补一段轮询的话用户只能刷新页面才看得到头像。
+const AVATAR_SYNC_INTERVAL_MS = 3000
+const AVATAR_SYNC_TIMEOUT_MS = 30000
+let avatarSyncTimer: ReturnType<typeof setTimeout> | undefined
+let avatarSyncDeadline = 0
+
+function stopAccountAvatarSync() {
+  if (avatarSyncTimer)
+    clearTimeout(avatarSyncTimer)
+  avatarSyncTimer = undefined
+  avatarSyncDeadline = 0
+}
+
+// 只看“能不能算出一个头像地址”，不看加载失败标记：失败过的账号不该把轮询始终拖着
+function accountsWithoutAvatar() {
+  return accounts.value.filter((account: any) => !getAccountAvatar(account))
+}
+
+async function runAccountAvatarSync() {
+  avatarSyncTimer = undefined
+  // 静默刷新：不闪 loading，也不会因为一次拉取失败就把账号列表清空
+  await accountStore.refreshAccountsSilently()
+  if (accountsWithoutAvatar().length === 0 || Date.now() >= avatarSyncDeadline) {
+    stopAccountAvatarSync()
+    return
+  }
+  avatarSyncTimer = setTimeout(() => void runAccountAvatarSync(), AVATAR_SYNC_INTERVAL_MS)
+}
+
+function scheduleAccountAvatarSync() {
+  if (accountsWithoutAvatar().length === 0)
+    return
+  stopAccountAvatarSync()
+  avatarSyncDeadline = Date.now() + AVATAR_SYNC_TIMEOUT_MS
+  avatarSyncTimer = setTimeout(() => void runAccountAvatarSync(), AVATAR_SYNC_INTERVAL_MS)
+}
+
+onBeforeUnmount(stopAccountAvatarSync)
+
+async function handleSaved() {
+  await accountStore.fetchAccounts()
+  scheduleAccountAvatarSync()
 }
 
 function selectAccount(account: any) {
@@ -217,30 +428,15 @@ function selectAccount(account: any) {
   accountStore.selectAccount(String(account.id))
 }
 
-function openClearStoppedConfirm() {
-  if (stoppedAccountsCount.value === 0) {
-    showAlert('没有已停止的账号需要清理', 'primary')
-    return
-  }
-  showClearStoppedConfirm.value = true
-}
-
 async function confirmClearStopped() {
   clearStoppedLoading.value = true
   try {
-    const stoppedIds = stoppedAccounts.value.map((acc: any) => acc.id)
-    let deletedCount = 0
-    for (const id of stoppedIds) {
-      try {
-        await accountStore.deleteAccount(id)
-        deletedCount++
-      }
-      catch (e) {
-        console.error(`删除账号 ${id} 失败:`, e)
-      }
-    }
+    const summary = await runAccountBatch(pendingCleanupIds.value, id => runOneAccountBatchAction('cleanup', id))
+    // 被清理的 id 已经不存在，继续选中只会让计数停留在幽灵账号上
+    pendingCleanupIds.value = []
+    selectedAccountIds.value = []
     showClearStoppedConfirm.value = false
-    showAlert(`成功清理 ${deletedCount} 个已停止的账号`, 'primary')
+    showAlert(formatAccountBatchSummary('cleanup', summary), summary.failed.length > 0 ? 'danger' : 'primary')
     await accountStore.fetchAccounts()
   }
   finally {
@@ -1383,6 +1579,42 @@ async function handleTestCaptureConfig() {
   }
 }
 
+// ==================== 微信 code 定时刷新 ====================
+const localAutoCodeRefresh = ref<AutoCodeRefreshConfig>({ enabled: true, intervalMinutes: 2, maxRetries: 8 })
+const autoCodeRefreshSaving = ref(false)
+
+async function fetchAutoCodeRefresh() {
+  const result = await settingStore.fetchAutoCodeRefresh()
+  if (!result.ok) {
+    showAlert(`读取刷新设置失败: ${result.error || '未知错误'}`, 'danger')
+    return
+  }
+  localAutoCodeRefresh.value = { ...settingStore.autoCodeRefresh }
+}
+
+async function saveAutoCodeRefreshSettings() {
+  if (autoCodeRefreshSaving.value)
+    return
+  autoCodeRefreshSaving.value = true
+  try {
+    localAutoCodeRefresh.value.intervalMinutes = Math.max(1, Math.min(1440, Math.round(Number(localAutoCodeRefresh.value.intervalMinutes) || 2)))
+    localAutoCodeRefresh.value.maxRetries = Math.max(1, Math.min(100, Math.round(Number(localAutoCodeRefresh.value.maxRetries) || 8)))
+    const result = await settingStore.saveAutoCodeRefresh(localAutoCodeRefresh.value)
+    if (!result.ok)
+      throw new Error(result.error || '保存失败')
+    showAlert('微信code定时刷新设置已保存')
+  }
+  catch (error: any) {
+    showAlert(error.response?.data?.error || error.message || '刷新设置保存失败', 'danger')
+  }
+  finally {
+    autoCodeRefreshSaving.value = false
+  }
+}
+
+// “立即刷新”入口已从设置卡片中移除；取码仍由账号启动前的 settingStore.runAutoCodeRefresh(id)
+// 和定时调度负责，两处共用同一个 store 方法，这里不再包一层只给当前账号手动触发。
+
 const defaultDeviceInfo = {
   os: 'Windows',
   clientVersion: '',
@@ -1565,7 +1797,7 @@ async function handleResetSystemConfig() {
 <template>
   <div class="settings-page page-stack">
     <div class="settings-content">
-      <PageTabs :value="activeTab" @update:value="setActiveTab">
+      <PageTabs v-if="!isSystemSettingsPage" :value="activeTab" @update:value="setActiveTab">
         <NTab v-for="tab in tabs" :key="tab.key" :name="tab.key">
           <span class="inline-flex items-center gap-2">
             <span :class="tab.icon" />
@@ -1576,41 +1808,95 @@ async function handleResetSystemConfig() {
 
       <div class="settings-body">
         <!-- 账号管理 -->
-        <div v-if="activeTab === 'account'" class="space-y-4">
-          <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-              账号管理
-            </h3>
-            <div class="flex flex-wrap gap-2">
+        <div v-if="!isSystemSettingsPage && activeTab === 'account'" class="space-y-4">
+          <div class="account-toolbar border cartoon-card farm-card border-gray-100 rounded-2xl bg-white p-4 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+            <div class="account-actions">
+              <template v-if="!selectionMode">
+                <BaseButton
+                  class="account-action-btn"
+                  variant="success"
+                  title="为离线账号刷新 Code 并启动"
+                  @click="handleStartAll"
+                >
+                  <span class="i-carbon-play-filled" />
+                  <span class="account-action-label">全部启动</span>
+                </BaseButton>
+                <BaseButton
+                  class="account-action-btn"
+                  variant="danger"
+                  title="停止运行中的账号"
+                  @click="handleStopAll"
+                >
+                  <span class="i-carbon-stop-filled" />
+                  <span class="account-action-label">全部停止</span>
+                </BaseButton>
+              </template>
+
+              <!-- 多选模式：其余入口隐藏，避免同一批账号有两套语义不同的按钮；
+                   这三个动作不取固定宽度，按文案自己收缩 -->
+              <template v-else>
+                <BaseButton
+                  variant="success"
+                  :loading="bulkRunning && bulkKind === 'start'"
+                  title="刷新 Code 并启动选中的离线账号"
+                  @click="handleBatchStart"
+                >
+                  <span class="i-carbon-play-filled" />
+                  <span class="account-action-label">启动</span>
+                </BaseButton>
+                <BaseButton
+                  variant="danger"
+                  :loading="bulkRunning && bulkKind === 'stop'"
+                  title="停止选中的运行中账号"
+                  @click="handleBatchStop"
+                >
+                  <span class="i-carbon-stop-filled" />
+                  <span class="account-action-label">停止</span>
+                </BaseButton>
+                <BaseButton
+                  variant="danger"
+                  title="清理选中的账号（不管在线状态）"
+                  @click="handleBatchCleanup"
+                >
+                  <span class="i-carbon-trash-can" />
+                  <span class="account-action-label">清理</span>
+                </BaseButton>
+                <span class="account-selection-links">
+                  <button
+                    type="button"
+                    @click="selectAllAccounts"
+                  >
+                    全选
+                  </button>
+                  <button
+                    type="button"
+                    @click="invertSelectedAccounts"
+                  >
+                    反选
+                  </button>
+                </span>
+              </template>
+
               <BaseButton
-                variant="secondary"
-                size="sm"
-                :disabled="stoppedAccountsCount === 0"
-                @click="openClearStoppedConfirm"
+                class="account-selection-toggle"
+                :class="{ 'account-selection-toggle--inline': selectionMode }"
+                :variant="selectionMode ? 'primary' : 'secondary'"
+                :aria-pressed="selectionMode"
+                @click="toggleSelectionMode"
               >
-                <span class="i-carbon-trash-can mr-2" />
-                <span class="hidden sm:inline">一键清理</span>
-                <span class="sm:hidden">清理</span>
-                ({{ stoppedAccountsCount }})
-              </BaseButton>
-              <BaseButton
-                variant="primary"
-                size="sm"
-                @click="openAddModal"
-              >
-                <span class="i-carbon-add mr-2" />
-                添加账号
+                <span class="i-carbon-checkbox-checked" />
+                <span class="account-action-label">{{ selectionMode ? '取消' : '多选' }}</span>
               </BaseButton>
             </div>
           </div>
 
           <div v-if="accountsLoading && accounts.length === 0" class="py-8 text-center text-gray-500">
-            <span class="i-carbon-circle-dash mb-2 inline-block animate-spin text-2xl" />
+            <span class="i-svg-spinners-90-ring-with-bg mb-2 inline-block text-2xl" />
             <div>加载中...</div>
           </div>
 
-          <div v-else-if="accounts.length === 0" class="farm-card rounded-2xl bg-white py-12 text-center shadow-md dark:bg-gray-800">
-            <div class="i-carbon-user-avatar mb-4 inline-block text-4xl text-gray-400" />
+          <div v-else-if="accounts.length === 0" class="rounded-lg bg-white py-12 text-center shadow dark:bg-gray-800">
+            <span class="i-carbon-user-avatar mb-4 inline-block text-4xl text-gray-400" />
             <p class="mb-4 text-gray-500">
               暂无账号
             </p>
@@ -1623,100 +1909,105 @@ async function handleResetSystemConfig() {
             </BaseButton>
           </div>
 
-          <div v-else class="grid grid-cols-1 gap-4 lg:grid-cols-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div v-else class="account-grid">
+            <!-- 序号 0 固定是一张与账号卡同尺寸的“添加账号”占位卡，多选态也保留在同一个位置 -->
+            <button
+              type="button"
+              class="account-add-card border-2 rounded-2xl border-dashed bg-white text-gray-400 transition-colors hover:border-[var(--ui-primary)] dark:bg-gray-800 hover:text-[var(--ui-primary)]"
+              aria-label="添加账号"
+              title="添加账号"
+              @click="openAddModal"
+            >
+              <span class="i-carbon-add text-3xl" />
+            </button>
             <div
               v-for="acc in accounts"
               :key="acc.id"
-              class="cursor-pointer border cartoon-card rounded-2xl bg-white p-3 shadow-md transition-all duration-200 dark:bg-gray-800 sm:p-4"
-              :class="String(currentAccountId) === String(acc.id)
-                ? 'ring-2'
-                : 'border-transparent'"
-              :style="String(currentAccountId) === String(acc.id)
-                ? { borderColor: 'var(--theme-primary)', backgroundColor: 'rgba(var(--theme-primary-rgb, 59, 130, 246), 0.1)' }
-                : {}"
-              @click="selectAccount(acc)"
+              class="relative cursor-pointer border cartoon-card rounded-2xl bg-white p-3 shadow-md transition-all duration-200 dark:bg-gray-800"
+              :class="[
+                selectionMode && isAccountSelected(acc) ? 'account-card--selected' : '',
+                !selectionMode && String(currentAccountId) === String(acc.id) ? 'account-card--current' : '',
+              ]"
+              :role="selectionMode ? 'checkbox' : undefined"
+              :aria-checked="selectionMode ? isAccountSelected(acc) : undefined"
+              @click="selectionMode ? toggleAccountSelection(acc) : selectAccount(acc)"
             >
-              <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between sm:gap-4">
-                <div class="min-w-0 flex flex-1 items-center gap-3">
-                  <div class="h-10 w-10 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-100 sm:h-12 sm:w-12 dark:bg-gray-700">
-                    <img
-                      v-if="canShowAccountAvatar(acc)"
-                      :src="getAccountAvatar(acc)"
-                      class="h-full w-full object-cover"
-                      @error="handleAccountAvatarError(acc)"
-                    >
-                    <span v-else class="i-carbon-user text-xl text-gray-400 sm:text-2xl" />
-                  </div>
-                  <div class="min-w-0 flex-1">
-                    <h4 class="truncate text-base font-bold sm:text-lg">
-                      {{ acc.name || acc.nick || acc.id }}
-                    </h4>
-                    <div class="mt-0.5 flex flex-wrap items-center gap-1.5">
-                      <span
-                        v-if="acc.platform"
-                        class="rounded px-1.5 py-0.5 text-[10px] leading-tight font-medium"
-                        :class="getPlatformClass(acc.platform)"
-                      >
-                        {{ getPlatformLabel(acc.platform) }}
-                      </span>
-                      <span class="truncate text-xs text-gray-500 sm:text-sm">
-                        {{ acc.uin || '未绑定' }}
-                      </span>
-                    </div>
-                  </div>
-                </div>
-                <div class="flex items-center justify-end gap-2 sm:flex-col sm:items-end">
-                  <span class="flex items-center gap-1 text-xs text-gray-500 sm:hidden">
-                    <div class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
-                    {{ acc.running ? '运行中' : '已停止' }}
-                  </span>
-                  <BaseButton
-                    variant="secondary"
-                    size="sm"
-                    class="border rounded-full shadow-sm transition-all duration-500 ease-in-out sm:w-20 active:scale-95"
-                    :class="acc.running ? 'border-red-200 bg-red-50 text-red-600 hover:bg-red-100 focus:ring-red-500 active:border-red-300 dark:border-red-800 dark:bg-red-900/20 dark:text-red-400 dark:hover:bg-red-900/30 dark:focus:ring-red-500 dark:active:border-red-700' : 'border-green-200 bg-green-50 text-green-600 hover:bg-green-100 focus:ring-green-500 active:border-green-300 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400 dark:hover:bg-green-900/30 dark:focus:ring-green-500 dark:active:border-green-700'"
-                    @click="toggleAccount(acc)"
+              <!-- 勾选框沿用「个人」栏地块的 selection-cue：右上角 22px 圆角方框，选中后变实心 -->
+              <span
+                v-if="selectionMode"
+                class="account-select-cue"
+                :class="{ 'is-selected': isAccountSelected(acc) }"
+                aria-hidden="true"
+              >
+                <span v-if="isAccountSelected(acc)" class="i-carbon-checkmark" />
+              </span>
+
+              <div class="min-w-0 flex items-center gap-3 pr-7">
+                <div class="h-11 w-11 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+                  <img
+                    v-if="canShowAccountAvatar(acc)"
+                    :src="getAccountAvatar(acc)"
+                    class="h-full w-full object-cover"
+                    @error="handleAccountAvatarError(acc)"
                   >
-                    <span class="mr-1" :class="acc.running ? 'i-carbon-stop-filled' : 'i-carbon-play-filled'" />
-                    {{ acc.running ? '停止' : '启动' }}
-                  </BaseButton>
+                  <span v-else class="i-carbon-user text-xl text-gray-400" />
+                </div>
+                <div class="min-w-0 flex-1">
+                  <h4 class="truncate text-base font-bold">
+                    {{ acc.name || acc.nick || acc.id }}
+                  </h4>
+                  <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                    <span
+                      v-if="acc.platform"
+                      class="rounded px-1.5 py-0.5 text-xs leading-tight font-medium"
+                      :class="getPlatformClass(acc.platform)"
+                    >
+                      {{ getPlatformLabel(acc.platform) }}
+                    </span>
+                    <!-- 状态徽标与下方启动/停止按钮读同一个字段，避免“已停止”却显示停止 -->
+                    <span class="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
+                      <span class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
+                      {{ acc.running ? '运行中' : '已停止' }}
+                    </span>
+                  </div>
                 </div>
               </div>
 
-              <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 sm:mt-4 dark:border-gray-700 sm:pt-4">
-                <div class="hidden items-center gap-2 text-sm text-gray-500 sm:flex">
-                  <span class="flex items-center gap-1">
-                    <div class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
-                    {{ acc.running ? '运行中' : '已停止' }}
-                  </span>
-                </div>
-
-                <div class="flex flex-1 justify-end gap-1 sm:flex-initial sm:gap-2">
-                  <BaseButton
-                    variant="ghost"
-                    class="min-h-[36px] min-w-[36px] !p-2"
-                    title="设置"
-                    @click="openSettings(acc)"
-                  >
-                    <span class="i-carbon-settings" />
-                  </BaseButton>
-                  <BaseButton
-                    variant="ghost"
-                    class="min-h-[36px] min-w-[36px] !p-2"
-                    title="编辑"
-                    @click="openEditModal(acc)"
-                  >
-                    <span class="i-carbon-edit" />
-                  </BaseButton>
-                  <BaseButton
-                    variant="ghost"
-                    class="min-h-[36px] min-w-[36px] text-red-500 !p-2 dark:text-red-400 hover:text-red-600 dark:hover:text-red-300"
-                    title="删除"
-                    @click="handleDelete(acc)"
-                  >
-                    <span class="i-carbon-trash-can" />
-                  </BaseButton>
-                </div>
+              <!-- 三个动作等分整行宽度、内容居中；高亮态与“当前账号”只改描边颜色，
+                   边框宽度恒为 1px，避免切换多选时卡片忽高忽低 -->
+              <div
+                class="account-card__actions mt-3 flex items-stretch gap-3 border-t border-gray-100 pt-2 dark:border-gray-700"
+                :class="{ 'is-inert': selectionMode }"
+                :aria-hidden="selectionMode ? 'true' : undefined"
+              >
+                <BaseButton
+                  :variant="acc.running ? 'soft-danger' : 'soft-success'"
+                  class="account-card-btn !px-1"
+                  :disabled="isAccountPending(acc)"
+                  :title="acc.running ? '停止' : '启动'"
+                  @click="toggleAccount(acc)"
+                >
+                  <span class="mr-1" :class="acc.running ? 'i-carbon-stop-filled' : 'i-carbon-play-filled'" />
+                  <span>{{ acc.running ? '停止' : '启动' }}</span>
+                </BaseButton>
+                <BaseButton
+                  variant="secondary"
+                  class="account-card-btn !px-1"
+                  title="凭据管理"
+                  @click="openEditModal(acc)"
+                >
+                  <span class="i-carbon-password mr-1" />
+                  <span>凭据</span>
+                </BaseButton>
+                <BaseButton
+                  variant="soft-danger"
+                  class="account-card-btn !px-1"
+                  title="清理该账号"
+                  @click="handleDelete(acc)"
+                >
+                  <span class="i-carbon-trash-can mr-1" />
+                  <span>清理</span>
+                </BaseButton>
               </div>
             </div>
           </div>
@@ -1743,8 +2034,8 @@ async function handleResetSystemConfig() {
           <ConfirmModal
             :show="showClearStoppedConfirm"
             :loading="clearStoppedLoading"
-            title="一键清理已停止账号"
-            :message="`确定要清理 ${stoppedAccountsCount} 个已停止的账号吗？此操作不可恢复！`"
+            title="清理账号"
+            :message="`确定要清理 ${pendingCleanupIds.length} 个账号吗？运行中的账号会先停止，此操作不可恢复！`"
             confirm-text="确认清理"
             type="danger"
             @close="!clearStoppedLoading && (showClearStoppedConfirm = false)"
@@ -1754,7 +2045,7 @@ async function handleResetSystemConfig() {
         </div>
 
         <!-- 策略设置 -->
-        <div v-else-if="activeTab === 'strategy'" class="space-y-4">
+        <div v-else-if="!isSystemSettingsPage && activeTab === 'strategy'" class="space-y-4">
           <div class="flex items-center justify-between">
             <h3 class="flex items-center gap-2 text-lg text-gray-900 font-bold dark:text-gray-100">
               <div class="i-fas-cog text-lg" />
@@ -2005,7 +2296,7 @@ async function handleResetSystemConfig() {
         </div>
 
         <!-- 自动控制 -->
-        <div v-else-if="activeTab === 'automation'" class="space-y-4">
+        <div v-else-if="!isSystemSettingsPage && activeTab === 'automation'" class="space-y-4">
           <div class="flex items-center justify-between">
             <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
               自动控制
@@ -2036,45 +2327,31 @@ async function handleResetSystemConfig() {
         </div>
 
         <!-- 系统设置 -->
-        <div v-else-if="activeTab === 'system'" class="space-y-4">
-          <h3 class="text-lg text-gray-900 font-bold dark:text-gray-100">
-            系统设置
-          </h3>
-
-          <section class="farm-card rounded-lg p-4">
-            <div class="mb-3 flex items-center gap-2">
-              <span class="i-carbon-information text-lg text-blue-600 dark:text-blue-400" />
-              <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                版本信息
-              </h4>
-            </div>
-            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <div class="flex items-center justify-between rounded-lg bg-gray-50/70 px-3 py-2 text-sm dark:bg-gray-900/30">
-                <span class="text-gray-500 dark:text-gray-400">Web</span>
-                <strong class="text-gray-900 dark:text-gray-100">v{{ webVersion }}</strong>
-              </div>
-              <div class="flex items-center justify-between rounded-lg bg-gray-50/70 px-3 py-2 text-sm dark:bg-gray-900/30">
-                <span class="text-gray-500 dark:text-gray-400">Core</span>
-                <span v-if="coreVersionLoading" class="text-gray-500 dark:text-gray-400">读取中...</span>
-                <strong v-else-if="coreVersion" class="text-gray-900 dark:text-gray-100">v{{ coreVersion }}</strong>
-                <span v-else class="text-rose-600 dark:text-rose-400">{{ coreVersionError }}</span>
-              </div>
-            </div>
-          </section>
-
+        <div v-else-if="isSystemSettingsPage" class="space-y-4">
           <div class="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
             <section class="farm-card rounded-lg p-4">
-              <div class="mb-4 flex items-start gap-3">
-                <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/25 dark:text-blue-400">
-                  <span class="i-carbon-settings-adjust text-xl" />
+              <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                <div class="min-w-0 flex items-start gap-3">
+                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/25 dark:text-blue-400">
+                    <span class="i-carbon-settings-adjust text-xl" />
+                  </div>
+                  <div>
+                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                      运行环境
+                    </h4>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      服务器连接、时区与客户端设备参数
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                    运行环境
-                  </h4>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    服务器连接、时区与客户端设备参数
-                  </p>
+                <!-- 动作入口集中在右上角，卡片底部不再留一条只放按钮的边栏 -->
+                <div class="ml-auto flex shrink-0 items-center gap-2">
+                  <BaseButton variant="secondary" size="sm" :disabled="systemConfigLoading" :loading="systemConfigSaving" @click="handleResetSystemConfig">
+                    重置
+                  </BaseButton>
+                  <BaseButton variant="primary" size="sm" :disabled="systemConfigLoading" :loading="systemConfigSaving" @click="handleSaveSystemConfig">
+                    保存运行环境
+                  </BaseButton>
                 </div>
               </div>
 
@@ -2195,31 +2472,34 @@ async function handleResetSystemConfig() {
                     placeholder="Mozilla/5.0 ..."
                   />
                 </div>
-
-                <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-                  <BaseButton variant="secondary" size="sm" :loading="systemConfigSaving" @click="handleResetSystemConfig">
-                    重置
-                  </BaseButton>
-                  <BaseButton variant="primary" size="sm" :loading="systemConfigSaving" @click="handleSaveSystemConfig">
-                    保存运行环境
-                  </BaseButton>
-                </div>
               </div>
             </section>
 
             <div class="min-w-0 space-y-4">
               <section class="farm-card rounded-lg p-4">
-                <div class="mb-4 flex items-start gap-3">
-                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/25 dark:text-violet-400">
-                    <span class="i-carbon-login text-xl" />
+                <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0 flex items-start gap-3">
+                    <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/25 dark:text-violet-400">
+                      <span class="i-carbon-login text-xl" />
+                    </div>
+                    <div>
+                      <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                        登录设置
+                      </h4>
+                      <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        控制添加账号时可用的扫码登录方式
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                      登录设置
-                    </h4>
-                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      控制添加账号时可用的扫码登录方式
-                    </p>
+                  <div class="ml-auto flex shrink-0 items-center gap-2">
+                    <BaseButton
+                      variant="primary"
+                      size="sm"
+                      :loading="loginSettingsSaving"
+                      @click="handleSaveLoginSettings"
+                    >
+                      保存登录设置
+                    </BaseButton>
                   </div>
                 </div>
 
@@ -2249,32 +2529,48 @@ async function handleResetSystemConfig() {
                     placeholder="请输入 NapCat 接口签名"
                   />
                 </div>
-
-                <div class="mt-3 flex justify-end border-t pt-3 dark:border-gray-700">
-                  <BaseButton
-                    variant="primary"
-                    size="sm"
-                    :loading="loginSettingsSaving"
-                    @click="handleSaveLoginSettings"
-                  >
-                    保存登录设置
-                  </BaseButton>
-                </div>
               </section>
 
+              <AutoCodeRefreshCard
+                v-model:config="localAutoCodeRefresh"
+                :loading="settingStore.autoCodeRefreshLoading"
+                :saving="autoCodeRefreshSaving"
+                @save="saveAutoCodeRefreshSettings"
+              />
+
               <section class="farm-card rounded-lg p-4">
-                <div class="mb-4 flex items-start gap-3">
-                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-cyan-50 text-cyan-600 dark:bg-cyan-900/25 dark:text-cyan-400">
-                    <span class="i-carbon-data-connected text-xl" />
+                <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0 flex items-start gap-3">
+                    <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-cyan-50 text-cyan-600 dark:bg-cyan-900/25 dark:text-cyan-400">
+                      <span class="i-carbon-data-connected text-xl" />
+                    </div>
+                    <div>
+                      <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                        抓包登录
+                      </h4>
+                      <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        内置 MITM 代理，通过抓包获取 Code 登录（仅嵌入模式）
+                        <span v-if="localCaptureConfig.running" class="ml-1 text-green-600">· 代理运行中</span>
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                      抓包登录
-                    </h4>
-                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      内置 MITM 代理，通过抓包获取 Code 登录（仅嵌入模式）
-                      <span v-if="localCaptureConfig.running" class="ml-1 text-green-600">· 代理运行中</span>
-                    </p>
+                  <div class="ml-auto flex shrink-0 items-center gap-2">
+                    <BaseButton
+                      variant="outline"
+                      size="sm"
+                      :loading="captureConfigTesting"
+                      @click="handleTestCaptureConfig"
+                    >
+                      连通性自检
+                    </BaseButton>
+                    <BaseButton
+                      variant="primary"
+                      size="sm"
+                      :loading="captureConfigSaving"
+                      @click="handleSaveCaptureConfig"
+                    >
+                      保存抓包设置
+                    </BaseButton>
                   </div>
                 </div>
 
@@ -2286,39 +2582,32 @@ async function handleResetSystemConfig() {
                     <BaseSwitch v-model="localCaptureConfig.autoImportQqGids" label="QQ 好友 GID 自动导入" :disabled="!localCaptureConfig.enabled" />
                   </div>
                 </div>
-
-                <div class="mt-3 flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-                  <BaseButton
-                    variant="outline"
-                    size="sm"
-                    :loading="captureConfigTesting"
-                    @click="handleTestCaptureConfig"
-                  >
-                    连通性自检
-                  </BaseButton>
-                  <BaseButton
-                    variant="primary"
-                    size="sm"
-                    :loading="captureConfigSaving"
-                    @click="handleSaveCaptureConfig"
-                  >
-                    保存抓包设置
-                  </BaseButton>
-                </div>
               </section>
 
               <section class="farm-card rounded-lg p-4">
-                <div class="mb-4 flex items-start gap-3">
-                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/25 dark:text-amber-400">
-                    <span class="i-carbon-password text-xl" />
+                <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0 flex items-start gap-3">
+                    <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-900/25 dark:text-amber-400">
+                      <span class="i-carbon-password text-xl" />
+                    </div>
+                    <div>
+                      <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                        修改管理员密码
+                      </h4>
+                      <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        更新后台管理登录凭据
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                      修改管理员密码
-                    </h4>
-                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      更新后台管理登录凭据
-                    </p>
+                  <div class="ml-auto flex shrink-0 items-center gap-2">
+                    <BaseButton
+                      variant="primary"
+                      size="sm"
+                      :loading="passwordSaving"
+                      @click="handleChangePassword"
+                    >
+                      保存密码设置
+                    </BaseButton>
                   </div>
                 </div>
 
@@ -2342,31 +2631,42 @@ async function handleResetSystemConfig() {
                     placeholder="再次输入新密码"
                   />
                 </div>
-
-                <div class="mt-3 flex items-center justify-end border-t pt-3 dark:border-gray-700">
-                  <BaseButton
-                    variant="primary"
-                    size="sm"
-                    :loading="passwordSaving"
-                    @click="handleChangePassword"
-                  >
-                    修改管理员密码
-                  </BaseButton>
-                </div>
               </section>
 
               <section class="farm-card rounded-lg p-4">
-                <div class="mb-4 flex items-start gap-3">
-                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600 dark:bg-green-900/25 dark:text-green-400">
-                    <span class="i-carbon-notification text-xl" />
+                <div class="mb-4 flex flex-wrap items-start justify-between gap-3">
+                  <div class="min-w-0 flex items-start gap-3">
+                    <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600 dark:bg-green-900/25 dark:text-green-400">
+                      <span class="i-carbon-notification text-xl" />
+                    </div>
+                    <div>
+                      <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                        下线提醒
+                      </h4>
+                      <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                        配置账号离线后的通知与清理
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                      下线提醒
-                    </h4>
-                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      配置账号离线后的通知与清理
-                    </p>
+                  <div class="ml-auto flex shrink-0 items-center gap-2">
+                    <BaseButton
+                      variant="secondary"
+                      size="sm"
+                      :loading="offlineTesting"
+                      :disabled="offlineSaving"
+                      @click="handleTestOffline"
+                    >
+                      测试通知
+                    </BaseButton>
+                    <BaseButton
+                      variant="primary"
+                      size="sm"
+                      :loading="offlineSaving"
+                      :disabled="offlineTesting"
+                      @click="handleSaveOffline"
+                    >
+                      保存下线提醒设置
+                    </BaseButton>
                   </div>
                 </div>
 
@@ -2438,27 +2738,6 @@ async function handleResetSystemConfig() {
                     class="sm:col-span-2"
                   />
                 </div>
-
-                <div class="mt-3 flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-                  <BaseButton
-                    variant="secondary"
-                    size="sm"
-                    :loading="offlineTesting"
-                    :disabled="offlineSaving"
-                    @click="handleTestOffline"
-                  >
-                    测试通知
-                  </BaseButton>
-                  <BaseButton
-                    variant="primary"
-                    size="sm"
-                    :loading="offlineSaving"
-                    :disabled="offlineTesting"
-                    @click="handleSaveOffline"
-                  >
-                    保存下线提醒设置
-                  </BaseButton>
-                </div>
               </section>
             </div>
           </div>
@@ -2478,3 +2757,173 @@ async function handleResetSystemConfig() {
     />
   </div>
 </template>
+
+<style scoped>
+/* 账号工具栏与个人页农场工具栏使用同一套尺寸：按钮保持默认 medium，行内间距 8px，
+   窄屏时横向滚动而不是把按钮压小。 */
+.account-actions {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: nowrap;
+  gap: 8px;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.account-actions :deep(.n-button) {
+  flex: 0 0 auto;
+  width: auto;
+}
+
+.account-actions :deep(.n-button__content) {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.account-action-label {
+  white-space: nowrap;
+}
+
+/* 主按钮统一宽度，对齐“个人”栏“一键打理”（naive medium 0 14px 内边距 + 18px 图标 + 4 字文案），文案靠左 */
+.account-action-btn {
+  min-width: 105px;
+  justify-content: flex-start;
+}
+
+.account-action-btn :deep(.n-button__content) {
+  justify-content: flex-start;
+}
+
+/* “多选/取消”靠右；多选态由“全选/反选”接手 auto margin，取消按钮紧跟其后，不各自吃一段空白 */
+.account-selection-toggle {
+  margin-left: auto;
+}
+
+.account-selection-toggle--inline {
+  margin-left: 0;
+}
+
+/* 全选/反选是文本入口，不占按钮尺寸，与“多选”一起靠右。 */
+.account-selection-links {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  align-items: center;
+  gap: 14px;
+}
+
+.account-selection-links button {
+  color: var(--ui-primary);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    transform 120ms ease,
+    color 120ms ease,
+    opacity 120ms ease;
+}
+
+.account-selection-links button:hover {
+  opacity: 0.72;
+}
+
+.account-selection-links button:active {
+  transform: scale(0.9);
+  opacity: 0.6;
+}
+
+.account-selection-links button:focus-visible {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 2px;
+}
+
+/* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
+.account-select-cue {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 1.5px solid #257458;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 2px 7px rgba(40, 62, 53, 0.14);
+  color: #257458;
+  font-size: 10px;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease;
+}
+
+.account-select-cue.is-selected {
+  border-color: #257458;
+  background: #257458;
+  color: #fff;
+}
+
+/* 多选勾选中与“当前账号”都靠描边表达。不能再用内联 borderColor/background 或 ring-*：
+   全局 `.cartoon-card:not(.land-card)` 的 border/background/box-shadow 都带 !important，会把它们顶掉。
+   厚度直接对齐「背包」栏多选（解锁）态：只有 2px 一圈 outline。
+   所以这里不能再给 border 上色、也不叠外发光，否则 1px 边框 + 2px outline + 光晕
+   叠在一起会比背包栏明显粗一档。
+   描边用 outline（不占布局），边框宽度恒为全局的 1px：卡片高度由内容决定，
+   一旦边框在 1px/2px 之间切换，整行卡片会跟着变高变矮（切多选、切换当前账号时最明显）。 */
+.cartoon-card.account-card--selected {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 0;
+  box-shadow: 0 12px 24px rgba(37, 116, 88, 0.16) !important;
+}
+
+/* 当前账号用同一套描边但收一档，避免和“已勾选”混淆。 */
+.cartoon-card.account-card--current {
+  outline: 2px solid color-mix(in srgb, var(--ui-primary) 45%, transparent);
+  outline-offset: 0;
+  box-shadow: var(--ui-shadow-sm) !important;
+}
+
+/* 卡片宽度不写死：每列最小 220px，剩余宽度平均分给各列，
+   浏览器变宽时自动多排一列并占满整行，不会在右侧留一条空档。 */
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+/* 卡片三个动作：等分整行宽度，按钮高度比工具栏按钮矮一档（36px → 30px），
+   字号跟着收一档，保证窄卡片里“停止/凭据/清理”都能排下。 */
+.account-card-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 30px;
+  min-height: 30px;
+  font-size: 13px;
+}
+
+.account-card-btn :deep(.n-button__content) {
+  white-space: nowrap;
+}
+
+/* 多选时卡片只响应“勾选”这一件事，行内按钮置灰并把点击让给卡片。 */
+.account-card__actions.is-inert {
+  pointer-events: none;
+  opacity: 0.45;
+}
+
+/* 添加账号占位卡：网格默认 stretch，同排会自动长到账号卡的高度，
+   单列时用 min-height 兜底，避免塌成一条。 */
+.account-add-card {
+  display: flex;
+  min-height: 120px;
+  align-items: center;
+  justify-content: center;
+  border-color: var(--ui-border);
+  cursor: pointer;
+}
+</style>

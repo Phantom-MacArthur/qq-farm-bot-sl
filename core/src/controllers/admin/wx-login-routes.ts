@@ -7,6 +7,7 @@ import type { ScanStatus, WxLoginSession } from '../../services/wx-login/service
 export { };
 
 const { createAuthRequired } = require('./middleware');
+const wxLoginAdapter = require('../../services/wx-login/adapter');
 
 const TARGET_APP_ID = 'wx5306c5978fdb76e4';
 const TASK_TTL_MS = 110_000;
@@ -32,6 +33,14 @@ async function poll(task: Task): Promise<void> { if (task.status === 'authorized
 async function confirm(task: Task): Promise<void> {
     if (task.status !== 'authorized') throw new Error('Waiting for scan authorization');
     await wxLogin.confirm(task.session);
+    // 扫码会话本身只活 110 秒，而用户还要在弹窗里补备注；凭证快照必须活到账号持久化那一刻。
+    wxLoginAdapter.registerPendingWxInfo(task.id, {
+        wxid: task.session.openid || '',
+        loginBuffer: task.session.loginBuffer || '',
+        refreshtoken: task.session.refreshtoken || '',
+        accesstoken: task.session.accesstoken || '',
+        nickname: task.session.nickname || '',
+    });
     task.status = 'ready_for_code';
 }
 async function consumeCode(task: Task): Promise<void> { if (task.status !== 'ready_for_code') throw new Error('Login code is not ready'); task.code = await wxLogin.issueCode(task.session, TARGET_APP_ID); }
@@ -44,11 +53,13 @@ function mountWxLoginRoutes(app: Application, ctx: AdminContext): void {
     app.delete('/api/wx-login/tasks/:taskId', (req, res) => {
         const task = tasks.get(String(req.params.taskId || ''));
         if (!task) return res.status(404).json({ ok: false, error: 'Login task not found or expired' });
+        // 显式放弃这次扫码，顺带清掉尚未被账号消费的凭证快照。
+        wxLoginAdapter.releasePendingWxInfo(task.id);
         destroy(task);
         return res.json({ ok: true });
     });
     app.get('/api/wx-login/tasks/:taskId/status', async (req, res) => { const task = findTask(req, res); if (!task) return; try { if (!task.pending) task.pending = poll(task).finally(() => { task.pending = undefined; }); await task.pending; const data = publicTask(task); if (task.status === 'cancelled' || task.status === 'expired') destroy(task); res.json({ ok: true, data }); } catch (error: any) { task.status = 'failed'; destroy(task); res.status(502).json({ ok: false, error: error.message }); } });
     app.post('/api/wx-login/tasks/:taskId/confirm', async (req, res) => { const task = findTask(req, res); if (!task) return; try { if (!task.pending) task.pending = confirm(task).finally(() => { task.pending = undefined; }); await task.pending; res.json({ ok: true, data: publicTask(task) }); } catch (error: any) { task.status = 'failed'; destroy(task); res.status(502).json({ ok: false, error: error.message }); } });
-    app.post('/api/wx-login/tasks/:taskId/code', async (req, res) => { const task = findTask(req, res); if (!task) return; try { if (!task.pending) task.pending = consumeCode(task).finally(() => { task.pending = undefined; }); await task.pending; const data = { openid: task.session.openid, app_id: TARGET_APP_ID, code: task.code, nickname: task.session.nickname || '', err_msg: 'login:ok' }; destroy(task); res.json({ ok: true, data }); } catch (error: any) { task.status = 'failed'; destroy(task); res.status(502).json({ ok: false, error: error.message }); } });
+    app.post('/api/wx-login/tasks/:taskId/code', async (req, res) => { const task = findTask(req, res); if (!task) return; try { if (!task.pending) task.pending = consumeCode(task).finally(() => { task.pending = undefined; }); await task.pending; const data = { session_id: task.id, openid: task.session.openid, app_id: TARGET_APP_ID, code: task.code, nickname: task.session.nickname || '', err_msg: 'login:ok' }; destroy(task); res.json({ ok: true, data }); } catch (error: any) { task.status = 'failed'; destroy(task); res.status(502).json({ ok: false, error: error.message }); } });
 }
 module.exports = { mountWxLoginRoutes };

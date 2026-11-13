@@ -9,6 +9,7 @@ const { createDataProvider } = require('./data-provider');
 const { createReloginReminderService } = require('./relogin-reminder');
 const { createRuntimeState } = require('./runtime-state');
 const { createWorkerManager } = require('./worker-manager');
+const { createAutoCodeRefreshService } = require('./auto-code-refresh');
 
 const OPERATION_KEYS = ['harvest', 'farming', 'fertilize', 'plant', 'steal', 'helpFarming', 'taskClaim', 'sell', 'upgrade'];
 
@@ -66,6 +67,19 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         sendConfiguredPush,
     } = reloginReminder;
 
+    // worker 控制能力要等 createWorkerManager 之后才存在，而自动刷新服务又必须先于
+    // worker 管理器建好（掉线钩子会回调它），所以这里用一个晚绑定的句柄。
+    const workerControls: { restartWorker?: (account: any) => void } = {};
+
+    const autoCodeRefresh = createAutoCodeRefreshService({
+        store,
+        getAccounts: store.getAccounts,
+        addOrUpdateAccount: store.addOrUpdateAccount,
+        resolveWorkerControls: () => workerControls,
+        log,
+        addAccountLog,
+    });
+
     const { startWorker, stopWorker, restartWorker, callWorkerApi } = createWorkerManager({
         fork,
         WorkerThread: Worker,
@@ -84,6 +98,8 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         sendConfiguredPush,
         addOrUpdateAccount: store.addOrUpdateAccount,
         deleteAccount: store.deleteAccount,
+        scheduleAutoRelogin: autoCodeRefresh.scheduleRelogin,
+        refreshAccountCode: autoCodeRefresh.refreshAccountCode,
         onStatusSync: (accountId: string, status: any, accountName?: string) => {
             runtimeEvents.emit('status', { accountId, status, accountName });
             if (onStatusSync) onStatusSync(accountId, status, accountName);
@@ -93,6 +109,8 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
             if (onLog) onLog(entry, accountId, accountName);
         },
     });
+    workerControls.restartWorker = restartWorker;
+
     const dataProvider = createDataProvider({
         workers,
         globalLogs: GLOBAL_LOGS,
@@ -111,6 +129,12 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         startWorker,
         stopWorker,
         restartWorker,
+        scheduleAutoCodeRefresh: autoCodeRefresh.scheduleAccount,
+        rescheduleAllAutoCodeRefresh: autoCodeRefresh.rescheduleAll,
+        stopAutoCodeRefresh: autoCodeRefresh.stopAccount,
+        pauseAutoCodeRefreshPolling: autoCodeRefresh.pausePolling,
+        resumeAutoCodeRefreshPolling: autoCodeRefresh.resumePolling,
+        refreshAccountCode: autoCodeRefresh.refreshAccountCode,
     });
 
     runtimeEvents.on('log', (entry: any) => {
@@ -143,11 +167,24 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         }
     }
 
-    function startAllAccounts(): void {
+    /**
+     * 启动所有账号。
+     *
+     * 带持久化微信凭证的账号先刷一次 Code 再启动：隔夜后旧 Code 基本已经失效，
+     * 直接启动只会白白挨一个 ws_400。刷新失败时退回用现有 Code 启动，
+     * 让失效恢复链路接手，不阻断其他账号。
+     */
+    async function startAllAccounts(): Promise<void> {
         const accounts = (store.getAccounts().accounts || []);
         if (accounts.length > 0) {
             log('系统', `发现 ${accounts.length} 个账号，正在启动...`);
-            accounts.forEach((acc: any) => startWorker(acc));
+            for (const acc of accounts) {
+                if (acc.platform === 'wx' && acc.loginBuffer) {
+                    const refreshed = await autoCodeRefresh.refreshAccountCode(acc.id, 'startup');
+                    if (refreshed) continue;
+                }
+                startWorker(acc);
+            }
         } else {
             log('系统', '未发现账号，请访问管理面板添加账号');
         }
@@ -168,8 +205,10 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         }
 
         if (shouldAutoStartAccounts) {
-            startAllAccounts();
+            await startAllAccounts();
         }
+        // 调度必须在建号、启动、重启后都重建，不能因为历史配置让已删账号的任务继续跑。
+        autoCodeRefresh.rescheduleAll();
     }
 
     function stopAllAccounts(): void {

@@ -428,17 +428,19 @@ function scheduleQqFriendCollection(ctx: AdminContext, options: {
 
 function scheduleCapturedAccountStart(ctx: AdminContext, flow: CaptureFlow, account: any, isUpdate: boolean, wasRunning: boolean): void {
     const timer = setTimeout(() => {
-        try {
-            if (isUpdate) {
-                if (wasRunning) ctx.provider.restartAccount(account.id);
-            } else {
-                ctx.provider.startAccount(account.id);
+        void (async () => {
+            try {
+                if (isUpdate) {
+                    if (wasRunning) ctx.provider.restartAccount(account.id);
+                } else {
+                    await ctx.provider.startAccount(account.id);
+                }
+            } catch (error: any) {
+                const startError = error.message || '账号启动失败';
+                if (flow.result) flow.result.startError = startError;
+                captureLog('warn', '抓包登录账号已添加，但延迟启动失败', { accountId: account.id, error: startError });
             }
-        } catch (error: any) {
-            const startError = error.message || '账号启动失败';
-            if (flow.result) flow.result.startError = startError;
-            captureLog('warn', '抓包登录账号已添加，但延迟启动失败', { accountId: account.id, error: startError });
-        }
+        })();
     }, CAPTURE_ACCOUNT_START_DELAY_MS);
     if (timer && typeof timer.unref === 'function') timer.unref();
 }
