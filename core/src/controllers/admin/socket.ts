@@ -61,23 +61,8 @@ function setupSocketIO(ctx: AdminContext): void {
         cors: {
             origin: '*',
             methods: ['GET', 'POST'],
-            allowedHeaders: ['x-admin-token', 'x-account-id'],
+            allowedHeaders: ['x-account-id'],
         },
-    });
-
-    ctx.io.use((socket: any, next: (err?: Error) => void) => {
-        const authToken = socket.handshake.auth && socket.handshake.auth.token
-            ? String(socket.handshake.auth.token)
-            : '';
-        const headerToken = socket.handshake.headers && socket.handshake.headers['x-admin-token']
-            ? String(socket.handshake.headers['x-admin-token'])
-            : '';
-        const token = authToken || headerToken;
-        if (!token || !ctx.tokens.has(token)) {
-            return next(new Error('Unauthorized'));
-        }
-        socket.data.adminToken = token;
-        return next();
     });
 
     ctx.io.on('connection', (socket: any) => {

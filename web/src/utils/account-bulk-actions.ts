@@ -4,13 +4,12 @@ export type AccountBatchKind = 'start' | 'stop' | 'cleanup'
 
 export interface AccountBatchOutcome {
   ok: boolean
-  confirmed?: boolean
   error?: string
 }
 
 export interface AccountBatchSummary {
+  /** 启动：请求被服务端接受的账号数；停止：已确认进程退出的账号数 */
   succeeded: number
-  unconfirmed: number
   failed: { id: string, error: string }[]
 }
 
@@ -76,14 +75,30 @@ export function toggleSelectedAccountIds(selectedIds: Iterable<string>, id: stri
 }
 
 /**
- * 逐个执行批量动作：取码与拉起 worker 都吃顺序，并发会把登录网关打满，
- * 也让失败无法定位到账号。单个账号失败不中断整批。
+ * 把单个账号的操作结果归成成功或失败两种。
+ * 启动不再等在线状态，只要请求被接受就算成功；停止还要等到进程真的退出，
+ * 等不到就归入失败并给出原因，不再返回“未确认”这种含义不明、又不属于成败任何一种的中间结果。
+ */
+export function toAccountBatchOutcome(
+  result: { ok: boolean, confirmed?: boolean, error?: string },
+  unconfirmedError: string,
+): AccountBatchOutcome {
+  if (!result || result.ok !== true)
+    return { ok: false, error: String(result?.error || '操作失败') }
+  if (result.confirmed === false)
+    return { ok: false, error: unconfirmedError }
+  return { ok: true }
+}
+
+/**
+ * 逐个执行批量动作：取码和拉起 worker 都要排队，同时给多个账号发请求会把登录接口压满，
+ * 出错时也分不清是哪个账号。单个账号失败不中断整批。
  */
 export async function runAccountBatch(
   ids: string[],
   runOne: (id: string) => Promise<AccountBatchOutcome>,
 ): Promise<AccountBatchSummary> {
-  const summary: AccountBatchSummary = { succeeded: 0, unconfirmed: 0, failed: [] }
+  const summary: AccountBatchSummary = { succeeded: 0, failed: [] }
   for (const id of Array.isArray(ids) ? ids : []) {
     let outcome: AccountBatchOutcome
     try {
@@ -97,9 +112,6 @@ export async function runAccountBatch(
       continue
     }
     summary.succeeded += 1
-    // 请求已发出但服务端还没确认到位，不能和真正的成功混为一谈
-    if (outcome.confirmed === false)
-      summary.unconfirmed += 1
   }
   return summary
 }
@@ -111,8 +123,6 @@ export function formatAccountBatchSummary(
 ): string {
   const verb = BATCH_VERBS[kind]
   const parts = [`成功${verb} ${summary.succeeded} 个账号`]
-  if (summary.unconfirmed > 0)
-    parts.push(`${summary.unconfirmed} 个尚未确认到位`)
   if (summary.failed.length > 0)
     parts.push(`${summary.failed.length} 个失败：${summary.failed[0]?.error || '未知错误'}`)
   if (skipped > 0)

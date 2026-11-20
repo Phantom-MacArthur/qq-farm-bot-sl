@@ -2,7 +2,8 @@
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 
 /**
- * 一块地的卡片。结构固定为：编号与土地类型 / 作物 / 名称 / 时间或主状态 / 进度 / 状态图标。
+ * 一块地的卡片。结构固定为：标题栏（编号、土地类型、状态图标）/ 作物 / 名称 / 时间或主状态 / 进度。
+ * 状态图标整组在标题栏内居中，正对下方居中的作物图标；
  * 土地详情和作物详情分别通过土地类型标签与作物图标查看。
  */
 const props = withDefaults(defineProps<{
@@ -181,11 +182,31 @@ const allTags = computed(() => [
   ...needs.value.map(item => ({ ...item, group: 'need' as const, kind: item.key, image: '' })),
   ...traits.value.map(item => ({ ...item, group: 'trait' as const })),
 ])
-const mutationTags = computed(() => allTags.value.filter(item => item.kind === 'mutant'))
-const statusTags = computed(() => allTags.value.filter(item => item.kind !== 'mutant'))
 
 function markMutantFailed(key: string) {
   failedMutantIcons.value = new Set(failedMutantIcons.value).add(key)
+}
+
+/** 变异 tooltip 智能定位：默认向左展开，左侧放不下改向右，两边都放不下则居中并夹在视口内。 */
+function positionMutationTooltip(event: Event) {
+  const el = event.currentTarget as HTMLElement | null
+  if (!el)
+    return
+  const rect = el.getBoundingClientRect()
+  const margin = 10
+  const width = Math.min(240, window.innerWidth - margin * 2)
+  let left = -width
+  if (rect.right - width < margin) {
+    left = 0
+    if (rect.left + width > window.innerWidth - margin) {
+      left = rect.width / 2 - width / 2
+    }
+  }
+  const min = Math.max(margin, rect.left + left) - rect.left
+  const max = Math.min(window.innerWidth - margin - width, rect.right) - rect.left
+  left = Math.min(max, Math.max(min, left))
+  el.style.setProperty('--tip-w', `${width}px`)
+  el.style.setProperty('--tip-left', `${left}px`)
 }
 
 const interactive = computed(() => props.selectable)
@@ -355,7 +376,7 @@ const ariaLabel = computed(() => {
     @keydown.enter.prevent="activate"
     @keydown.space.prevent="activate"
   >
-    <header class="plot__top" :class="{ 'plot__top--wrapped-tags': statusTags.length > 1 }">
+    <header class="plot__top">
       <span class="plot__no">#{{ land.id }}</span>
       <button
         v-if="openable && !selectable"
@@ -368,23 +389,8 @@ const ariaLabel = computed(() => {
         {{ soil.short }}
       </button>
       <span v-else class="plot__soil" :title="soil.name">{{ soil.short }}</span>
-      <div v-if="mutationTags.length" class="plot__mutations">
-        <span
-          v-for="item in mutationTags"
-          :key="item.key"
-          class="plot__mutation"
-          :aria-label="`查看变异效果：${item.title}`"
-          role="img"
-        >
-          <img v-if="item.image" :src="item.image" alt="" @error="markMutantFailed(item.key)">
-          <span v-else :class="item.icon || 'i-carbon-star'" aria-hidden="true" />
-          <span class="plot__mutation-tooltip" role="tooltip">
-            <strong>变异</strong>&nbsp;&nbsp;<span>{{ item.title }}</span>
-          </span>
-        </span>
-      </div>
-      <div v-if="statusTags.length" class="plot__status-icons">
-        <template v-for="item in statusTags" :key="item.key">
+      <div v-if="allTags.length" class="plot__tags">
+        <template v-for="item in allTags" :key="item.key">
           <button
             v-if="item.group === 'need' && !selectable"
             type="button"
@@ -400,6 +406,19 @@ const ariaLabel = computed(() => {
           </button>
           <span v-else-if="item.group === 'need'" class="plot__need" :class="`is-${item.kind}`" :title="item.title">
             <span :class="item.icon" />
+          </span>
+          <span
+            v-else-if="item.kind === 'mutant'"
+            class="plot__mutation"
+            :aria-label="`查看变异效果：${item.title}`"
+            role="img"
+            @pointerenter="positionMutationTooltip"
+          >
+            <img v-if="item.image" :src="item.image" alt="" @error="markMutantFailed(item.key)">
+            <span v-else :class="item.icon || 'i-carbon-star'" aria-hidden="true" />
+            <span class="plot__mutation-tooltip" role="tooltip">
+              <strong>变异</strong>&nbsp;&nbsp;<span>{{ item.title }}</span>
+            </span>
           </span>
           <span v-else class="plot__trait" :class="`is-${item.kind}`" :title="item.title">
             <img v-if="item.image" :src="item.image" alt="" @error="markMutantFailed(item.key)">
@@ -608,7 +627,8 @@ const ariaLabel = computed(() => {
   display: grid;
   width: 100%;
   min-height: 24px;
-  grid-template-columns: auto auto minmax(24px, auto) minmax(0, 1fr) auto auto;
+  /* 编号 / 土地类型 / 状态图标组（剩余空间内居中，正对下方作物图标） / 合种标记 / 勾选框 */
+  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
   grid-auto-rows: minmax(24px, auto);
   align-items: center;
   column-gap: 4px;
@@ -649,33 +669,18 @@ const ariaLabel = computed(() => {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--soil-ink) 18%, transparent);
   outline: none;
 }
-.plot__mutations {
-  min-width: 0;
-  display: flex;
-  flex-wrap: nowrap;
-  align-items: center;
-  gap: 3px;
-  overflow-x: auto;
-  scrollbar-width: none;
-  grid-column: 3;
-  grid-row: 1;
-}
-.plot__mutations::-webkit-scrollbar {
-  display: none;
-}
-.plot__status-icons {
+/* 状态图标组：在标题栏内（编号/土质标签之后、合种标记之前的剩余空间）整组居中，
+   正对下方居中的作物图标；图标多时自动换行 */
+.plot__tags {
   min-width: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   align-content: center;
+  justify-content: center;
   gap: 3px;
-  grid-column: 4;
+  grid-column: 3;
   grid-row: 1;
-}
-.plot__top--wrapped-tags .plot__status-icons {
-  grid-column: 1 / -1;
-  grid-row: 2;
 }
 .plot__mutation {
   position: relative;
@@ -706,8 +711,9 @@ const ariaLabel = computed(() => {
   position: absolute;
   z-index: 20;
   top: calc(100% + 7px);
-  right: 0;
-  width: min(240px, calc(100vw - 24px));
+  /* 位置由 positionMutationTooltip 按视口空间计算：默认贴图标右缘向左展开（--tip-left: -宽度） */
+  left: var(--tip-left, calc(-1 * min(240px, 100vw - 20px)));
+  width: var(--tip-w, min(240px, calc(100vw - 24px)));
   box-sizing: border-box;
   padding: 8px 10px;
   border: 1px solid var(--ui-border-strong);
@@ -743,7 +749,7 @@ const ariaLabel = computed(() => {
   opacity: 1;
 }
 .plot__joint {
-  grid-column: 5;
+  grid-column: 4;
   grid-row: 1;
   display: inline-flex;
   align-items: center;
@@ -759,7 +765,7 @@ const ariaLabel = computed(() => {
   height: 16px;
   display: grid;
   flex: none;
-  grid-column: 6;
+  grid-column: 5;
   grid-row: 1;
   place-items: center;
   border: 1.5px solid color-mix(in srgb, var(--ui-primary) 42%, var(--ui-border));

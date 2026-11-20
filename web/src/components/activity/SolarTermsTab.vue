@@ -218,35 +218,4 @@ function claim() {
   opacity: 0.58;
   cursor: not-allowed;
 }
-
-@media (max-width: 760px) {
-  .solar-tab {
-    grid-template-columns: 1fr;
-    gap: 10px;
-    padding: 14px;
-  }
-
-  .term-rail {
-    grid-column: auto;
-  }
-
-  .solar-reward {
-    min-height: auto;
-    padding: 16px;
-    text-align: center;
-  }
-
-  .solar-reward__items {
-    justify-content: center;
-  }
-
-  .solar-reward button {
-    width: 96px;
-    min-height: 34px;
-    margin: 12px auto 0;
-    padding: 7px 10px;
-    border-radius: 8px;
-    font-size: 13px;
-  }
-}
 </style>

@@ -81,12 +81,17 @@ async function checkFarm(): Promise<boolean> {
     }
 }
 
-async function runMultiSeasonFertilizer(growingLandIds: any[], propagateErrors: boolean = false): Promise<void> {
-    if (!isAutomationOn('fertilizer_multi_season')) return;
+/** 多季补肥统一返回实际施肥地块数，供一键打理汇总“施肥”计数；actions 传入时同步追加文案。 */
+async function runMultiSeasonFertilizer(
+    growingLandIds: any[],
+    propagateErrors: boolean = false,
+    actions?: string[],
+): Promise<number> {
+    if (!isAutomationOn('fertilizer_multi_season')) return 0;
     const multiSeasonTargets: number[] = [...new Set(
         (Array.isArray(growingLandIds) ? growingLandIds : []).map((v: any) => toNum(v)).filter(Boolean),
     )];
-    if (multiSeasonTargets.length === 0) return;
+    if (multiSeasonTargets.length === 0) return 0;
 
     log('施肥', `检测到多季作物进入后续季，准备执行多季补肥，目标地块 ${multiSeasonTargets.length} 块`, {
         module: 'farm',
@@ -96,7 +101,10 @@ async function runMultiSeasonFertilizer(growingLandIds: any[], propagateErrors: 
         landIds: multiSeasonTargets,
     });
     try {
-        await runFertilizerByConfig(multiSeasonTargets, { reason: 'multi_season', propagateErrors });
+        const result = await runFertilizerByConfig(multiSeasonTargets, { reason: 'multi_season', propagateErrors });
+        const applied = toNum(result?.normal) + toNum(result?.organic);
+        if (applied > 0 && actions) actions.push(`多季补肥${applied}`);
+        return applied;
     } catch (e: any) {
         logWarn('施肥', `多季补肥执行失败: ${e.message}`, {
             module: 'farm',
@@ -104,6 +112,7 @@ async function runMultiSeasonFertilizer(growingLandIds: any[], propagateErrors: 
             result: 'error',
         });
         if (propagateErrors) throw e;
+        return 0;
     }
 }
 
@@ -119,7 +128,11 @@ function autoHarvestLandIds(status: any): number[] {
  * smart 有机肥可能让作物在本轮成熟。施肥后只重查并收获一次，避免形成请求循环。
  * 跟随收获也会走多季补肥：这批作物进入下一季后，主循环里的补肥已经跑完了。
  */
-async function harvestMatureOwnLandsOnce(actions: string[], propagateErrors: boolean = false): Promise<number> {
+async function harvestMatureOwnLandsOnce(
+    actions: string[],
+    propagateErrors: boolean = false,
+    counts?: FarmOperationCounts,
+): Promise<number> {
     let latest: any;
     try {
         latest = await getAllLands();
@@ -153,7 +166,9 @@ async function harvestMatureOwnLandsOnce(actions: string[], propagateErrors: boo
             landIds: [...harvestable],
         });
         const classified = await resolveRemovableHarvestedLands(harvestable, harvestReply);
-        await runMultiSeasonFertilizer(classified.growing, propagateErrors);
+        if (counts) counts.harvest += harvestable.length;
+        const followUpFertilized = await runMultiSeasonFertilizer(classified.growing, propagateErrors, actions);
+        if (counts) counts.fertilize += followUpFertilized;
         return harvestable.length;
     } catch (e: any) {
         logWarn('收获', `施肥后立即收获失败: ${e.message}`, {
@@ -167,6 +182,17 @@ async function harvestMatureOwnLandsOnce(actions: string[], propagateErrors: boo
 }
 
 /**
+ * 一键打理需要把 5 个操作按钮各自“实际处理的地块数”汇总给前端，
+ * actions 只是给人看的文案（如“收获3”“一键务农草2/虫1”），还原不出稳定计数，所以单独累加。
+ * 字段与按钮对应：farming=务农，fertilize=施肥。
+ */
+type FarmOperationCounts = { harvest: number; farming: number; plant: number; upgrade: number; fertilize: number };
+
+function createFarmOperationCounts(): FarmOperationCounts {
+    return { harvest: 0, farming: 0, plant: 0, upgrade: 0, fertilize: 0 };
+}
+
+/**
  * 手动/自动执行农场操作
  * @param opType - 'all', 'harvest', 'clear', 'plant', 'upgrade', 'remove'
  */
@@ -175,14 +201,15 @@ async function runFarmOperation(
     targetLandIdInput: unknown = null,
     propagateErrors: boolean = false,
     automatic?: { generation: number; pacing: any },
-): Promise<{ hadWork: boolean; actions: string[] }> {
+): Promise<{ hadWork: boolean; actions: string[]; counts: FarmOperationCounts }> {
+    const counts = createFarmOperationCounts();
     const landsReply = await getAllLands();
-    if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: false, actions: [] };
+    if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: false, actions: [], counts };
     if (!landsReply.lands || landsReply.lands.length === 0) {
         if (opType !== 'all') {
             log('农场', '没有土地数据');
         }
-        return { hadWork: false, actions: [] };
+        return { hadWork: false, actions: [], counts };
     }
 
     const lands = landsReply.lands;
@@ -295,7 +322,7 @@ async function runFarmOperation(
                 actions.push(hasTargetLandId
                     ? `单点务农#${targetLandId}${parts.length ? `(${parts.join('/')})` : ''}`
                     : `一键务农${parts.join('/')}`);
-                recordOperation('farming', farmingLandIds.length);
+                counts.farming += farmingLandIds.length;
             } catch (e: any) {
                 logWarn(hasTargetLandId ? '单点务农' : '一键务农', e.message);
                 if (hasTargetLandId || propagateErrors) throw e;
@@ -323,6 +350,7 @@ async function runFarmOperation(
                 });
                 actions.push(`收获${harvestable.length}`);
                 recordOperation('harvest', harvestable.length);
+                counts.harvest += harvestable.length;
                 harvestedLandIds = [...harvestable];
                 networkEvents.emit('farmHarvested', {
                     count: harvestable.length,
@@ -357,7 +385,7 @@ async function runFarmOperation(
         // 注意：如果是单纯点"一键种植"，harvestedLandIds 为空，只种当前的空地/死地
         if (allDeadLands.length > 0 || allEmptyLands.length > 0) {
             try {
-                if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: actions.length > 0, actions };
+                if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: actions.length > 0, actions, counts };
                 const plantResult = await autoPlantEmptyLands(allDeadLands, allEmptyLands, {
                     propagateErrors, knownLands: lands,
                     targetLandIds,
@@ -368,6 +396,7 @@ async function runFarmOperation(
                 if (plantedCount > 0) {
                     actions.push(`种植${plantedCount}`);
                     recordOperation('plant', plantedCount);
+                    counts.plant += plantedCount;
                 }
                 if (deferredCount > 0) actions.push(`预留${deferredCount}`);
             } catch (e: any) {
@@ -377,7 +406,7 @@ async function runFarmOperation(
         }
     }
     if (opType === 'all' && postHarvest && Array.isArray(postHarvest.growing) && postHarvest.growing.length > 0) {
-        await runMultiSeasonFertilizer(postHarvest.growing, propagateErrors);
+        counts.fertilize += await runMultiSeasonFertilizer(postHarvest.growing, propagateErrors, actions);
     }
 
     // 执行土地解锁/升级（手动 upgrade 总是执行；自动 all 受开关控制）
@@ -406,6 +435,7 @@ async function runFarmOperation(
             }
             if (unlocked > 0) {
                 actions.push(`解锁${unlocked}`);
+                counts.upgrade += unlocked;
             }
         }
 
@@ -429,7 +459,7 @@ async function runFarmOperation(
             }
             if (upgraded > 0) {
                 actions.push(`升级${upgraded}`);
-                recordOperation('upgrade', upgraded);
+                counts.upgrade += upgraded;
             }
         }
     }
@@ -469,6 +499,7 @@ async function runFarmOperation(
                     });
                     const result = await runFertilizerByConfig(targets, { reason: 'multi_season', propagateErrors });
                     if (result.normal > 0) actions.push(`补肥${result.normal}`);
+                    counts.fertilize += toNum(result.normal);
                 }
             } catch (e: any) {
                 logWarn('施肥', `巡田补肥失败: ${e.message}`, {
@@ -484,7 +515,8 @@ async function runFarmOperation(
                 const result = await runFertilizerByConfig([], { skipNormal: true, propagateErrors });
                 if (result.organic > 0) {
                     actions.push(`有机肥${result.organic}`);
-                    await harvestMatureOwnLandsOnce(actions, propagateErrors);
+                    counts.fertilize += toNum(result.organic);
+                    await harvestMatureOwnLandsOnce(actions, propagateErrors, counts);
                 }
             } catch (e: any) {
                 logWarn('施肥', `巡田时施肥失败: ${e.message}`);
@@ -499,7 +531,7 @@ async function runFarmOperation(
              module: 'farm', event: '农场循环', opType, actions
          });
     }
-    return { hadWork: actions.length > 0, actions };
+    return { hadWork: actions.length > 0, actions, counts };
 }
 
 function scheduleNextFarmCheck(delayMs: number = CONFIG.farmCheckInterval): void {

@@ -10,6 +10,7 @@
 | --- | --- |
 | `accounts.json` | 账号列表和下一个账号编号 |
 | `store.json` | 公共配置，包括系统、登录、通知和界面设置 |
+| `seed_price_cache.json` | 种子商店购买价校准缓存，由 `ShopService.ShopInfo(2)` 目录写入，口径见[商城协议文档](shop-protocols.md) |
 | `account-configs/.format.json` | 逐账号配置格式版本，目前为 1 |
 | `account-configs/<id>.json` | 一个账号的完整配置文档 |
 | `store.json.<随机标识>.bak` | 自动拆分前的原始 `store.json` 备份 |

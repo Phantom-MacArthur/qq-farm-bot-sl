@@ -7,9 +7,11 @@ export {};
  * 已归一 offer 结构（reward/price/originalPrice/discountPercent）。
  */
 
+const fs = require('node:fs');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const { getDataFile } = require('../config/runtime-paths');
-const { readJsonFile, writeJsonFileAtomic } = require('./json-db');
+const { readJsonFile, readJsonFileStrict, writeJsonFileAtomic } = require('./json-db');
 const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 
@@ -39,6 +41,75 @@ function getHistoryFile(accountId: any): string {
     const id = safeAccountId(accountId);
     if (!id) throw new Error('缺少账号 ID');
     return path.join(getDataFile('mystery_shop_history'), `${id}.json`);
+}
+
+function mysteryShopVisitKey(shop: any): string {
+    const npcId = Number(shop?.npc?.id);
+    const shopActivatedAtMs = Number(shop?.activeTime);
+    if (!shop?.active || !Number.isSafeInteger(npcId) || npcId <= 0
+        || !Number.isSafeInteger(shopActivatedAtMs) || shopActivatedAtMs <= 0) return '';
+    return `${npcId}:${shopActivatedAtMs}`;
+}
+
+interface MysteryShopSubmission {
+    visitKey: string;
+    submittedAt: number;
+}
+
+function getSubmissionFile(accountId: unknown, visitKey: string): string {
+    const id = safeAccountId(accountId);
+    if (!id) throw new Error('缺少账号 ID');
+    if (!/^[1-9]\d*:[1-9]\d*$/.test(visitKey)) throw new Error('来访标识无效');
+    return path.join(getDataFile('mystery_shop_submissions'), id, `${visitKey.replace(':', '-')}.json`);
+}
+
+function readSubmission(file: string, visitKey: string, allowMissing: boolean): MysteryShopSubmission | null {
+    const missing = Symbol('missing');
+    const data = readJsonFileStrict(file, allowMissing ? () => missing : undefined);
+    if (data === missing) return null;
+    if (data?.visitKey !== visitKey || !Number.isSafeInteger(data?.submittedAt) || data.submittedAt < 0) {
+        throw new Error('来访提交记录格式无效');
+    }
+    return data;
+}
+
+function submissionStorageError(cause: unknown): Error {
+    return Object.assign(new Error('无法读取或保存神秘商人提交记录，已阻止下单', { cause }), {
+        code: 'MYSTERY_PURCHASE_STORAGE_FAILED',
+    });
+}
+
+function readMysteryShopSubmission(accountId: unknown, visitKey: string): MysteryShopSubmission | null {
+    try {
+        return readSubmission(getSubmissionFile(accountId, visitKey), visitKey, true);
+    } catch (error) {
+        throw submissionStorageError(error);
+    }
+}
+
+function reserveMysteryShopSubmission(accountId: unknown, visitKey: string): boolean {
+    let stagedFile: string | undefined;
+    try {
+        const file = getSubmissionFile(accountId, visitKey);
+        if (readSubmission(file, visitKey, true)) return false;
+        stagedFile = `${file}.${randomUUID()}.pending`;
+        writeJsonFileAtomic(stagedFile, { visitKey, submittedAt: Date.now() });
+        try {
+            // 原子发布完整 JSON，且不覆盖另一个进程已经占用的来访。
+            fs.linkSync(stagedFile, file);
+        } catch (error: any) {
+            if (error.code !== 'EEXIST') throw error;
+            readSubmission(file, visitKey, false);
+            return false;
+        }
+        return true;
+    } catch (error) {
+        throw submissionStorageError(error);
+    } finally {
+        if (stagedFile) {
+            try { fs.unlinkSync(stagedFile); } catch { /* 已发布的标记独立保留 */ }
+        }
+    }
 }
 
 function getMysteryShopHistory(accountId?: any): any[] {
@@ -73,6 +144,9 @@ module.exports = {
     getActiveNPC,
     buy,
     MAX_HISTORY_RECORDS,
+    mysteryShopVisitKey,
+    readMysteryShopSubmission,
+    reserveMysteryShopSubmission,
     getMysteryShopHistory,
     appendMysteryShopHistory,
 };

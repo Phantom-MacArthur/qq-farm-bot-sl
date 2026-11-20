@@ -10,6 +10,10 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { getResourcePath } = require('./runtime-paths');
 const { isSellConditionSatisfied } = require('./sell-conditions');
+// 无效作物黑名单（成熟仅 2 秒的白萝卜等调试条目，加载期剔除，不进入用户可见范围）
+const { filterInvalidPlants, isInvalidSeedId } = require('./invalid-plants');
+// 种子商店校准缓存（仅依赖 runtime-paths/json-db，无循环依赖）
+const seedPriceCache = require('../services/seed-price-cache');
 
 interface RoleLevelItem {
     level: number;
@@ -195,7 +199,7 @@ function loadConfigs(): void {
     try {
         const plantPath = path.join(configDir, 'Plant.json');
         if (fs.existsSync(plantPath)) {
-            plantConfig = JSON.parse(fs.readFileSync(plantPath, 'utf8'));
+            plantConfig = filterInvalidPlants(JSON.parse(fs.readFileSync(plantPath, 'utf8')));
             plantMap.clear();
             seedToPlant.clear();
             fruitToPlant.clear();
@@ -230,6 +234,8 @@ function loadConfigs(): void {
                 }
                 const id = Number(item && item.id) || 0;
                 if (id <= 0) continue;
+                // 无效作物的种子物品同步剔除，避免在配置页/商店等用户可见范围出现
+                if (isInvalidSeedId(id)) continue;
                 itemInfoMap.set(id, item);
                 if (Number(item.type) === 5) {
                     seedItemMap.set(id, item);
@@ -442,7 +448,7 @@ function getAllSeeds(): SeedInfo[] {
         seedId: p.seed_id!,
         name: p.name,
         requiredLevel: (() => { const si = seedItemMap.get(p.seed_id!); return si ? (Number(si.level) || 0) : (Number(p.land_level_need) || 0); })(),
-        price: getSeedPrice(p.seed_id!),
+        price: getSeedPrice(p.seed_id!, seedPriceCache.getCalibratedSeedPrice(p.seed_id!)),
         image: getSeedImageBySeedId(p.seed_id!),
         seasons: Number(p.seasons) || 1,
         exp: Number(p.exp) || 0,
@@ -525,14 +531,20 @@ function getEffectiveSellInfo(
     return { sellable: false, status: 'unavailable', condition: condition || null, sells: [] };
 }
 
-function getSeedPrice(seedId: number): number {
+/**
+ * 种子成本取价：priceOverride 为商店目录校准的单颗购买价（优先）。
+ * 未取到校准价时不能用 sells 直接兜底：sells 是“卖出种子回收”价（约为购买价一半），
+ * 直接当成本会把购买价低估一半；改用 2×sells 估算购买价，仍取不到才为 0。
+ */
+function getSeedPrice(seedId: number, priceOverride?: number | null): number {
+    if (Number.isFinite(Number(priceOverride)) && Number(priceOverride) > 0) return Number(priceOverride);
     const item = seedItemMap.get(Number(seedId) || 0);
     if (!item) return 0;
     const sellsList = parseSells(item.sells);
-    if (sellsList.length > 0) return sellsList[0].price;
-    // 回退到 cond_sells（活动道具可能 sells 为 null）
+    if (sellsList.length > 0) return sellsList[0].price * 2;
+    // 回退到 cond_sells（活动道具可能 sells 为 null），同样按 2× 估算购买价
     const condList = parseSells((item as any).cond_sells);
-    return condList.length > 0 ? condList[0].price : 0;
+    return condList.length > 0 ? condList[0].price * 2 : 0;
 }
 
 function getFruitPrice(fruitId: number): number {

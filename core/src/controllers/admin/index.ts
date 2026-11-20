@@ -14,7 +14,7 @@ const { getResourcePath } = require('../../config/runtime-paths');
 const { createModuleLogger } = require('../../services/logger');
 
 const { createAdminContext } = require('./context');
-const { mountAuthRoutes } = require('./auth-routes');
+const { mountSystemRoutes } = require('./system-routes');
 const { mountAccountRoutes } = require('./account-routes');
 const { mountFarmRoutes } = require('./farm-routes');
 const { mountFriendRoutes } = require('./friend-routes');
@@ -57,7 +57,7 @@ function startAdminServer(dataProvider: any): void {
         }
 
         res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS, PUT');
-        res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-admin-token, x-proxy-api-key, x-proxy-api-url, x-proxy-app-id');
+        res.header('Access-Control-Allow-Headers', 'Content-Type, x-account-id, x-proxy-api-key, x-proxy-api-url, x-proxy-app-id');
         res.header('Access-Control-Allow-Credentials', 'true');
         res.header('Access-Control-Max-Age', '86400');
 
@@ -75,7 +75,7 @@ function startAdminServer(dataProvider: any): void {
     app.use('/game-config', express.static(getResourcePath('gameConfig')));
 
     // Mount route modules
-    mountAuthRoutes(app, ctx);
+    mountSystemRoutes(app, ctx);
     mountWxLoginRoutes(app, ctx);
     mountQqLoginRoutes(app, ctx);
     mountFarmRoutes(app, ctx);

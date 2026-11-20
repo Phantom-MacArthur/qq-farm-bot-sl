@@ -20,8 +20,6 @@ const {
     normalizeIntervals,
     normalizeTimeString,
     normalizeAutoAcceptFriendMinLevel,
-    normalizeAutoAcceptHarvestStealHarvest,
-    normalizeAutoAcceptHarvestStealSteal,
     ALLOWED_PLANTING_STRATEGIES,
 } = sharedState;
 
@@ -100,9 +98,7 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         knownFriendGidSyncCooldownSec: cfg.knownFriendGidSyncCooldownSec,
         friendsListCacheTtlSec: cfg.friendsListCacheTtlSec,
         friendBlacklist: [...(cfg.friendBlacklist || [])],
-        plantBlacklist: [...(cfg.plantBlacklist || [])],
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
-        plantOrderRandom: !!cfg.plantOrderRandom,
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
         fertilizerBuyOrganicCount: Math.max(0, Math.min(10000, Number(cfg.fertilizerBuyOrganicCount) || 0)),
         fertilizerBuyOrganicThresholdHours: Math.max(0, Math.min(990, Number(cfg.fertilizerBuyOrganicThresholdHours) || 0)),
@@ -116,9 +112,6 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         bagSeedFallbackStrategy: cfg.bagSeedFallbackStrategy,
         autoAcceptFriendMinLevel: cfg.autoAcceptFriendMinLevel,
         autoAcceptRequireOwnLevel: !!cfg.autoAcceptRequireOwnLevel,
-        autoAcceptHarvestStealEnabled: !!cfg.autoAcceptHarvestStealEnabled,
-        autoAcceptHarvestStealHarvest: cfg.autoAcceptHarvestStealHarvest,
-        autoAcceptHarvestStealSteal: cfg.autoAcceptHarvestStealSteal,
         ui: { ...globalConfig.ui },
     } as any;
 }
@@ -204,16 +197,8 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
         );
     }
 
-    if (Array.isArray(cfg.plantBlacklist)) {
-        next.plantBlacklist = cfg.plantBlacklist.map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
-    }
-
     if (cfg.stealDelaySeconds !== undefined && cfg.stealDelaySeconds !== null) {
         next.stealDelaySeconds = Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0));
-    }
-
-    if (cfg.plantOrderRandom !== undefined && cfg.plantOrderRandom !== null) {
-        next.plantOrderRandom = !!cfg.plantOrderRandom;
     }
 
     if (cfg.plantDelaySeconds !== undefined && cfg.plantDelaySeconds !== null) {
@@ -266,24 +251,6 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
 
     if (cfg.autoAcceptRequireOwnLevel !== undefined && cfg.autoAcceptRequireOwnLevel !== null) {
         next.autoAcceptRequireOwnLevel = !!cfg.autoAcceptRequireOwnLevel;
-    }
-
-    if (cfg.autoAcceptHarvestStealEnabled !== undefined && cfg.autoAcceptHarvestStealEnabled !== null) {
-        next.autoAcceptHarvestStealEnabled = !!cfg.autoAcceptHarvestStealEnabled;
-    }
-
-    if (cfg.autoAcceptHarvestStealHarvest !== undefined && cfg.autoAcceptHarvestStealHarvest !== null) {
-        next.autoAcceptHarvestStealHarvest = normalizeAutoAcceptHarvestStealHarvest(
-            cfg.autoAcceptHarvestStealHarvest,
-            next.autoAcceptHarvestStealHarvest,
-        );
-    }
-
-    if (cfg.autoAcceptHarvestStealSteal !== undefined && cfg.autoAcceptHarvestStealSteal !== null) {
-        next.autoAcceptHarvestStealSteal = normalizeAutoAcceptHarvestStealSteal(
-            cfg.autoAcceptHarvestStealSteal,
-            next.autoAcceptHarvestStealSteal,
-        );
     }
 
     setAccountConfigSnapshot(accountId, next, persist);
@@ -420,10 +387,6 @@ function getStealDelaySeconds(accountId?: unknown): number {
     return Math.max(0, Math.min(300, Number(getAccountConfigSnapshot(accountId).stealDelaySeconds) || 0));
 }
 
-function getPlantOrderRandom(accountId?: unknown): boolean {
-    return !!getAccountConfigSnapshot(accountId).plantOrderRandom;
-}
-
 function getPlantDelaySeconds(accountId?: unknown): number {
     return Math.max(0, Math.min(60, Number(getAccountConfigSnapshot(accountId).plantDelaySeconds) || 0));
 }
@@ -454,30 +417,6 @@ function getAutoAcceptFriendMinLevel(accountId?: unknown): number {
 
 function getAutoAcceptRequireOwnLevel(accountId?: unknown): boolean {
     return !!getAccountConfigSnapshot(accountId).autoAcceptRequireOwnLevel;
-}
-
-function getAutoAcceptHarvestStealEnabled(accountId?: unknown): boolean {
-    return !!getAccountConfigSnapshot(accountId).autoAcceptHarvestStealEnabled;
-}
-
-function getAutoAcceptHarvestStealHarvest(accountId?: unknown): number {
-    return normalizeAutoAcceptHarvestStealHarvest(getAccountConfigSnapshot(accountId).autoAcceptHarvestStealHarvest);
-}
-
-function getAutoAcceptHarvestStealSteal(accountId?: unknown): number {
-    return normalizeAutoAcceptHarvestStealSteal(getAccountConfigSnapshot(accountId).autoAcceptHarvestStealSteal);
-}
-
-function getPlantBlacklist(accountId?: unknown): number[] {
-    return [...(getAccountConfigSnapshot(accountId).plantBlacklist || [])];
-}
-
-function setPlantBlacklist(accountId: unknown, list: unknown[]): number[] {
-    const current = getAccountConfigSnapshot(accountId);
-    const next = normalizeAccountConfig(current, sharedState.accountFallbackConfig);
-    next.plantBlacklist = Array.isArray(list) ? list.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
-    setAccountConfigSnapshot(accountId, next);
-    return [...next.plantBlacklist];
 }
 
 function getDefaultAccountConfig(): AccountConfig {
@@ -512,7 +451,6 @@ module.exports = {
     setFriendBlacklist,
     addFriendToBlacklist,
     getStealDelaySeconds,
-    getPlantOrderRandom,
     getPlantDelaySeconds,
     getFertilizerBuyOrganicCount,
     getFertilizerBuyOrganicThresholdHours,
@@ -521,10 +459,5 @@ module.exports = {
     getFertilizerBuyCheckIntervalMinutes,
     getAutoAcceptFriendMinLevel,
     getAutoAcceptRequireOwnLevel,
-    getAutoAcceptHarvestStealEnabled,
-    getAutoAcceptHarvestStealHarvest,
-    getAutoAcceptHarvestStealSteal,
-    getPlantBlacklist,
-    setPlantBlacklist,
     getDefaultAccountConfig,
 };

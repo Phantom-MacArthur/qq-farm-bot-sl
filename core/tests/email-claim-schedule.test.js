@@ -3,48 +3,21 @@ const test = require('node:test');
 
 const {
     configureEmailClaim,
-    getEmailClaimHour,
-    isEmailClaimTimeReached,
     resetEmailClaimStateForTest,
 } = require('../dist/services/email');
 const { normalizeAccountConfig, DEFAULT_ACCOUNT_CONFIG } = require('../dist/models/store/shared-state');
 
-test('邮箱领取默认 10 点，并允许用户设置为 0 点', () => {
+test('邮箱不再按配置整点触发，hour 入参被忽略且不报错', () => {
     resetEmailClaimStateForTest();
-    assert.equal(getEmailClaimHour(), 10);
-
+    // 旧调用方仍会传 hour；周期检查模式下它只影响日志，不参与判断
     configureEmailClaim({ hour: 0 });
-    assert.equal(getEmailClaimHour(), 0);
-
     configureEmailClaim({ hour: 23 });
-    assert.equal(getEmailClaimHour(), 23);
-
-    configureEmailClaim({ hour: 24 });
-    assert.equal(getEmailClaimHour(), 23, '非法值保持当前有效值');
-
-    configureEmailClaim({ hour: -1 });
-    assert.equal(getEmailClaimHour(), 23, '负数不会被悄悄改成午夜');
-
     configureEmailClaim({ hour: 'abc' });
-    assert.equal(getEmailClaimHour(), 23, '非法值保持当前有效值');
-    for (const invalid of [1.5, '10.5', '10abc', '1e1', '', null, true, [], {}, Infinity, Number.NaN]) {
-        configureEmailClaim({ hour: invalid });
-        assert.equal(getEmailClaimHour(), 23, '无效配置不改变执行时刻');
-    }
+    configureEmailClaim({ hour: undefined });
     resetEmailClaimStateForTest();
 });
 
-test('邮箱只在配置的整点到达后进入检查窗口', () => {
-    const at = (iso) => Date.parse(iso);
-    assert.equal(isEmailClaimTimeReached(10, at('2026-08-26T09:59:59+08:00')), false);
-    assert.equal(isEmailClaimTimeReached(10, at('2026-08-26T10:00:00+08:00')), true);
-    assert.equal(isEmailClaimTimeReached(10, at('2026-08-26T23:59:59+08:00')), true);
-
-    assert.equal(isEmailClaimTimeReached(0, at('2026-08-25T23:59:59+08:00')), true, '0 点窗口在当天任意时刻都已经打开');
-    assert.equal(isEmailClaimTimeReached(0, at('2026-08-26T00:00:00+08:00')), true);
-});
-
-test('邮箱小时会写入账号配置，并兼容旧配置默认 10 点', () => {
+test('邮箱小时配置仍然可读兼容，默认 10 点', () => {
     assert.equal(normalizeAccountConfig({ emailClaimHour: 0 }, DEFAULT_ACCOUNT_CONFIG).emailClaimHour, 0);
     assert.equal(normalizeAccountConfig({ emailClaimHour: 10 }, DEFAULT_ACCOUNT_CONFIG).emailClaimHour, 10);
     assert.equal(normalizeAccountConfig({ emailClaimHour: 25 }, DEFAULT_ACCOUNT_CONFIG).emailClaimHour, 10);

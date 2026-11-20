@@ -276,13 +276,4 @@ function format(value: unknown) {
   color: #278452;
   font-weight: var(--fw-600);
 }
-@media (max-width: 360px) {
-  .land-detail-metrics th,
-  .land-detail-metrics td {
-    padding: 8px 2px;
-  }
-  .land-detail-modal {
-    font-size: 13px;
-  }
-}
 </style>

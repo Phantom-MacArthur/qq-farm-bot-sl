@@ -19,6 +19,7 @@ const {
   pickAccountBatchTargets,
   runAccountBatch,
   shouldRefreshCodeBeforeStart,
+  toAccountBatchOutcome,
   toggleSelectedAccountIds,
 } = module.exports
 
@@ -81,34 +82,49 @@ test('批量执行保持串行，单个账号失败不中断整批', async () =>
       return { ok: false, error: 'Code 已失效' }
     if (id === '3')
       throw new Error('服务离线')
-    return { ok: true, confirmed: true }
+    return { ok: true }
   })
 
   assert.deepEqual(order, ['begin:1', 'end:1', 'begin:2', 'end:2', 'begin:3', 'end:3'])
-  assert.equal(summary.succeeded, 1)
-  assert.equal(summary.unconfirmed, 0)
-  assert.deepEqual(summary.failed, [
-    { id: '2', error: 'Code 已失效' },
-    { id: '3', error: '服务离线' },
-  ])
+  assert.deepEqual(summary, {
+    succeeded: 1,
+    failed: [
+      { id: '2', error: 'Code 已失效' },
+      { id: '3', error: '服务离线' },
+    ],
+  })
 })
 
-test('请求已发出但未确认到位单独计数，不与成功混报', async () => {
-  const summary = await runAccountBatch(['1', '2'], async () => ({ ok: true, confirmed: false }))
-  assert.deepEqual(summary, { succeeded: 2, unconfirmed: 2, failed: [] })
+test('停止只有等到进程退出才算成功，接口报错时保留真正原因', () => {
+  assert.deepEqual(toAccountBatchOutcome({ ok: true, confirmed: true }, '停止后进程未退出'), { ok: true })
+  assert.deepEqual(toAccountBatchOutcome({ ok: true, confirmed: false }, '停止后进程未退出'), { ok: false, error: '停止后进程未退出' })
+  // 接口报错时不被“未退出”覆盖，否则用户看不出是网络问题还是进程问题
+  assert.deepEqual(toAccountBatchOutcome({ ok: false, confirmed: false, error: '服务离线' }, '停止后进程未退出'), { ok: false, error: '服务离线' })
+  assert.deepEqual(toAccountBatchOutcome({ ok: false }, '停止后进程未退出'), { ok: false, error: '操作失败' })
 })
 
-test('批量结果文案覆盖成功、未确认、失败与跳过', () => {
+test('批量结果文案覆盖成功、失败与跳过', () => {
   assert.equal(
-    formatAccountBatchSummary('start', { succeeded: 3, unconfirmed: 0, failed: [] }),
+    formatAccountBatchSummary('start', { succeeded: 3, failed: [] }),
     '成功启动 3 个账号',
   )
   assert.equal(
-    formatAccountBatchSummary('stop', { succeeded: 1, unconfirmed: 2, failed: [{ id: '4', error: '进程未退出' }] }, 1),
-    '成功停止 1 个账号，2 个尚未确认到位，1 个失败：进程未退出，1 个状态不符已跳过',
+    formatAccountBatchSummary('stop', { succeeded: 3, failed: [{ id: '4', error: '进程未退出' }] }, 1),
+    '成功停止 3 个账号，1 个失败：进程未退出，1 个状态不符已跳过',
   )
   assert.equal(
-    formatAccountBatchSummary('cleanup', { succeeded: 0, unconfirmed: 0, failed: [] }, 2),
+    formatAccountBatchSummary('cleanup', { succeeded: 0, failed: [] }, 2),
     '成功清理 0 个账号，2 个状态不符已跳过',
   )
+})
+
+// 回归：两个账号曾经被报成“成功 1，未确认 1，失败 1”三项，因为同一个账号被算了两次。
+// 现在一个账号只能归入成功或失败其中一种，文案里的数量加起来等于账号总数。
+test('成功和失败不重复计数，文案总和不超账号数', async () => {
+  const summary = await runAccountBatch(['1', '2'], async id => (id === '1'
+    ? { ok: true }
+    : { ok: false, error: '登录凭证已失效' }))
+  const text = formatAccountBatchSummary('start', summary)
+  assert.equal(text, '成功启动 1 个账号，1 个失败：登录凭证已失效')
+  assert.equal(summary.succeeded + summary.failed.length, 2)
 })

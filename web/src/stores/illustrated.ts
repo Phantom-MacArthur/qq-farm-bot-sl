@@ -1,11 +1,11 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import api, { getApiErrorMessage } from '@/api'
+import api from '@/api'
 
 export const useIllustratedStore = defineStore('illustrated', () => {
   const data = ref<any>(null)
   const loading = ref(false)
-  const error = ref('')
+  const error = ref(false)
   let requestId = 0
 
   async function fetch(accountId: string) {
@@ -13,7 +13,7 @@ export const useIllustratedStore = defineStore('illustrated', () => {
       return false
     const id = ++requestId
     loading.value = true
-    error.value = ''
+    error.value = false
     try {
       const response = await api.get('/api/illustrated', {
         headers: { 'x-account-id': accountId },
@@ -22,16 +22,16 @@ export const useIllustratedStore = defineStore('illustrated', () => {
       if (id !== requestId)
         return false
       if (!response.data?.ok) {
-        error.value = getApiErrorMessage(response.data, '无法读取图鉴数据')
+        error.value = true
         return false
       }
       data.value = response.data.data || null
       return true
     }
-    catch (cause: any) {
+    catch {
       if (id !== requestId)
         return false
-      error.value = getApiErrorMessage(cause, '无法读取图鉴数据')
+      error.value = true
       return false
     }
     finally {
@@ -44,7 +44,7 @@ export const useIllustratedStore = defineStore('illustrated', () => {
     requestId++
     data.value = null
     loading.value = false
-    error.value = ''
+    error.value = false
   }
 
   return { data, loading, error, fetch, reset }

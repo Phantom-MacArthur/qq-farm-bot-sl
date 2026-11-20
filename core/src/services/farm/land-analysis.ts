@@ -676,43 +676,6 @@ function isOccupiedSlaveLandWithMap(land: any, landsMap: Map<number, any>, slave
     return slaveToMasterMap.has(landId);
 }
 
-function summarizeLandDetails(lands: any[]): {
-    harvestable: number;
-    growing: number;
-    empty: number;
-    dead: number;
-    needWater: number;
-    needWeed: number;
-    needBug: number;
-} {
-    const summary = {
-        harvestable: 0,
-        growing: 0,
-        empty: 0,
-        dead: 0,
-        needWater: 0,
-        needWeed: 0,
-        needBug: 0,
-    };
-
-    for (const land of Array.isArray(lands) ? lands : []) {
-        if (!land || !land.unlocked) continue;
-        if (land.occupiedByMaster) continue;
-
-        const status = String(land.status || '');
-        if (status === 'harvestable') summary.harvestable++;
-        else if (status === 'dead') summary.dead++;
-        else if (status === 'empty') summary.empty++;
-        else if (status === 'growing' || status === 'stealable' || status === 'harvested') summary.growing++;
-
-        if (land.needWater) summary.needWater++;
-        if (land.needWeed) summary.needWeed++;
-        if (land.needBug) summary.needBug++;
-    }
-
-    return summary;
-}
-
 const ALL_FERTILIZER_LAND_TYPES: string[] = ['blue-crystal', 'purple-gold', 'gold', 'black', 'red', 'normal'];
 const FERTILIZER_LAND_TYPE_LABELS: Record<string, string> = {
     'blue-crystal': '蓝晶土地',
@@ -1154,7 +1117,6 @@ module.exports = {
     isOccupiedSlaveLand,
     buildSlaveToMasterMap,
     isOccupiedSlaveLandWithMap,
-    summarizeLandDetails,
     ALL_FERTILIZER_LAND_TYPES,
     getLandTypeByLevel,
     normalizeFertilizerLandTypes,

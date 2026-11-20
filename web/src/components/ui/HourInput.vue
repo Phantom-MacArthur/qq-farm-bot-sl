@@ -48,11 +48,11 @@ function handleKeydown(event: KeyboardEvent) {
     >
       <template #suffix>
         <div class="hour-input__buttons">
-          <button type="button" :disabled="disabled" aria-label="减少 1 小时" @click="step(-1)">
-            <span class="i-carbon-subtract" aria-hidden="true" />
-          </button>
           <button type="button" :disabled="disabled" aria-label="增加 1 小时" @click="step(1)">
-            <span class="i-carbon-add" aria-hidden="true" />
+            <span class="i-carbon-chevron-up" aria-hidden="true" />
+          </button>
+          <button type="button" :disabled="disabled" aria-label="减少 1 小时" @click="step(-1)">
+            <span class="i-carbon-chevron-down" aria-hidden="true" />
           </button>
         </div>
       </template>
@@ -64,18 +64,19 @@ function handleKeydown(event: KeyboardEvent) {
 <style scoped>
 .hour-input__buttons {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 2px;
+  gap: 1px;
   color: var(--ui-subtle);
 }
 
 .hour-input__buttons button {
   display: grid;
-  width: 20px;
-  height: 24px;
+  width: 16px;
+  height: 14px;
   place-items: center;
   border-radius: 4px;
-  font-size: 16px;
+  font-size: 12px;
   cursor: pointer;
 }
 

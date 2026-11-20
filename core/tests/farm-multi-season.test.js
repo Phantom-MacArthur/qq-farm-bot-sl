@@ -15,7 +15,9 @@ const {
 } = require('../dist/services/farm/land-analysis');
 
 const MUSHROOM_ID = 1020050;
-const RADISH_ID = 2020002;
+// 白萝卜：用正常条目 1020002（种子 20002，60 秒成熟）。
+// 官方配置表里残留的调试条目 2020002（成熟仅 2 秒）已被 InvalidPlants.json 剔除。
+const RADISH_ID = 1020002;
 const MORNING_GLORY_ID = 1020147;
 
 function land(id, plant) {

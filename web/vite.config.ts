@@ -1,4 +1,5 @@
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { visualizer } from 'rollup-plugin-visualizer'
@@ -7,6 +8,7 @@ import { defineConfig } from 'vite'
 import viteCompression from 'vite-plugin-compression'
 
 const corePackageJson = JSON.parse(readFileSync('../core/package.json', 'utf-8'))
+const publicDir = fileURLToPath(new URL('./public', import.meta.url))
 
 // https://vitejs.dev/config/
 export default defineConfig(({ mode }) => {
@@ -16,7 +18,10 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       UnoCSS() as any,
-      vue(),
+      // public 目录下的静态资源（如 /game-config）在模板里按纯 URL 引用；
+      // 若不关掉 includeAbsolute，Vue 会把绝对路径改写成 import "xxx?import"，
+      // 而该请求被 /game-config 代理接管、返回 image/png，浏览器 MIME 校验失败导致路由白屏。
+      vue({ template: { transformAssetUrls: { includeAbsolute: false } } }),
       ...(compressedBuild
         ? [viteCompression({
             verbose: true,
@@ -99,6 +104,13 @@ export default defineConfig(({ mode }) => {
         '/game-config': {
           target: 'http://localhost:3007',
           changeOrigin: true,
+          // public/game-config 已有的文件直接本地伺服（dev 不启后端也能用），
+          // 只有本地不存在的路径（运行时动态下载的配置）才透传给后端。
+          bypass(req) {
+            const pathname = decodeURIComponent(new URL(req.url || '/', 'http://localhost').pathname)
+            if (pathname.startsWith('/game-config/') && existsSync(path.join(publicDir, pathname)))
+              return pathname
+          },
         },
       },
     },

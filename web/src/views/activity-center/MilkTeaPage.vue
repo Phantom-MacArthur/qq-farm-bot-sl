@@ -8,6 +8,8 @@ import { storeToRefs } from 'pinia'
 import { computed, onUnmounted, ref, watch } from 'vue'
 import api from '@/api'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useToastStore } from '@/stores/toast'
 import MilkTeaContent from './MilkTeaContent.vue'
@@ -189,6 +191,8 @@ watch(currentAccountId, () => {
   filters = {}
   void request()
 }, { immediate: true })
+// 重新上线时按一次刷新键
+useReconnectRefresh(() => request())
 onUnmounted(() => sequence++)
 </script>
 
@@ -210,11 +214,13 @@ onUnmounted(() => sequence++)
           </p>
         </div>
       </div>
-      <NButton secondary circle :loading="busy" title="刷新活动数据" aria-label="刷新活动数据" @click="request()">
-        <template #icon>
-          <span class="i-carbon-renew" />
-        </template>
-      </NButton>
+      <RefreshButton
+        icon-only
+        title="刷新活动数据"
+        :loading="busy"
+        :disabled="busy"
+        @click="request()"
+      />
     </header>
 
     <div class="tea-toolbar">
@@ -618,12 +624,6 @@ onUnmounted(() => sequence++)
 @container tea-page (max-width: 600px) {
   .tea-toolbar__tabs {
     width: 100%;
-  }
-}
-
-@media (max-width: 520px) {
-  .tea-confirm__actions > :deep(.n-button) {
-    flex: 1;
   }
 }
 </style>

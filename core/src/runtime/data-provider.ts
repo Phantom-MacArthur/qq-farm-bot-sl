@@ -1,6 +1,5 @@
 export {};
 const { findAccountByRef, normalizeAccountRef, resolveAccountId: resolveAccountIdByList } = require('../services/account-resolver');
-const { getSchedulerRegistrySnapshot } = require('../services/scheduler');
 
 interface DataProviderOptions {
     workers: Record<string, any>;
@@ -125,6 +124,8 @@ function createDataProvider(options: DataProviderOptions) {
         },
 
         getLands: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getLands', true),
+        // 拉取种子商店目录（worker 侧顺带写入购买价校准缓存）；propagateErrors=true 使商店拉取失败真正抛出，供手动校准顺延下一个账号并如实报错
+        refreshSeedShopCatalog: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSeeds', true),
         getIllustratedSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedSnapshot'),
         getCollectionsSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCollectionsSnapshot'),
         operateCollections: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateCollections', action, input),
@@ -257,6 +258,10 @@ function createDataProvider(options: DataProviderOptions) {
         purchaseProps: (accountRef: string, goodsId: unknown, count: unknown, expectedOffer: unknown) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'purchaseProps', goodsId, count, expectedOffer)
         ),
+        getPetShop: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getPetShop'),
+        purchasePetShop: (accountRef: string, goodsId: unknown, count: unknown, expectedOffer: unknown) => (
+            callWorkerApi(resolveAccountRefId(accountRef), 'purchasePetShop', goodsId, count, expectedOffer)
+        ),
         getMallCatalog: (accountRef: string, slotType: unknown, subSlotType: unknown) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'getMallCatalog', slotType, subSlotType)
         ),
@@ -316,7 +321,6 @@ function createDataProvider(options: DataProviderOptions) {
                 'intervals',
                 'friendQuietHours',
                 'stealDelaySeconds',
-                'plantOrderRandom',
                 'plantDelaySeconds',
                 'fertilizerBuyOrganicCount',
                 'fertilizerBuyOrganicThresholdHours',
@@ -330,9 +334,6 @@ function createDataProvider(options: DataProviderOptions) {
                 'bagSeedFallbackStrategy',
                 'autoAcceptFriendMinLevel',
                 'autoAcceptRequireOwnLevel',
-                'autoAcceptHarvestStealEnabled',
-                'autoAcceptHarvestStealHarvest',
-                'autoAcceptHarvestStealSteal',
             ]) {
                 copyIfPresent(key);
             }
@@ -509,28 +510,6 @@ function createDataProvider(options: DataProviderOptions) {
         isAccountRunning: (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             return !!(accountId && workers[accountId]);
-        },
-
-        getSchedulerStatus: async (accountRef: string) => {
-            const accountId = resolveAccountRefId(accountRef);
-            const runtime = getSchedulerRegistrySnapshot();
-            let worker = null;
-            let workerError = '';
-
-            if (!accountId) {
-                return { accountId: '', runtime, worker, workerError };
-            }
-
-            if (!workers[accountId]) {
-                return { accountId, runtime, worker, workerError: '账号未运行' };
-            }
-
-            try {
-                worker = await callWorkerApi(accountId, 'getSchedulers');
-            } catch (e: any) {
-                workerError = (e && e.message) ? e.message : String(e || 'unknown');
-            }
-            return { accountId, runtime, worker, workerError };
         },
     };
 }

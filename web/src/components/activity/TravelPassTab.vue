@@ -77,7 +77,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
 <style scoped>
 .travel-tab {
   min-height: 100%;
-  padding: calc(125px + env(safe-area-inset-top)) 13px 180px;
+  padding: 125px 13px 180px;
   background: radial-gradient(ellipse at 50% 8%, rgba(76, 146, 218, 0.38), transparent 34%);
 }
 .travel-progress {
@@ -294,7 +294,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   position: fixed;
   z-index: 29;
   right: 0;
-  bottom: calc(92px + env(safe-area-inset-bottom));
+  bottom: 92px;
   left: 0;
   display: flex;
   justify-content: center;
@@ -474,86 +474,5 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   color: #87938e;
   background: #e5ebe8;
   box-shadow: none;
-}
-@media (max-width: 760px) {
-  .travel-tab {
-    height: 100%;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-    padding: 14px;
-  }
-  .travel-list {
-    min-height: 0;
-    flex: 1;
-    grid-template-columns: 1fr;
-    align-content: start;
-    overflow-y: auto;
-    overscroll-behavior: contain;
-    scrollbar-width: thin;
-  }
-  .travel-progress {
-    min-height: 68px;
-    grid-template-columns: 48px minmax(0, 1fr);
-    gap: 8px;
-    padding: 9px 10px;
-    border-radius: 12px;
-  }
-  .travel-progress__badge {
-    width: 46px;
-    height: 46px;
-    border-radius: 10px;
-  }
-  .travel-progress__badge b {
-    font-size: 19px;
-  }
-  .travel-progress__badge small {
-    font-size: 9px;
-  }
-  .travel-progress__main strong {
-    font-size: 12px;
-  }
-  .score {
-    margin-top: 3px;
-    font-size: 12px;
-  }
-  .progress {
-    height: 6px;
-    margin-top: 5px;
-  }
-  .travel-row {
-    min-height: 72px;
-    grid-template-columns: 52px minmax(0, 1fr);
-  }
-  .level-medal {
-    width: 44px;
-    height: 50px;
-    margin-left: 4px;
-  }
-  .level-medal b {
-    font-size: 18px;
-  }
-  .level-medal small {
-    font-size: 8px;
-  }
-  .reward-group {
-    gap: 4px;
-    padding: 5px 3px;
-  }
-  .travel-row :deep(.reward-item) {
-    width: 46px;
-    height: 46px;
-  }
-  .claim-action {
-    position: static;
-    flex: none;
-    margin: 8px -14px -14px;
-    padding: 8px 14px;
-  }
-  .travel-empty {
-    min-height: 0;
-    flex: 1;
-  }
 }
 </style>

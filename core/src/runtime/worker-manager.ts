@@ -26,7 +26,6 @@ interface WorkerManagerOptions {
     addAccountLog: (action: string, msg: string, accountId?: string, accountName?: string, extra?: any) => void;
     normalizeStatusForPanel: (data: any, accountId: string, accountName: string) => any;
     buildConfigSnapshotForAccount: (accountId: string) => any;
-    getOfflineAutoDeleteMs: () => number;
     triggerOfflineReminder: (payload: any) => void;
     sendConfiguredPush?: (payload: any) => Promise<void> | void;
     addOrUpdateAccount: (acc: any) => any;
@@ -51,11 +50,9 @@ function createWorkerManager(options: WorkerManagerOptions) {
         addAccountLog,
         normalizeStatusForPanel,
         buildConfigSnapshotForAccount,
-        getOfflineAutoDeleteMs,
         triggerOfflineReminder,
         sendConfiguredPush,
         addOrUpdateAccount,
-        deleteAccount,
         scheduleAutoRelogin,
         refreshAccountCode,
         onStatusSync,
@@ -133,7 +130,6 @@ function createWorkerManager(options: WorkerManagerOptions) {
             avatar: account.avatar || '',
             stopping: false,
             disconnectedSince: 0,
-            autoDeleteTriggered: false,
             terminalHandled: false,
             wsError: null,
         };
@@ -174,15 +170,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             managerScheduler.clear(`force_kill_${account.id}`);
             managerScheduler.clear(`restart_fallback_${account.id}`);
 
-            if (current && current.requests && current.requests.size > 0) {
-                for (const [reqId, req] of current.requests.entries()) {
-                    managerScheduler.clear(`api_timeout_${account.id}_${reqId}`);
-                    try {
-                        req.reject(new Error('Worker exited'));
-                    } catch {}
-                }
-                current.requests.clear();
-            }
+            rejectWorkerRequests(account.id, current, Object.assign(new Error('Worker exited'), { code: 'ACCOUNT_OFFLINE' }));
 
             if (current && current.process === child) {
                 delete workers[account.id];
@@ -191,12 +179,21 @@ function createWorkerManager(options: WorkerManagerOptions) {
         return true;
     }
 
+    function rejectWorkerRequests(accountId: string, worker: any, error: Error): void {
+        for (const [reqId, req] of worker.requests.entries()) {
+            managerScheduler.clear(`api_timeout_${accountId}_${reqId}`);
+            req.reject(error);
+        }
+        worker.requests.clear();
+    }
+
     function stopWorker(accountId: string): void {
         const worker = workers[accountId];
         if (!worker) return;
 
         const proc = worker.process;
         worker.stopping = true;
+        rejectWorkerRequests(accountId, worker, Object.assign(new Error('账号已离线'), { code: 'ACCOUNT_OFFLINE' }));
         worker.process.send({ type: 'stop' });
         managerScheduler.setTimeoutTask(`force_kill_${accountId}`, 1000, () => {
             const current = workers[accountId];
@@ -301,37 +298,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             const connected = !!(msg.data && msg.data.connection && msg.data.connection.connected);
             if (connected) {
                 worker.disconnectedSince = 0;
-                worker.autoDeleteTriggered = false;
                 worker.wsError = null;
-            } else if (!worker.stopping) {
-                const now = Date.now();
-                if (!worker.disconnectedSince) worker.disconnectedSince = now;
-                const offlineMs = now - worker.disconnectedSince;
-                const autoDeleteMs = getOfflineAutoDeleteMs();
-                if (!worker.autoDeleteTriggered && offlineMs >= autoDeleteMs) {
-                    worker.autoDeleteTriggered = true;
-                    const offlineMin = Math.floor(offlineMs / 60000);
-                    log('系统', `账号 ${worker.name} 持续离线 ${offlineMin} 分钟，自动删除账号信息`);
-                    triggerOfflineReminder({
-                        accountId,
-                        accountName: worker.name,
-                        reason: 'offline_timeout',
-                        offlineMs,
-                    });
-                    addAccountLog(
-                        'offline_delete',
-                        `账号 ${worker.name} 持续离线 ${offlineMin} 分钟，已自动删除`,
-                        accountId,
-                        worker.name,
-                        { reason: 'offline_timeout', offlineMs },
-                    );
-                    stopWorker(accountId);
-                    try {
-                        deleteAccount(accountId);
-                    } catch (e: any) {
-                        log('错误', `删除离线账号失败: ${e.message}`);
-                    }
-                }
             }
         } else if (msg.type === 'log') {
             const logEntry = {
@@ -393,6 +360,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             const reason = msg.reason || '未知';
             const reasonCode = Number(msg.reasonCode) || 0;
             const diagnostics = msg.diagnostics || null;
+            rejectWorkerRequests(accountId, worker, Object.assign(new Error('账号被踢下线'), { code: 'GAME_OFFLINE' }));
             log('系统', `账号 ${worker.name} 被踢下线，已自动停止账号`, { accountId: String(accountId), accountName: worker.name, reasonCode, diagnostics });
             triggerOfflineReminder({
                 accountId,
@@ -411,13 +379,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             const reason = String(msg.reason || '连接已断开');
             const phase = String(msg.phase || 'unknown');
             if (worker.status?.connection) worker.status.connection.connected = false;
-            if (worker.requests.size > 0) {
-                for (const [reqId, req] of worker.requests.entries()) {
-                    managerScheduler.clear(`api_timeout_${accountId}_${reqId}`);
-                    try { req.reject(new Error('账号连接已断开')); } catch {}
-                }
-                worker.requests.clear();
-            }
+            rejectWorkerRequests(accountId, worker, Object.assign(new Error('账号连接已断开'), { code: 'GAME_OFFLINE' }));
             log('系统', `账号 ${worker.name} 连接已断开，已停止运行并等待 Helper 刷新 Code 或重新扫码`, {
                 accountId: String(accountId),
                 accountName: worker.name,
@@ -466,9 +428,9 @@ function createWorkerManager(options: WorkerManagerOptions) {
                     friendName: msg.friendName,
                     reason: msg.reason,
                 });
-                const worker_process = workers[accountId];
-                if (worker_process && worker_process.process) {
-                    worker_process.process.send({ type: 'config_sync', config: buildConfigSnapshotForAccount(accountId) });
+                const targetWorker = workers[accountId];
+                if (targetWorker && targetWorker.process) {
+                    targetWorker.process.send({ type: 'config_sync', config: buildConfigSnapshotForAccount(accountId) });
                 }
             }
         } else if (msg.type === 'known_friend_gids_sync') {
@@ -514,8 +476,9 @@ function createWorkerManager(options: WorkerManagerOptions) {
 
     function callWorkerApi(accountId: string, method: string, ...args: any[]): Promise<any> {
         const worker = workers[accountId];
-        if (!worker) return Promise.reject(new Error('账号未运行'));
-        if (worker.stopping || worker.terminalHandled) return Promise.reject(new Error('账号已离线'));
+        if (!worker) return Promise.reject(Object.assign(new Error('账号未运行'), { code: 'ACCOUNT_OFFLINE' }));
+        if (worker.terminalHandled) return Promise.reject(Object.assign(new Error('账号连接已断开'), { code: 'GAME_OFFLINE' }));
+        if (worker.stopping) return Promise.reject(Object.assign(new Error('账号已离线'), { code: 'ACCOUNT_OFFLINE' }));
 
         return new Promise((resolve, reject) => {
             const id = worker.reqId++;

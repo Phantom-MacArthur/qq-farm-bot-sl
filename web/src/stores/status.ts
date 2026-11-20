@@ -1,9 +1,8 @@
 import type { Socket } from 'socket.io-client'
-import { useStorage } from '@vueuse/core'
 import { defineStore } from 'pinia'
 import { io } from 'socket.io-client'
 import { computed, ref } from 'vue'
-import api, { getApiErrorMessage } from '@/api'
+import api, { confirmAccountConnection, getApiErrorMessage } from '@/api'
 import { useAccountStore } from '@/stores/account'
 
 // Define interfaces for better type checking
@@ -26,7 +25,7 @@ interface DailyGift {
   canClaim?: boolean | null
   result?: string
   lastError?: string
-  scheduledHour?: number
+  checkIntervalMs?: number
   nextAt?: number
 }
 
@@ -51,7 +50,6 @@ export const useStatusStore = defineStore('status', () => {
   const realtimeConnected = ref(false)
   const realtimeLogsEnabled = ref(true)
   const currentRealtimeAccountId = ref('')
-  const tokenRef = useStorage('admin_token', '')
 
   const currentAccountConnected = computed(() => {
     const accountId = String(accountStore.currentAccountId || '')
@@ -94,6 +92,7 @@ export const useStatusStore = defineStore('status', () => {
       statusRequestSequence++
       loading.value = false
       status.value = normalizeStatusPayload(body.status)
+      confirmAccountConnection(accountId, !!status.value.connection?.connected)
       error.value = ''
     }
   }
@@ -119,7 +118,7 @@ export const useStatusStore = defineStore('status', () => {
       autoConnect: false,
       transports: ['websocket'],
       auth: {
-        token: tokenRef.value,
+        accountId: currentRealtimeAccountId.value || 'all',
       },
     })
 
@@ -158,15 +157,11 @@ export const useStatusStore = defineStore('status', () => {
       loading.value = false
       error.value = ''
     }
-    if (!tokenRef.value)
-      return
-
     if (nextAccountId && (accountChanged || (!status.value && !loading.value)))
       void fetchStatus(nextAccountId)
 
     const client = ensureRealtimeSocket()
     client.auth = {
-      token: tokenRef.value,
       accountId: currentRealtimeAccountId.value || 'all',
     }
 
@@ -197,13 +192,15 @@ export const useStatusStore = defineStore('status', () => {
     const sequence = ++statusRequestSequence
     loading.value = true
     try {
-      const { data } = await api.get('/api/status', {
+      const response = await api.get('/api/status', {
         headers: { 'x-account-id': accountId },
       })
+      const { data } = response
       if (sequence !== statusRequestSequence)
         return
       if (data.ok) {
         status.value = normalizeStatusPayload(data.data)
+        confirmAccountConnection(String(status.value.accountId || ''), !!status.value.connection?.connected, response)
         error.value = ''
       }
       else {

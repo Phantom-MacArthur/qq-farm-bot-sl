@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import ActivityHeader from '@/components/activity/ActivityHeader.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import { WeatherActivityView } from '@/components/activity/gameplays/weather'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore } from '@/stores/activity-center'
 import { useActivityClock } from './useActivityClock'
@@ -23,6 +24,8 @@ async function refreshActivity() {
   await activityStore.loadDetails(accountId(), 'weather')
   await activityStore.loadWeatherFriends(accountId())
 }
+// 重新上线时按一次刷新键
+useReconnectRefresh(refreshActivity)
 </script>
 
 <template>

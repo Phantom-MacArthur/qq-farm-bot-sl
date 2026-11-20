@@ -560,21 +560,4 @@ small {
     gap: 20px;
   }
 }
-
-@media (max-width: 520px) {
-  .work-card {
-    padding: 16px;
-  }
-
-  .work-choice {
-    grid-template-columns: 16px 44px minmax(0, 1fr);
-    gap: 10px;
-    padding: 10px 12px;
-  }
-
-  .work-choice__well {
-    width: 44px;
-    height: 44px;
-  }
-}
 </style>

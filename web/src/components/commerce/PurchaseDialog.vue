@@ -2,6 +2,7 @@
 import type { MallGoodsDto } from '@/stores/commerce'
 import { NButton } from 'naive-ui/es/button'
 import { computed, ref, watch } from 'vue'
+import { formatCompactAmount, formatNumber } from '@/utils/format-number'
 import { purchaseMaxCount } from '@/utils/purchase-count'
 import CommerceItemImage from './CommerceItemImage.vue'
 
@@ -9,6 +10,8 @@ const props = defineProps<{
   open: boolean
   goods: MallGoodsDto | null
   limitLabel?: string
+  showCurrencyName?: boolean
+  hideRewards?: boolean
   pending?: boolean
 }>()
 
@@ -37,7 +40,8 @@ function setCount(value: number) {
 </script>
 
 <template>
-  <div v-if="open && goods" class="purchase-mask" @click.self="!pending && emit('close')">
+  <Teleport to="body">
+    <div v-if="open && goods" class="purchase-mask" @click.self="!pending && emit('close')">
     <section class="purchase-dialog" role="dialog" aria-modal="true" :aria-label="`购买${goods.name}`">
       <!-- 头部：小图 + 名称 + 单价，主图不再单独占据大块面积 -->
       <header class="purchase-head">
@@ -51,7 +55,7 @@ function setCount(value: number) {
             <template v-else>
               单价
               <CommerceItemImage :src="goods.price.image" :alt="goods.price.name" size="sm" />
-              <b>{{ goods.price.count.toLocaleString() }}</b>
+              <b :title="showCurrencyName ? `${goods.price.name} ${formatNumber(goods.price.count)}` : undefined">{{ showCurrencyName ? formatCompactAmount(goods.price.count) : goods.price.count.toLocaleString() }}</b>
               <del v-if="goods.originalPrice">{{ goods.originalPrice.toLocaleString() }}</del>
             </template>
             <span v-if="goods.discountText" class="purchase-tag">{{ goods.discountText }}</span>
@@ -63,16 +67,18 @@ function setCount(value: number) {
       </header>
 
       <div class="purchase-body">
-        <div class="purchase-section-label">
-          每份包含<span v-if="goods.rewards.length > 1"> · {{ goods.rewards.length }} 件</span>
-        </div>
-        <ul class="purchase-rewards">
-          <li v-for="reward in goods.rewards" :key="reward.id">
-            <CommerceItemImage :src="reward.image" :alt="reward.name" size="sm" />
-            <span class="purchase-rewards__name">{{ reward.name }}</span>
-            <b>×{{ reward.count.toLocaleString() }}</b>
-          </li>
-        </ul>
+        <template v-if="!hideRewards">
+          <div class="purchase-section-label">
+            每份包含<span v-if="goods.rewards.length > 1"> · {{ goods.rewards.length }} 件</span>
+          </div>
+          <ul class="purchase-rewards">
+            <li v-for="reward in goods.rewards" :key="reward.id">
+              <CommerceItemImage :src="reward.image" :alt="reward.name" size="sm" />
+              <span class="purchase-rewards__name">{{ reward.name }}</span>
+              <b>×{{ reward.count.toLocaleString() }}</b>
+            </li>
+          </ul>
+        </template>
 
         <div class="purchase-row">
           <div>
@@ -98,7 +104,7 @@ function setCount(value: number) {
           <strong v-if="goods.isFree" class="purchase-total is-free">免费</strong>
           <strong v-else class="purchase-total" :class="{ 'is-short': insufficient }">
             <CommerceItemImage :src="goods.price.image" :alt="goods.price.name" size="sm" />
-            {{ totalCost.toLocaleString() }}
+            <span :title="showCurrencyName ? `${goods.price.name} ${formatNumber(totalCost)}` : undefined">{{ showCurrencyName ? formatCompactAmount(totalCost) : totalCost.toLocaleString() }}</span>
           </strong>
         </div>
 
@@ -119,7 +125,8 @@ function setCount(value: number) {
         </NButton>
       </footer>
     </section>
-  </div>
+    </div>
+  </Teleport>
 </template>
 
 <style scoped>

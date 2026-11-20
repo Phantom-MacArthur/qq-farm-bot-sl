@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import type { Account } from '@/stores/account'
 import { storeToRefs } from 'pinia'
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId } from 'vue'
-import api from '@/api'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import api, { getApiErrorMessage } from '@/api'
 import AccountCareerModal from '@/components/AccountCareerModal.vue'
 import AccountModal from '@/components/AccountModal.vue'
 import RemarkModal from '@/components/RemarkModal.vue'
+import { useAccountPresence, useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useStatusStore } from '@/stores/status'
 
@@ -15,6 +16,8 @@ const accountStore = useAccountStore()
 const statusStore = useStatusStore()
 const { accounts, currentAccount } = storeToRefs(accountStore)
 const { status } = storeToRefs(statusStore)
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
 
 const showAccountDropdown = ref(false)
 const showAccountModal = ref(false)
@@ -80,13 +83,17 @@ function accountDisplayName(acc?: Account | null) {
     return nick
   if (remark)
     return remark
-  return cleanText(acc.uin || acc.id) || '选择账号'
+  // 昵称与备注都没有时给个占位名，不回退到 id：id 是内部主键，展示出来会被误读成序号
+  return acc.uin ? cleanText(acc.uin) : '未命名账号'
 }
 
+// 副标题只展示真实 QQ 号（uin）。
+// 微信账号的 uin 为空，不能回退到 id：id 是内部主键（"1"、"4"），拿来展示会被误读成序号。
+// id 作为业务标识仍由 acc.id 直接使用，不受这里影响。
 function accountSubtitle(acc?: Account | null) {
   if (!acc)
     return ''
-  return cleanText(acc.uin || acc.id)
+  return cleanText(acc.uin)
 }
 
 function avatarSource(acc?: Account | null) {
@@ -203,28 +210,49 @@ async function handleAccountSaved() {
 }
 
 // 角色生涯：仿 origin，从顶栏账号菜单进入；数据走 /api/career（后端已移植）。
+let careerRevision = 0
 async function loadCareer() {
   const accountId = cleanText(currentAccount.value?.id)
-  if (!accountId)
+  if (!accountId || isOffline.value)
     return
+  const revision = ++careerRevision
   careerLoading.value = true
   careerError.value = ''
   try {
     const { data } = await api.get('/api/career', {
       headers: { 'x-account-id': accountId },
-    })
+      skipErrorToast: true,
+    } as any)
+    if (revision !== careerRevision)
+      return
     if (!data?.ok)
-      throw new Error(data?.error || '生涯记录读取失败')
+      throw new Error(getApiErrorMessage(data, '生涯记录读取失败'))
     careerProfile.value = data.data || {}
     careerItems.value = data.data?.items || []
   }
-  catch (error: any) {
-    careerError.value = error?.response?.data?.error || error?.message || '生涯记录读取失败'
+  catch (error) {
+    if (revision === careerRevision)
+      careerError.value = getApiErrorMessage(error, '生涯记录读取失败')
   }
   finally {
-    careerLoading.value = false
+    if (revision === careerRevision)
+      careerLoading.value = false
   }
 }
+
+watch(() => currentAccount.value?.id, () => {
+  careerRevision++
+  careerLoading.value = false
+  careerError.value = ''
+  careerItems.value = []
+  careerProfile.value = {}
+  if (showCareerModal.value)
+    void loadCareer()
+})
+useReconnectRefresh(() => {
+  if (showCareerModal.value)
+    void loadCareer()
+})
 
 function openCareer() {
   if (!currentAccount.value)
@@ -406,6 +434,7 @@ function openCareer() {
         :items="careerItems"
         :loading="careerLoading"
         :error="careerError"
+        :is-offline="isOffline"
         @close="showCareerModal = false"
         @refresh="loadCareer"
       />

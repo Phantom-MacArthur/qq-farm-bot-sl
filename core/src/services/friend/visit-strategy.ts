@@ -3,12 +3,11 @@
  */
 
 const { PlantPhase } = require('../../config/config');
-const { getPlantName, getPlantById } = require('../../config/gameConfig');
+const { getPlantName } = require('../../config/gameConfig');
 const {
     isAutomationOn,
     getFriendQuietHours,
     getFriendBlacklist,
-    getPlantBlacklist,
     getFriendsListCacheTtlSec,
 } = require('../../models/store');
 const { getUserState } = require('../../utils/network');
@@ -283,12 +282,7 @@ interface AnalyzeResult {
     canPutBug: number[];
 }
 
-interface AnalyzeOptions {
-    plantBlacklist?: number[] | null;
-}
-
-export function analyzeFriendLands(lands: any[], myGid: number, friendName: string = '', options: AnalyzeOptions = {}): AnalyzeResult {
-    const { plantBlacklist = null } = options;
+export function analyzeFriendLands(lands: any[], myGid: number, friendName: string = ''): AnalyzeResult {
     const result: AnalyzeResult = {
         stealable: [],   // 可偷
         stealableInfo: [],  // 可偷植物信息 { landId, plantId, name }
@@ -322,18 +316,6 @@ export function analyzeFriendLands(lands: any[], myGid: number, friendName: stri
                 const plantId: number = toNum(plant.id);
                 const plantName: string = getPlantName(plantId) || plant.name || '未知';
 
-                // 获取种子ID用于黑名单检查（前端黑名单使用seedId）
-                const plantCfg: any = getPlantById(plantId);
-                const seedId: number = plantCfg ? toNum(plantCfg.seed_id) : 0;
-
-                // 蔬菜黑名单过滤 - 使用seedId检查
-                if (plantBlacklist && seedId > 0 && plantBlacklist.includes(seedId)) {
-                    // log('好友', `${friendName} 土地#${id}: ${plantName}(${plantId},种子${seedId}) 被蔬菜黑名单过滤跳过`,
-                    //     {
-                    //     module: 'friend', event: '蔬菜黑名单跳过', friendName, landId: id, plantId, seedId, plantName
-                    // });
-                    continue;
-                }
                 result.stealable.push(id);
                 result.stealableInfo.push({ landId: id, plantId, name: plantName });
             }
@@ -489,8 +471,7 @@ export async function getFriendLandsDetail(friendGid: number, propagateErrors: b
         entered = true;
         const lands: any[] = enterReply.lands || [];
         const state: any = getUserState();
-        const plantBlacklist: number[] = getPlantBlacklist(state.accountId);
-        const analyzed: AnalyzeResult = analyzeFriendLands(lands, state.gid, '', { plantBlacklist });
+                const analyzed: AnalyzeResult = analyzeFriendLands(lands, state.gid);
 
         const nowSec: number = getServerTimeSec();
         const landsMap: any = buildLandMap(lands);
@@ -603,33 +584,6 @@ async function runFarmingWithFallback(
 }
 
 /**
- * 帮好友务农的统计细分：对齐 origin 的 helpWater / helpWeed / helpBug 三个操作键。
- * 一键务农接口不返回分类成功数，这里按各需求的土地数分配 operationCount，
- * 分配不完的剩余部分记入 helpFarming 兜底，保证总数不丢。
- */
-function recordHelpBreakdown(status: AnalyzeResult, operationCount: number): void {
-    if (operationCount <= 0) return;
-    const needs: Array<[string, number]> = [
-        ['helpWater', status.needWater.length],
-        ['helpWeed', status.needWeed.length],
-        ['helpBug', status.needBug.length],
-    ];
-    const totalNeed: number = needs.reduce((sum: number, [, n]) => sum + n, 0);
-    if (totalNeed <= 0) {
-        recordOperation('helpFarming', operationCount);
-        return;
-    }
-    let remaining: number = operationCount;
-    for (const [key, want] of needs) {
-        if (want <= 0 || remaining <= 0) continue;
-        const n: number = Math.min(want, remaining);
-        recordOperation(key, n);
-        remaining -= n;
-    }
-    if (remaining > 0) recordOperation('helpFarming', remaining);
-}
-
-/**
  * 面板手动好友操作（单个好友）
  * opType: 'steal' | 'water' | 'weed' | 'bug' | 'bad'
  */
@@ -665,8 +619,7 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
     try {
         const lands: any[] = enterReply.lands || [];
         const state: any = getUserState();
-        const plantBlacklist: number[] = getPlantBlacklist(state.accountId);
-        const status: AnalyzeResult = analyzeFriendLands(lands, state.gid, '', { plantBlacklist });
+                const status: AnalyzeResult = analyzeFriendLands(lands, state.gid);
         let count: number = 0;
 
         if (opType === 'steal') {
@@ -699,13 +652,6 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
             if (!landIds.length) return { ok: true, opType, count: 0, message: '没有需要照顾的土地' };
             const outcome: FarmingOutcome = await runFarmingWithFallback(gid, landIds, false, getHelpSnapshotKey(lands), propagateErrors);
             count = outcome.landCount;
-            if (outcome.operationCount > 0) {
-                // 对齐 origin：按操作类型细分记录帮浇水/帮除草/帮除虫。
-                if (opType === 'water') recordOperation('helpWater', outcome.operationCount);
-                else if (opType === 'weed') recordOperation('helpWeed', outcome.operationCount);
-                else if (opType === 'bug') recordOperation('helpBug', outcome.operationCount);
-                else recordHelpBreakdown(status, outcome.operationCount);
-            }
             return {
                 ok: true,
                 opType,
@@ -730,13 +676,11 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
                 const weedRet: { ok: number; failed: any[]; limitReached?: boolean } = await putWeedsDetailed(gid, status.canPutWeed, propagateErrors);
                 weedCount = weedRet.ok;
                 failDetails = failDetails.concat((weedRet.failed || []).map((f: any) => `放草#${f.landId}:${f.reason}`));
-                if (weedCount > 0) recordOperation('weed', weedCount);
             }
             if (!schedulerRef().isBadOperationLimitReached() && status.canPutBug.length) {
                 const bugRet: { ok: number; failed: any[]; limitReached?: boolean } = await putInsectsDetailed(gid, status.canPutBug, propagateErrors);
                 bugCount = bugRet.ok;
                 failDetails = failDetails.concat((bugRet.failed || []).map((f: any) => `放虫#${f.landId}:${f.reason}`));
-                if (bugCount > 0) recordOperation('bug', bugCount);
             }
             count = bugCount + weedCount;
             if (schedulerRef().isBadOperationLimitReached()) {
@@ -852,8 +796,7 @@ export async function visitFriend(
         return { acted: false, entered: true };
     }
 
-    const plantBlacklist: number[] = getPlantBlacklist(accountId);
-    const status: AnalyzeResult = analyzeFriendLands(lands, myGid, name, { plantBlacklist });
+        const status: AnalyzeResult = analyzeFriendLands(lands, myGid, name);
 
     // 执行操作
     const actions: string[] = [];
@@ -879,8 +822,6 @@ export async function visitFriend(
                 actions.push(`一键务农${outcome.landCount}块/${outcome.operationCount}项(${parts.join('/')})`);
                 if (outcome.dogSkillGiftCount > 0) actions.push(`同气连枝礼包x${outcome.dogSkillGiftCount}(自动获得)`);
                 totalActions.farming += outcome.landCount;
-                // 对齐 origin：自动拜访的一键帮务农同样细分记录帮浇水/帮除草/帮除虫。
-                recordHelpBreakdown(status, outcome.operationCount);
             }
         }
     }

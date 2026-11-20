@@ -45,7 +45,7 @@ const items: Array<{ key: ActivityTab, label: string, description: string, icon:
 .activity-nav {
   position: absolute;
   z-index: 30;
-  top: calc(110px + env(safe-area-inset-top));
+  top: 110px;
   bottom: 24px;
   left: 24px;
   width: 220px;
@@ -127,49 +127,5 @@ button[data-active] {
   border: 2px solid white;
   border-radius: 50%;
   background: var(--ui-danger);
-}
-@media (max-width: 900px) {
-  .activity-nav {
-    top: calc(82px + env(safe-area-inset-top));
-    right: 10px;
-    bottom: auto;
-    left: 10px;
-    width: auto;
-    grid-template-columns: none;
-    grid-auto-flow: column;
-    grid-auto-columns: 108px;
-    grid-auto-rows: 44px;
-    gap: 7px;
-    overflow-x: auto;
-    padding: 4px 8px 10px;
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    scroll-padding-inline: 8px;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-  .activity-nav::-webkit-scrollbar {
-    display: none;
-  }
-  button {
-    min-width: 108px;
-    min-height: 44px;
-    justify-content: flex-start;
-    gap: 6px;
-    padding: 7px 9px;
-    border-radius: 9px;
-    scroll-snap-align: start;
-  }
-  .activity-nav__icon {
-    width: 16px;
-    font-size: 16px;
-  }
-  .activity-nav__copy strong {
-    font-size: 11px;
-  }
-  .activity-nav__copy small {
-    display: none;
-  }
 }
 </style>

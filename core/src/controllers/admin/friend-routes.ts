@@ -180,7 +180,7 @@ function mountFriendRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    // API: 好友黑名单
+    // API: 黑名单
     app.get('/api/friend-blacklist', async (req: Request, res: Response) => {
         const id = getAccId(ctx, req);
         if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { computed, ref } from 'vue'
-import api from '@/api'
+import api, { isAccountOfflineCode } from '@/api'
 
 export type ActivityTabKey = 'travel' | 'constellation' | 'shop' | 'solar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk'
 export type ActivityGameplayKey = 'stellar' | 'qixi' | 'qingmei' | 'charity' | 'weather' | 'pet' | 'wish' | 'happy' | 'milk'
@@ -1644,8 +1644,6 @@ const activityErrorMessages: Record<string, string> = {
   QIXI_DEW_TARGET_UNAVAILABLE: '所选地块已不再可用，请刷新后重选',
   SEASON_UNAVAILABLE: '当前活动数据暂未开放，请稍后刷新重试',
   INVALID_SOLAR_TERM: '节令信息已失效，请刷新页面后重试',
-  ACCOUNT_OFFLINE: '当前账号尚未运行，请先启动账号后再试',
-  GAME_OFFLINE: '游戏连接尚未就绪，请稍后重试',
   ACTIVITY_TIMEOUT: '活动服务响应超时，请稍后重试',
   ACTIVITY_BUSY: '活动操作过于频繁，请稍后再试',
   ACTIVITY_REQUEST_INTERRUPTED: '活动请求未能完成，请稍后重试',
@@ -1657,6 +1655,8 @@ function errorMessage(error: unknown, fallback = '活动数据加载失败') {
   const candidate = error as { response?: { data?: { error?: unknown, message?: unknown, errorCode?: unknown } }, message?: unknown, code?: unknown }
   const rawMessage = String(candidate.response?.data?.error || candidate.response?.data?.message || candidate.message || '')
   const errorCode = String(candidate.response?.data?.errorCode || candidate.code || rawMessage.match(/\bcode=(\d+)\b/)?.[1] || '')
+  if (isAccountOfflineCode(errorCode))
+    return ''
   if (activityErrorMessages[errorCode])
     return activityErrorMessages[errorCode]
   if (rawMessage.includes('当前无可领取的奖励节点'))

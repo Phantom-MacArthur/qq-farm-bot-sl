@@ -3,6 +3,8 @@ export {};
 interface ReloginReminderOptions {
     store: any;
     sendPushooMessage: (payload: any) => Promise<any>;
+    sendWxPusherMessage?: (payload: any) => Promise<any>;
+    sendWxPusherWechatMessage?: (payload: any) => Promise<any>;
     log: (tag: string, msg: string, extra?: any) => void;
 }
 
@@ -14,38 +16,45 @@ interface OfflineReminderPayload {
 }
 
 function createReloginReminderService(options: ReloginReminderOptions) {
-    const { store, sendPushooMessage, log } = options;
+    const { store, sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage, log } = options;
 
-    function getOfflineAutoDeleteMs(): number {
-        const cfg = store.getOfflineReminder ? store.getOfflineReminder() : null;
-        const sec = Math.max(0, Number.parseInt(cfg?.offlineDeleteSec, 10) || 0);
-        return sec === 0 ? Infinity : sec * 1000;
-    }
-
-    function resolvePushChannel(): { ok: true; channel: string; endpoint: string; token: string; secret: string } | { ok: false; reason: string } {
-        const cfg = store.getOfflineReminder ? store.getOfflineReminder() : null;
+    // 按渠道从 channelCredentials 解析 token / wxPusherUid；
+    // 若分渠道凭据暂缺，兼容回退到旧版顶层 token / wxPusherUid 字段。
+    function resolvePushChannel(accountId: string):
+        | { ok: true; channel: string; token: string; wxPusherUid: string; endpoint: string; secret: string }
+        | { ok: false; reason: string } {
+        const cfg = store.getOfflineReminder ? store.getOfflineReminder(accountId) : null;
         if (!cfg) return { ok: false, reason: '未找到下线提醒配置' };
 
         const channel = String(cfg.channel || '').trim().toLowerCase();
-        const endpoint = String(cfg.endpoint || '').trim();
-        const token = String(cfg.token || '').trim();
-        const secret = String(cfg.secret || '').trim();
         if (!channel) return { ok: false, reason: '下线提醒配置不完整' };
+
+        const credentials = (cfg.channelCredentials && typeof cfg.channelCredentials === 'object')
+            ? cfg.channelCredentials as Record<string, { token?: string; wxPusherUid?: string }>
+            : {};
+        const entry = credentials[channel] || {};
+        const token = String(entry.token || cfg.token || '').trim();
+        const wxPusherUid = String(entry.wxPusherUid || cfg.wxPusherUid || '').trim();
+        const endpoint = String(cfg.endpoint || '').trim();
+        const secret = String(cfg.secret || '').trim();
+
         if (channel === 'webhook' && !endpoint) return { ok: false, reason: 'Webhook 渠道未设置接口地址' };
         if (channel === 'dingtalk' && !endpoint && !token) return { ok: false, reason: '钉钉渠道未设置 Webhook 地址' };
         if (channel !== 'webhook' && channel !== 'dingtalk' && !token) return { ok: false, reason: '下线提醒渠道未设置 Token' };
-        return { ok: true, channel, endpoint, token, secret };
+        if (channel === 'wxpusher_wechat' && !wxPusherUid) return { ok: false, reason: 'WxPusher 渠道未设置接收者 UID' };
+        return { ok: true, channel, token, wxPusherUid, endpoint, secret };
     }
 
-    async function sendConfiguredPush(payload: { title?: string; content?: string; accountId?: string; accountName?: string; logLabel?: string } = {}): Promise<void> {
+    async function sendConfiguredPush(payload: { title?: string; content?: string; accountId?: string; accountName?: string; logLabel?: string; appendAccountName?: boolean } = {}): Promise<void> {
         const accountId = String(payload.accountId || '').trim();
         const accountName = String(payload.accountName || '').trim();
         const baseTitle = String(payload.title || '').trim();
         const content = String(payload.content || '').trim();
-        const title = accountName ? `${baseTitle} ${accountName}` : baseTitle;
+        const appendAccountName = payload.appendAccountName !== false;
+        const title = appendAccountName && accountName ? `${baseTitle} ${accountName}` : baseTitle;
         const logLabel = String(payload.logLabel || '事件提醒').trim() || '事件提醒';
         try {
-            const channelCfg = resolvePushChannel();
+            const channelCfg = resolvePushChannel(accountId);
             if (channelCfg.ok === false) {
                 log('错误', channelCfg.reason);
                 return;
@@ -54,14 +63,26 @@ function createReloginReminderService(options: ReloginReminderOptions) {
                 log('错误', '推送标题或内容为空');
                 return;
             }
-            const result = await sendPushooMessage({
+
+            const basePayload = {
                 channel: channelCfg.channel,
                 endpoint: channelCfg.endpoint,
                 token: channelCfg.token,
                 secret: channelCfg.secret,
+                wxPusherUid: channelCfg.wxPusherUid,
                 title,
                 content,
-            });
+            };
+
+            let result: any;
+            if (channelCfg.channel === 'wxpusher' && typeof sendWxPusherMessage === 'function') {
+                result = await sendWxPusherMessage(basePayload);
+            } else if (channelCfg.channel === 'wxpusher_wechat' && typeof sendWxPusherWechatMessage === 'function') {
+                result = await sendWxPusherWechatMessage(basePayload);
+            } else {
+                result = await sendPushooMessage(basePayload);
+            }
+
             if (result?.ok) {
                 log('系统', `${logLabel}发送成功: ${accountName || accountId || title}`);
             } else {
@@ -79,26 +100,27 @@ function createReloginReminderService(options: ReloginReminderOptions) {
             const reason = String(payload.reason || 'unknown');
             log('系统', `触发下线提醒: 账号=${accountName || accountId}, 原因=${reason}`, { accountId, accountName, reason });
 
-            const cfg = store.getOfflineReminder ? store.getOfflineReminder() : null;
+            const cfg = store.getOfflineReminder ? store.getOfflineReminder(accountId) : null;
             if (!cfg) {
                 log('错误', '未找到下线提醒配置');
                 return;
             }
 
-            const baseTitle = String(cfg.title || '').trim();
-            const content = String(cfg.msg || '').trim();
+            // 标题默认使用当前账号备注（账号名）；内容默认「农场下线」。
+            const baseTitle = String(cfg.title || '').trim() || accountName || '农场下线';
+            const content = String(cfg.msg || '').trim() || '农场下线';
             if (!baseTitle || !content) {
                 log('错误', '下线提醒配置不完整');
                 return;
             }
 
-            await sendConfiguredPush({ title: baseTitle, content, accountId, accountName, logLabel: '下线提醒' });
+            await sendConfiguredPush({ title: baseTitle, content, accountId, accountName, logLabel: '下线提醒', appendAccountName: false });
         } catch (e: any) {
             log('错误', `下线提醒发送异常: ${e.message}`);
         }
     }
 
-    return { getOfflineAutoDeleteMs, triggerOfflineReminder, sendConfiguredPush };
+    return { triggerOfflineReminder, sendConfiguredPush };
 }
 
 module.exports = { createReloginReminderService };

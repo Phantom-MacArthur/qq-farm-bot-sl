@@ -1,42 +1,9 @@
-import type { NextFunction, Request, Response } from 'express';
+import type { Request, Response } from 'express';
 import type { AdminContext } from './context';
 export {};
 
-const crypto = require('node:crypto');
 const store = require('../../models/store');
 const { normalizeAccountRef, resolveAccountId } = require('../../services/account-resolver');
-
-interface AuthenticatedRequest extends Request {
-    adminToken?: string;
-}
-
-function getClientIp(req: Request): string {
-    const cfIp = req.headers['cf-connecting-ip'];
-    if (cfIp) return String(cfIp).trim();
-    const realIp = req.headers['x-real-ip'];
-    if (realIp) return String(realIp).trim();
-    const forwarded = req.headers['x-forwarded-for'];
-    if (forwarded) {
-        const first = String(forwarded).split(',').map(item => item.trim()).find(Boolean);
-        if (first) return first;
-    }
-    const address = req.ip || (req as any).connection?.remoteAddress || req.socket?.remoteAddress;
-    return String(address || 'unknown').replace(/^::ffff:/, '');
-}
-
-const issueToken = (): string => crypto.randomBytes(24).toString('hex');
-
-function createAuthRequired(ctx: AdminContext) {
-    return (req: AuthenticatedRequest, res: Response, next: NextFunction): void => {
-        const token = String(req.headers['x-admin-token'] || '');
-        if (!token || !ctx.tokens.has(token)) {
-            res.status(401).json({ ok: false, error: 'Unauthorized' });
-            return;
-        }
-        req.adminToken = token;
-        next();
-    };
-}
 
 function getAccountList(ctx: AdminContext): any[] {
     try {
@@ -57,9 +24,14 @@ function getAccountIds(ctx: AdminContext): string[] {
     return getAccountList(ctx).map((account: any) => String(account.id || '')).filter(Boolean);
 }
 
+function getOfflineErrorCode(err: any): 'ACCOUNT_OFFLINE' | 'GAME_OFFLINE' | undefined {
+    const code = err?.code;
+    return code === 'ACCOUNT_OFFLINE' || code === 'GAME_OFFLINE' ? code : undefined;
+}
+
 const isSoftRuntimeError = (err: any): boolean => {
-    const message = String(typeof err === 'string' ? err : err?.message || '');
-    return message === '账号未运行' || message === 'API Timeout';
+    const message = typeof err === 'string' ? err : err?.message;
+    return !!getOfflineErrorCode(err) || message === 'API Timeout';
 };
 
 function isGatewayProtocolError(err: any): boolean {
@@ -79,7 +51,10 @@ function getProtocolErrorMessage(err: any): string {
     return message.match(/\bcode=\d+\b\s*(.*)$/)?.[1]?.trim() || '';
 }
 
-function handleApiError(res: Response, err: any): void {
+function handleApiError(res: Response, err: any): Response {
+    const offlineCode = getOfflineErrorCode(err);
+    if (offlineCode) return res.json({ ok: false, error: offlineCode, errorCode: offlineCode });
+
     const protocolMessage = getProtocolErrorMessage(err);
     const payload: any = {
         ok: false,
@@ -88,11 +63,8 @@ function handleApiError(res: Response, err: any): void {
     if (protocolMessage) payload.errorMessage = protocolMessage;
     const errorCode = Number(err?.code);
     if (Number.isFinite(errorCode) && errorCode !== 0) payload.errorCode = errorCode;
-    if (isSoftRuntimeError(err) || isGatewayProtocolError(err)) {
-        res.json(payload);
-        return;
-    }
-    res.status(500).json(payload);
+    if (isSoftRuntimeError(err) || isGatewayProtocolError(err)) return res.json(payload);
+    return res.status(500).json(payload);
 }
 
 function resolveAccId(ctx: AdminContext, rawRef: any): string {
@@ -126,11 +98,9 @@ function buildKnownFriendGidSettings(accountId: string): {
 }
 
 module.exports = {
-    getClientIp,
-    issueToken,
-    createAuthRequired,
     getAccountList,
     getAccountIds,
+    getOfflineErrorCode,
     isSoftRuntimeError,
     isGatewayProtocolError,
     getProtocolErrorMessage,

@@ -4,22 +4,18 @@ export {};
 
 /**
  * Farm-related routes: status, automation, fertilizer, lands, seeds, bag,
- * daily-gifts, accounts start/stop, farm operate, analytics, plant-blacklist.
+ * daily-gifts, accounts start/stop, farm operate, analytics.
  */
 
 const { getLevelExpProgress } = require('../../config/gameConfig');
-const store = require('../../models/store');
 
 const {
-    createAuthRequired,
     getAccId,
     handleApiError,
     resolveAccId,
 } = require('./middleware');
 
 function mountFarmRoutes(app: Application, ctx: AdminContext): void {
-    const authRequired = createAuthRequired(ctx);
-
     // API: 完整状态
     app.get('/api/status', async (req: Request, res: Response) => {
         const id = getAccId(ctx, req);
@@ -160,122 +156,6 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         try {
             const data = await ctx.provider.useSelfInteractionItemBatch(id, req.body?.itemId, req.body?.landIds);
             res.json({ ok: true, data });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    // API: 蔬菜黑名单
-    app.get('/api/plant-blacklist', authRequired, (req: Request, res: Response) => {
-        try {
-            const accountId = getAccId(ctx, req);
-            if (!accountId) return res.status(400).json({ ok: false, error: 'Missing accountId' });
-
-            const list = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-            res.json({ ok: true, data: list });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    app.post('/api/plant-blacklist', authRequired, (req: Request, res: Response) => {
-        try {
-            const accountId = getAccId(ctx, req);
-            if (!accountId) return res.status(400).json({ ok: false, error: 'Missing accountId' });
-
-            const seedId = Number((req.body || {}).seedId);
-            if (!seedId) return res.status(400).json({ ok: false, error: 'Missing seedId' });
-
-            const current = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-
-            if (!current.includes(seedId)) {
-                const next = [...current, seedId];
-                if (store.setPlantBlacklist) {
-                    store.setPlantBlacklist(accountId, next);
-                }
-            }
-
-            if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function') {
-                ctx.provider.broadcastConfig(accountId);
-            }
-
-            const saved = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-            res.json({ ok: true, data: saved });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    app.delete('/api/plant-blacklist/:seedId', authRequired, (req: Request, res: Response) => {
-        try {
-            const accountId = getAccId(ctx, req);
-            if (!accountId) return res.status(400).json({ ok: false, error: 'Missing accountId' });
-
-            const seedId = Number(req.params.seedId);
-            if (!seedId) return res.status(400).json({ ok: false, error: 'Missing seedId' });
-
-            const current = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-            const next = current.filter((id: number) => id !== seedId);
-
-            if (store.setPlantBlacklist) {
-                store.setPlantBlacklist(accountId, next);
-            }
-
-            if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function') {
-                ctx.provider.broadcastConfig(accountId);
-            }
-
-            const saved = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-            res.json({ ok: true, data: saved });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    // API: 批量添加蔬菜黑名单
-    app.post('/api/plant-blacklist/batch', authRequired, (req: Request, res: Response) => {
-        try {
-            const accountId = getAccId(ctx, req);
-            if (!accountId) return res.status(400).json({ ok: false, error: 'Missing accountId' });
-
-            const seedIds = (req.body || {}).seedIds || [];
-            if (!Array.isArray(seedIds)) {
-                return res.status(400).json({ ok: false, error: 'seedIds must be an array' });
-            }
-
-            const current = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-            const merged = [...new Set([...current, ...seedIds.map(Number).filter((n: number) => Number.isFinite(n) && n > 0)])];
-
-            if (store.setPlantBlacklist) {
-                store.setPlantBlacklist(accountId, merged);
-            }
-
-            if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function') {
-                ctx.provider.broadcastConfig(accountId);
-            }
-
-            const saved = store.getPlantBlacklist ? store.getPlantBlacklist(accountId) : [];
-            res.json({ ok: true, data: saved });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    // API: 清空蔬菜黑名单
-    app.delete('/api/plant-blacklist', authRequired, (req: Request, res: Response) => {
-        try {
-            const accountId = getAccId(ctx, req);
-            if (!accountId) return res.status(400).json({ ok: false, error: 'Missing accountId' });
-
-            if (store.setPlantBlacklist) {
-                store.setPlantBlacklist(accountId, []);
-            }
-
-            if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function') {
-                ctx.provider.broadcastConfig(accountId);
-            }
-
-            res.json({ ok: true, data: [] });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -640,15 +520,68 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
     app.get('/api/config/seeds', async (req: Request, res: Response) => {
         try {
             const { getAllSeeds, getItemById, parseSells } = require('../../config/gameConfig');
+            const { getCalibratedSeedPrice, isSeedInCatalog, isCatalogLoaded } = require('../../services/seed-price-cache');
+            const { getPlantRankings } = require('../../services/analytics');
             const seeds = getAllSeeds();
-            // 补充 priceId 字段供前端统一价格显示
+            // 效率指标复用 analytics 单一计算源，避免前端重复实现同一套公式（前端只展示数值与拼接提示文本）
+            const metricsBySeed = new Map<number, any>();
+            for (const r of getPlantRankings('exp')) metricsBySeed.set(Number(r.seedId), r);
+            // 补充 priceId 与校准标记：calibrated=false 时 price 为 2×sells 估算值（非真实购买价，利润列应留空）
+            // limited=true 表示该种子确认不在普通种子商店目录（活动/解锁卡/神秘商人等限定渠道），
+            // 永远拿不到购买价，利润列展示“限定”而不是空白。
+            const catalogLoaded = isCatalogLoaded();
             const data = seeds.map((s: any) => {
                 const item = getItemById(s.seedId);
                 const sellsList = item ? parseSells(item.sells) : [];
                 const priceId = sellsList.length > 0 ? sellsList[0].currencyId : 0;
-                return { ...s, priceId };
+                const calibrated = getCalibratedSeedPrice(s.seedId) != null;
+                const limited = catalogLoaded && !isSeedInCatalog(s.seedId);
+                const r = metricsBySeed.get(Number(s.seedId));
+                const metrics = r ? {
+                    seasons: r.seasons,
+                    exp: r.exp,
+                    baseGrowTime: r.baseGrowTime,
+                    firstPhase: r.reduceSec,
+                    fruitCount: r.fruitCount,
+                    fruitPrice: r.fruitPrice,
+                    seedPrice: r.seedPrice,
+                    expPerHour: r.expPerHour,
+                    normalFertilizerExpPerHour: r.normalFertilizerExpPerHour,
+                    incomePerSeason: r.incomePerSeason,
+                    profitPerHour: r.profitPerHour,
+                    normalFertilizerProfitPerHour: r.normalFertilizerProfitPerHour,
+                } : null;
+                return { ...s, priceId, calibrated, limited, metrics };
             });
             res.json({ ok: true, data });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    /**
+     * POST /api/config/seeds/calibrate — 用在线账号的种子商店目录校准购买价。
+     * 目录为全服标准目录，价格与服务端全局一致，任一在线账号拉取成功即可覆盖全部种子，
+     * 无需聚合多个账号；仅当某账号 worker 请求失败时才顺延下一个（纯可靠性兜底）。
+     */
+    app.post('/api/config/seeds/calibrate', async (_req: Request, res: Response) => {
+        try {
+            const { getSeedPriceCalibrationSummary } = require('../../services/seed-price-cache');
+            const accounts: any[] = (ctx.provider.getAccounts()?.accounts || []) as any[];
+            const online = accounts.filter((a: any) => ctx.provider.isAccountRunning(a.id));
+            if (online.length === 0) return res.json({ ok: false, error: '没有在线账号，无法校准；账号上线后的常规商店拉取也会自动校准' });
+            // 成功即返回，只有该账号请求抛错才试下一个，避免首个 worker 失败就白白丢掉这次校准机会
+            let lastError: any = null;
+            for (const account of online) {
+                try {
+                    // worker 内的 getAvailableSeeds 成功拉取目录时顺带写入校准缓存
+                    await ctx.provider.refreshSeedShopCatalog(account.id);
+                    return res.json({ ok: true, data: { accountId: account.id, accountName: account.name || '', ...getSeedPriceCalibrationSummary() } });
+                } catch (e: any) {
+                    lastError = e;
+                }
+            }
+            res.json({ ok: false, error: `所有在线账号校准均失败：${lastError?.message || '未知错误'}` });
         } catch (e: any) {
             handleApiError(res, e);
         }

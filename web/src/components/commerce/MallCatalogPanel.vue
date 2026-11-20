@@ -7,7 +7,12 @@ import { useRoute } from 'vue-router'
 import CommerceItemImage from '@/components/commerce/CommerceItemImage.vue'
 import CommerceShopBar from '@/components/commerce/CommerceShopBar.vue'
 import PurchaseDialog from '@/components/commerce/PurchaseDialog.vue'
+import BaseInput from '@/components/ui/BaseInput.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import OfflineState from '@/components/ui/OfflineState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence, useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useCommerceStore } from '@/stores/commerce'
 import { useToastStore } from '@/stores/toast'
@@ -22,6 +27,8 @@ const commerceStore = useCommerceStore()
 const toast = useToastStore()
 const route = useRoute()
 const { currentAccountId } = storeToRefs(accountStore)
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
 const { mall, mallLoading, purchasingGoodsId, error, notice } = storeToRefs(commerceStore)
 const selected = ref<MallGoodsDto | null>(null)
 const filter = ref<FilterKey>(route.query.category === 'pet-diary' ? 'activity' : 'all')
@@ -46,6 +53,9 @@ const filters = computed<Array<{ key: FilterKey, label: string }>>(() => {
   }
   return entries
 })
+
+// BaseSelect 要求 { label, value } 结构，把 filters 的 key 映射为 value。
+const filterOptions = computed(() => filters.value.map(entry => ({ label: entry.label, value: entry.key })))
 
 const filteredGoods = computed(() => {
   const keyword = query.value.trim().toLowerCase()
@@ -77,21 +87,6 @@ function formatDuration(seconds: number) {
     return `${hours}小时${minutes}分`
   return `${Math.max(1, minutes)}分钟`
 }
-
-const shopStatus = computed(() => {
-  if (!mall.value)
-    return ''
-  if (propsShop)
-    return ''
-  if (slotType === 4 && mall.value.membership) {
-    return mall.value.membership.isSvip
-      ? `SVIP 生效中 · 剩余 ${mall.value.membership.remainingDays} 天`
-      : '当前账号不是 SVIP，可浏览专属商品'
-  }
-  const refreshAt = mall.value.serverTime + mall.value.refreshCountdown * 1000
-  const seconds = Math.max(0, Math.floor((refreshAt - clock.value) / 1000))
-  return `${formatDuration(seconds)}后刷新`
-})
 
 const currencies = computed(() => (mall.value?.currencies || []).map(currency => ({
   id: currency.id,
@@ -140,7 +135,7 @@ async function purchase(count: number) {
     toast.success(`购买成功：${goods.name} x${count}`)
     selected.value = null
   }
-  else {
+  else if (!isOffline.value && selected.value === goods) {
     toast.error(error.value || `购买失败：${goods.name}`)
   }
 }
@@ -154,6 +149,12 @@ watch(currentAccountId, () => {
   selected.value = null
   load()
 })
+watch(isOffline, (offline) => {
+  if (offline)
+    selected.value = null
+})
+// 重新上线时按一次刷新键
+useReconnectRefresh(load)
 watch(mall, () => {
   if (selected.value)
     selected.value = mall.value?.goods.find(goods => goods.id === selected.value?.id) || null
@@ -169,115 +170,111 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="mall-catalog">
-    <CommerceShopBar
-      :status="shopStatus"
-      :status-tone="slotType === 4 && mall?.membership?.isSvip ? 'violet' : 'muted'"
-      :currencies="currencies"
-      :loading="mallLoading"
-      :disabled="!currentAccountId"
-      refresh-label="刷新商城"
-      @refresh="load"
-    />
-
-    <div v-if="(error && mall) || notice" class="shop-message" :class="{ 'is-success': !!notice && !error }" role="status">
-      <span>{{ error || notice }}</span>
-      <button type="button" title="关闭消息" aria-label="关闭消息" @click="commerceStore.clearMessages">
-        <span class="i-carbon-close" />
-      </button>
-    </div>
-
-    <section v-if="mall" class="mall-filters" aria-label="商品筛选">
-      <div class="mall-filters__chips" role="group" aria-label="商品分类">
-        <NButton
-          v-for="entry in filters"
-          :key="entry.key"
-          size="small"
-          :type="filter === entry.key ? 'primary' : 'default'"
-          :secondary="filter !== entry.key"
-          @click="filter = entry.key"
+  <div class="mall-catalog panel-fill">
+    <section class="mall-card page-card-surface rounded-2xl panel-scroll-layout">
+      <div class="mall-head panel-titlebar shrink-0">
+        <CommerceShopBar
+          class="mall-shopbar"
+          :currencies="currencies"
+          :loading="mallLoading"
+          :disabled="!currentAccountId"
+          refresh-label="刷新商城"
+          @refresh="load"
         >
-          {{ entry.label }}
-        </NButton>
+          <template #actions>
+            <BaseInput v-model="query" type="search" placeholder="输入名称搜索" />
+            <BaseSelect
+              v-model="filter"
+              :options="filterOptions"
+              fit-width
+              placeholder="全部分类"
+            />
+          </template>
+        </CommerceShopBar>
       </div>
-      <label class="mall-search">
-        <span class="i-carbon-search" aria-hidden="true" />
-        <input v-model="query" type="search" placeholder="搜索商品或内容" aria-label="搜索商品">
-      </label>
-    </section>
 
-    <EmptyState v-if="!currentAccountId" title="请先选择账号" description="商城商品与余额按当前账号读取" icon="i-carbon-user-avatar" />
-    <div v-else-if="mallLoading && !mall" class="shop-loading">
-      <span class="i-svg-spinners-90-ring-with-bg" />
-    </div>
-    <EmptyState v-else-if="!mall && error" tone="error" title="商城读取失败" :description="error" icon="i-carbon-warning-alt">
-      <NButton secondary @click="load">
-        重新读取
-      </NButton>
-    </EmptyState>
-    <EmptyState v-else-if="filteredGoods.length === 0" title="没有匹配的商品" description="换个分类或关键词试试" icon="i-carbon-search-locate" />
-
-    <section v-else class="goods-grid" aria-live="polite">
-      <article
-        v-for="goods in filteredGoods"
-        :key="goods.id"
-        class="goods-card"
-        :class="{ 'is-unavailable': !goods.action.enabled }"
-      >
-        <div class="goods-card__visual">
-          <CommerceItemImage :src="goods.rewards[0]?.image" :alt="goods.rewards[0]?.name || goods.name" size="md" />
+      <div class="mall-body panel-scroll-body">
+        <div v-if="!isOffline && ((error && mall) || notice)" class="shop-message" :class="{ 'is-success': !!notice && !error }" role="status">
+          <span>{{ error || notice }}</span>
+          <RefreshButton v-if="error" label="重新读取" size="small" @click="load" />
+          <button type="button" title="关闭消息" aria-label="关闭消息" @click="commerceStore.clearMessages">
+            <span class="i-carbon-close" />
+          </button>
         </div>
 
-        <div class="goods-card__main">
-          <div class="goods-card__title">
-            <h3 class="goods-card__name" :title="`${goods.name} #${goods.id}`">
-              {{ goods.name }}
-            </h3>
-            <span v-if="!goods.isFree && goods.discountText" class="goods-tag">{{ goods.discountText }}</span>
-          </div>
-          <div v-if="isSingleReward(goods)" class="goods-card__single">
-            {{ goods.rewards[0]?.name }} <b>×{{ goods.rewards[0]?.count.toLocaleString() }}</b>
-          </div>
-          <div v-else class="goods-card__rewards" :title="rewardSummary(goods)" :aria-label="`礼包内容：${rewardSummary(goods).replace(/\n/g, '，')}`">
-            <span class="reward-total">{{ goods.rewards.length }}件</span>
-            <span class="goods-card__reward-track">
-              <span v-for="reward in goods.rewards" :key="reward.id" class="reward-chip">
-                <CommerceItemImage :src="reward.image" :alt="reward.name" size="sm" />
-                <b>×{{ reward.count.toLocaleString() }}</b>
-              </span>
-            </span>
-          </div>
-          <div v-if="goods.limit || discountRemaining(goods)" class="goods-card__meta">
-            <span v-if="goods.limit">{{ limitLabel(goods) }} {{ goods.limit.bought }}/{{ goods.limit.max }}</span>
-            <span v-if="discountRemaining(goods)" class="is-warn">{{ discountRemaining(goods) }}</span>
-          </div>
+        <EmptyState v-if="!currentAccountId" title="请先选择账号" description="商城商品与余额按当前账号读取" icon="i-carbon-user-avatar" />
+        <OfflineState v-else-if="isOffline" />
+        <div v-else-if="mallLoading && !mall" class="shop-loading">
+          <span class="i-svg-spinners-90-ring-with-bg" />
         </div>
+        <EmptyState v-else-if="!mall && error" title="商城读取失败" :description="error" tone="error" bare>
+          <RefreshButton label="重新读取" :loading="mallLoading" @click="load" />
+        </EmptyState>
+        <EmptyState v-else-if="filteredGoods.length === 0" title="没有匹配的商品" description="换个分类或关键词试试" icon="i-carbon-search-locate" />
 
-        <div class="goods-card__buy">
-          <div class="goods-price">
-            <strong v-if="goods.isFree" class="goods-price__free">免费</strong>
-            <template v-else>
-              <CommerceItemImage :src="goods.price.image" :alt="goods.price.name" size="sm" />
-              <strong :title="goods.price.name">{{ goods.price.count.toLocaleString() }}</strong>
-              <del v-if="goods.originalPrice">{{ goods.originalPrice.toLocaleString() }}</del>
-            </template>
-          </div>
-          <NButton
-            size="small"
-            :type="goods.action.enabled ? 'primary' : 'default'"
-            :secondary="!goods.action.enabled"
-            :title="goods.action.reason"
-            :disabled="!goods.action.enabled || purchasingGoodsId !== null"
-            @click="choose(goods)"
+        <section v-else class="goods-grid" aria-live="polite">
+          <article
+            v-for="goods in filteredGoods"
+            :key="goods.id"
+            class="goods-card"
+            :class="{ 'is-unavailable': !goods.action.enabled }"
           >
-            {{ goods.action.label }}
-          </NButton>
-        </div>
-      </article>
+            <div class="goods-card__visual">
+              <CommerceItemImage :src="goods.rewards[0]?.image" :alt="goods.rewards[0]?.name || goods.name" size="md" />
+            </div>
+
+            <div class="goods-card__main">
+              <div class="goods-card__title">
+                <h3 class="goods-card__name" :title="`${goods.name} #${goods.id}`">
+                  {{ goods.name }}
+                </h3>
+                <span v-if="!goods.isFree && goods.discountText" class="goods-tag">{{ goods.discountText }}</span>
+              </div>
+              <div v-if="isSingleReward(goods)" class="goods-card__single">
+                {{ goods.rewards[0]?.name }} <b>×{{ goods.rewards[0]?.count.toLocaleString() }}</b>
+              </div>
+              <div v-else class="goods-card__rewards" :title="rewardSummary(goods)" :aria-label="`礼包内容：${rewardSummary(goods).replace(/\n/g, '，')}`">
+                <span class="reward-total">{{ goods.rewards.length }}件</span>
+                <span class="goods-card__reward-track">
+                  <span v-for="reward in goods.rewards" :key="reward.id" class="reward-chip">
+                    <CommerceItemImage :src="reward.image" :alt="reward.name" size="sm" />
+                    <b>×{{ reward.count.toLocaleString() }}</b>
+                  </span>
+                </span>
+              </div>
+              <div v-if="goods.limit || discountRemaining(goods)" class="goods-card__meta">
+                <span v-if="goods.limit">{{ limitLabel(goods) }} {{ goods.limit.bought }}/{{ goods.limit.max }}</span>
+                <span v-if="discountRemaining(goods)" class="is-warn">{{ discountRemaining(goods) }}</span>
+              </div>
+            </div>
+
+            <div class="goods-card__buy">
+              <div class="goods-price">
+                <strong v-if="goods.isFree" class="goods-price__free">免费</strong>
+                <template v-else>
+                  <CommerceItemImage :src="goods.price.image" :alt="goods.price.name" size="sm" />
+                  <strong :title="goods.price.name">{{ goods.price.count.toLocaleString() }}</strong>
+                  <del v-if="goods.originalPrice">{{ goods.originalPrice.toLocaleString() }}</del>
+                </template>
+              </div>
+              <NButton
+                size="small"
+                :type="goods.action.enabled ? 'primary' : 'default'"
+                :secondary="!goods.action.enabled"
+                :title="goods.action.reason"
+                :disabled="!goods.action.enabled || purchasingGoodsId !== null"
+                @click="choose(goods)"
+              >
+                {{ goods.action.label }}
+              </NButton>
+            </div>
+          </article>
+        </section>
+      </div>
     </section>
 
     <PurchaseDialog
-      :open="!!selected"
+      :open="!isOffline && !!selected"
       :goods="selected"
       :limit-label="selected ? limitLabel(selected) : undefined"
       :pending="purchasingGoodsId === selected?.id"
@@ -292,62 +289,24 @@ onUnmounted(() => {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding-bottom: 24px;
 }
 
-.mall-filters {
+/* 卡片外壳：标题栏（货币栏+刷新）走全局 .panel-titlebar 出血贴顶边，正文与标题栏用 gap 分隔。 */
+.mall-card {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 14px;
 }
 
-.mall-filters__chips {
-  display: flex;
-  min-width: 0;
-  gap: 6px;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-
-.mall-filters__chips::-webkit-scrollbar {
-  display: none;
-}
-
-.mall-filters__chips :deep(.n-button) {
-  flex: none;
-}
-
-.mall-search {
-  display: flex;
-  width: min(260px, 36vw);
-  height: 34px;
-  flex: none;
-  align-items: center;
-  gap: 8px;
-  padding: 0 12px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-control);
-  color: var(--ui-subtle);
-  background: var(--glass-input);
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-
-.mall-search:focus-within {
-  border-color: var(--ui-primary);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ui-primary) 14%, transparent);
-}
-
-.mall-search input {
-  min-width: 0;
+.mall-shopbar {
   flex: 1;
-  border: 0;
-  outline: 0;
-  color: var(--ui-ink);
-  background: transparent;
-  font-size: 13px;
+  min-width: 0;
+}
+
+.mall-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .shop-loading {
@@ -579,45 +538,5 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   color: inherit;
-}
-
-@media (max-width: 720px) {
-  .mall-filters {
-    flex-direction: column;
-    align-items: stretch;
-    gap: 10px;
-  }
-
-  .mall-search {
-    width: 100%;
-  }
-
-  .goods-grid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 10px;
-  }
-
-  .goods-card {
-    min-height: 96px;
-    grid-template-columns: 52px minmax(0, 1fr) auto;
-    gap: 12px;
-    padding: 12px;
-  }
-
-  .goods-card__visual :deep(.item-image) {
-    width: 52px;
-    height: 52px;
-    border-radius: 14px;
-  }
-
-  .goods-card__buy {
-    min-width: 72px;
-    gap: 6px;
-  }
-
-  .goods-card__buy :deep(.n-button) {
-    min-width: 64px;
-    height: 30px;
-  }
 }
 </style>

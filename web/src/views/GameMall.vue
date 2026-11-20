@@ -14,24 +14,29 @@ const route = useRoute()
 const router = useRouter()
 const { purchasingGoodsId, mysteryPurchasing } = storeToRefs(useCommerceStore())
 const tabs: Array<{ key: MallTab, label: string, icon: string }> = [
-  { key: 'mall', label: '游戏商城', icon: 'i-carbon-shopping-bag' },
-  { key: 'limited', label: '限时商店', icon: 'i-carbon-timer' },
+  { key: 'limited', label: '特惠商城', icon: 'i-carbon-timer' },
+  { key: 'mall', label: '礼包商城', icon: 'i-carbon-shopping-bag' },
   { key: 'props', label: '道具商店', icon: 'i-carbon-store' },
-  { key: 'svip', label: 'SVIP 专属商城', icon: 'i-carbon-diamond-outline' },
   { key: 'mystery', label: '神秘商人', icon: 'i-carbon-store' },
+  { key: 'svip', label: 'SVIP商城', icon: 'i-carbon-diamond-outline' },
 ]
-const activeTab = computed<MallTab>(() => route.query.tab === 'limited' || route.query.tab === 'mystery' || route.query.tab === 'svip' || route.query.tab === 'props' ? route.query.tab : 'mall')
+// 默认落地页签取数组第一项：以后调上面的顺序，落地页会跟着变，不用另处维护。
+const defaultTab = tabs[0]!.key
+const tabKeys = new Set<string>(tabs.map(tab => tab.key))
+// 未知或缺失的 tab 参数一律回落到默认页签，与改之前的 `?tab=mall` 链接仍正常打开。
+const activeTab = computed<MallTab>(() => typeof route.query.tab === 'string' && tabKeys.has(route.query.tab) ? route.query.tab as MallTab : defaultTab)
 const purchasing = computed(() => purchasingGoodsId.value !== null || mysteryPurchasing.value)
 
 function selectTab(tab: MallTab) {
   if (purchasing.value || tab === activeTab.value)
     return
-  router.replace({ query: { ...route.query, tab: tab === 'mall' ? undefined : tab }, hash: route.hash })
+  // 只有默认页签不写 query，保证 `/game-mall` 是干净链接；其余页签仍然显式入 URL，方便书签。
+  router.replace({ query: { ...route.query, tab: tab === defaultTab ? undefined : tab }, hash: route.hash })
 }
 </script>
 
 <template>
-  <div class="mall-page page-stack">
+  <div class="mall-page page-stack" :class="{ 'mall-page--fill': activeTab === 'mystery' }">
     <PageTabs :value="activeTab" @update:value="selectTab">
       <NTab v-for="tab in tabs" :key="tab.key" :name="tab.key" :disabled="purchasing && activeTab !== tab.key">
         <span class="inline-flex items-center gap-2">
@@ -50,5 +55,19 @@ function selectTab(tab: MallTab) {
 .mall-page {
   min-height: 100%;
   color: var(--ui-ink);
+}
+
+/* 神秘商人页需要把页签剩下的高度全部交给面板（上半货币栏/货品卡，
+   下半购买历史），所以这里要参与滚动容器的 flex 分配。
+   DefaultLayout 的 `.page-scroll > *` 把页面根设成 flex: 0 0 auto，
+   因此这里用多一级类名提高优先级来覆写，而不是靠样式注入顺序。
+   min-height: 0 让它自己缩小到可视高度，不会把页面顶长；
+   窄屏下底部导航的占位由 DefaultLayout 的 padding-bottom 提供，因此历史卡
+   自动停在导航栏上方，不需要写死任何导航栏高度。 */
+.page-stack.mall-page--fill {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
 }
 </style>

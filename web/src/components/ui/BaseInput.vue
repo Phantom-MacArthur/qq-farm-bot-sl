@@ -11,7 +11,7 @@ const props = defineProps<{
   label?: string
   // 标签与控件同行显示，用于同一行里的窄字段，避免标签自己占掉一行
   inlineLabel?: boolean
-  // 数字步进按钮：“vertical” 把横向 “-+” 换成右侧竖向上下箭头，供窄数字框使用
+  // 数字步进按钮：默认使用右侧竖向上下箭头；显式传 “native” 才恢复 naive 横向 “-+”。
   controls?: 'native' | 'vertical'
   disabled?: boolean
   clearable?: boolean
@@ -26,6 +26,9 @@ const emit = defineEmits<{
 
 const attrs = useAttrs()
 const model = defineModel<string | number>()
+
+// 所有数字输入框默认走竖向上下箭头，仅 controls="native" 时保留 naive 的 “-+”。
+const verticalControls = computed(() => props.type === 'number' && props.controls !== 'native')
 
 const textValue = computed({
   get: () => model.value === undefined || model.value === null ? '' : String(model.value),
@@ -75,7 +78,7 @@ function stepNumber(delta: number) {
 </script>
 
 <template>
-  <div class="base-field" :class="{ 'base-field--inline': inlineLabel }">
+  <div class="base-field" :class="{ 'base-field--inline': inlineLabel, 'base-field--fit': type === 'search' }">
     <label v-if="label" class="base-field__label" :for="String(attrs.id || '')">
       {{ label }}
     </label>
@@ -84,19 +87,19 @@ function stepNumber(delta: number) {
       v-model:value="numberValue"
       v-bind="attrs"
       class="w-full"
-      :class="{ 'base-field__number--inset': controls === 'vertical' }"
+      :class="{ 'base-field__number--inset': verticalControls }"
       :placeholder="placeholder"
       :disabled="disabled"
       :clearable="clearable"
       :min="min"
       :max="max"
       :step="step"
-      :show-button="controls !== 'vertical'"
+      :show-button="!verticalControls"
       @clear="emit('clear')"
     >
       <!-- showButton 关掉后 naive 会把 suffix 插槽直接透传给 Input，
            箭头于是走官方槽位嵌在框内，不需要绝对定位。 -->
-      <template v-if="controls === 'vertical'" #suffix>
+      <template v-if="verticalControls" #suffix>
         <div class="base-field__stepper">
           <button
             type="button"
@@ -117,6 +120,23 @@ function stepNumber(delta: number) {
         </div>
       </template>
     </NInputNumber>
+    <div v-else-if="type === 'search'" class="toolbar-fit toolbar-fit--search" :data-control-size="attrs.size || 'medium'">
+      <span class="toolbar-fit__measure" aria-hidden="true">{{ placeholder || '搜索' }}</span>
+      <NInput
+        v-model:value="textValue"
+        v-bind="attrs"
+        class="toolbar-fit__control"
+        :placeholder="placeholder || '搜索'"
+        :disabled="disabled"
+        :clearable="clearable"
+        :input-props="{ 'aria-label': label || placeholder || '搜索' }"
+        @clear="emit('clear')"
+      >
+        <template #prefix>
+          <span class="toolbar-search__icon i-carbon-search" aria-hidden="true" />
+        </template>
+      </NInput>
+    </div>
     <NInput
       v-else
       v-model:value="textValue"

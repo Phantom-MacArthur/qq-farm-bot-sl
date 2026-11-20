@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { useIntervalFn, useMediaQuery, useNow } from '@vueuse/core'
+import { useIntervalFn, useNow } from '@vueuse/core'
 import { NButton } from 'naive-ui/es/button'
 import { NTooltip } from 'naive-ui/es/tooltip'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRoute } from 'vue-router'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import { menuRoutes } from '@/router/menu'
@@ -15,21 +14,10 @@ import { useStatusStore } from '@/stores/status'
 const accountStore = useAccountStore()
 const statusStore = useStatusStore()
 const appStore = useAppStore()
-const route = useRoute()
-const isDesktop = useMediaQuery('(min-width: 1024px)')
 const { currentAccount } = storeToRefs(accountStore)
 const { status, realtimeConnected } = storeToRefs(statusStore)
-const { sidebarOpen, sidebarCollapsed } = storeToRefs(appStore)
-const isSidebarCollapsed = computed(() => isDesktop.value && sidebarCollapsed.value)
-const navigationExpanded = computed(() => isDesktop.value ? !sidebarCollapsed.value : sidebarOpen.value)
-const navigationToggleLabel = computed(() => isDesktop.value
-  ? navigationExpanded.value ? '收起侧栏' : '展开侧栏'
-  : '关闭侧栏')
-const navigationIcon = computed(() => {
-  if (!isDesktop.value)
-    return 'i-carbon-close'
-  return navigationExpanded.value ? 'i-carbon-side-panel-close' : 'i-carbon-side-panel-open'
-})
+const { sidebarCollapsed, sidebarAutoCollapsed, sidebarToggleLabel } = storeToRefs(appStore)
+const isSidebarCollapsed = computed(() => sidebarCollapsed.value)
 const sidebarTooltipTheme = {
   color: 'rgba(31, 43, 35, 0.94)',
   textColor: '#ffffff',
@@ -176,45 +164,28 @@ const navItems = computed(() => {
       icon: item.icon,
     }))
 })
-
-function toggleNavigation() {
-  if (isDesktop.value)
-    appStore.toggleSidebarCollapsed()
-  else
-    appStore.closeSidebar()
-}
-
-watch(
-  () => route.path,
-  () => {
-    // Close sidebar on route change (mobile only)
-    if (window.innerWidth < 1024)
-      appStore.closeSidebar()
-  },
-)
 </script>
 
 <template>
   <aside
     id="app-sidebar"
-    class="app-sidebar fixed inset-y-0 left-0 z-50 h-full w-[150px] flex shrink-0 flex-col lg:static lg:translate-x-0"
-    :class="[
-      sidebarOpen ? 'translate-x-0' : '-translate-x-full',
-      { 'is-collapsed': isSidebarCollapsed },
-    ]"
+    class="app-sidebar h-full w-[150px] flex shrink-0 flex-col"
+    :class="{ 'is-collapsed': isSidebarCollapsed, 'is-auto-collapsed': sidebarAutoCollapsed }"
     aria-label="主导航"
   >
-    <div class="sidebar-brand h-15 flex items-center justify-between px-4">
+    <!-- 侧栏开关：固定高度占位，窄屏隐藏按钮时概览仍保持原位不上移 -->
+    <div class="sidebar-toggle flex h-15 items-center px-4">
       <NButton
+        v-if="!sidebarAutoCollapsed"
         quaternary
         circle
         aria-controls="app-sidebar"
-        :aria-expanded="navigationExpanded"
-        :aria-label="navigationToggleLabel"
-        :title="navigationToggleLabel"
-        @click="toggleNavigation"
+        :aria-expanded="!sidebarCollapsed"
+        :aria-label="sidebarToggleLabel"
+        :title="sidebarToggleLabel"
+        @click="appStore.toggleSidebarCollapsed"
       >
-        <div class="h-5 w-5 flex-none text-xl leading-5" :class="navigationIcon" />
+        <div class="i-carbon-menu text-xl" />
       </NButton>
     </div>
 
@@ -312,10 +283,9 @@ watch(
   backdrop-filter: blur(22px) saturate(135%);
 }
 
-.sidebar-brand {
+.sidebar-toggle {
   min-height: 62px;
-  border-bottom: 1px solid var(--ui-border);
-  box-shadow: inset 0 1px 0 var(--glass-highlight);
+  flex-shrink: 0;
 }
 
 .sidebar-nav__link:focus-visible,
@@ -459,21 +429,24 @@ nav a:hover {
   color: var(--ui-primary);
 }
 
-@media (min-width: 1024px) {
-  .app-sidebar.is-collapsed {
-    width: 72px;
-  }
+.app-sidebar.is-collapsed {
+  width: 72px;
+}
 
-  .app-sidebar.is-collapsed .sidebar-nav {
-    scrollbar-width: none;
-  }
+/* 越过断点时立即让出空间，避免收起动画期间把正文挤到最小内容宽度以下。 */
+.app-sidebar.is-auto-collapsed {
+  transition: none;
+}
 
-  .app-sidebar.is-collapsed .sidebar-nav::-webkit-scrollbar {
-    width: 0;
-  }
+.app-sidebar.is-collapsed .sidebar-nav {
+  scrollbar-width: none;
+}
 
-  .app-sidebar.is-collapsed .sidebar-footer {
-    padding: 12px 24px;
-  }
+.app-sidebar.is-collapsed .sidebar-nav::-webkit-scrollbar {
+  width: 0;
+}
+
+.app-sidebar.is-collapsed .sidebar-footer {
+  padding: 12px 24px;
 }
 </style>

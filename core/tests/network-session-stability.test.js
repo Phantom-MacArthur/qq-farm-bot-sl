@@ -48,6 +48,13 @@ function harness() {
             await options.callback(null, types[method + 'Reply'].encode({ basic: { gid: 1, level: 1 } }).finish());
         };
         module.exports.login = () => sendLogin(currentConnection);
+        module.exports.request = sendMsgAsync;
+        module.exports.holdReplies = () => {
+            sendMsg = async (_context, _service, _method, _body, pending) => {
+                pendingCallbacks.set(clientSeq++, pending);
+                return true;
+            };
+        };
         module.exports.setSender = fn => { sendMsgAsync = fn; };
         module.exports.snapshot = () => getConnectionDiagnostics(currentConnection);
     `, sandbox, { filename });
@@ -116,6 +123,28 @@ test('wall-clock jumps cannot disconnect a recently active connection or conceal
     assert.equal(h.sockets[0].terminated, true);
     assert.equal(h.sockets.length, 1); // No automatic replay of the one-time Code.
     assert.equal(h.tasks.size, 0);
+});
+
+test('gateway requests distinguish login and disconnect from request timeout', async () => {
+    await loadProto();
+    const h = harness();
+    const request = () => h.api.request('gamepb.userpb.UserService', 'Synthetic', Buffer.alloc(0));
+    await assert.rejects(request(), { code: 'GAME_OFFLINE', message: /连接未打开/ });
+    h.api.connect('synthetic-code');
+    await assert.rejects(request(), { code: 'GAME_OFFLINE', message: /账号尚未登录/ });
+    await h.api.login();
+    h.api.holdReplies();
+
+    const timed = assert.rejects(request(), error => error.code === undefined && /请求超时/.test(error.message));
+    const timeout = [...h.tasks].find(([key]) => key.startsWith('request_timeout_'));
+    assert.ok(timeout);
+    timeout[1]();
+    await timed;
+
+    const interrupted = assert.rejects(request(), { code: 'GAME_OFFLINE', message: /请求已中断/ });
+    h.sockets[0].emit('close', 1006);
+    await interrupted;
+    await assert.rejects(request(), { code: 'GAME_OFFLINE' });
 });
 
 test('a failed handshake ends once and never reuses its Code', () => {

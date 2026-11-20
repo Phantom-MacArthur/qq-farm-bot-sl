@@ -53,13 +53,6 @@ export const menuRoutes: MenuItem[] = [
     component: () => import('@/views/Friends.vue'),
   },
   {
-    path: 'analytics',
-    name: 'analytics',
-    label: '分析',
-    icon: 'i-carbon-chart-line',
-    component: () => import('@/views/Analytics.vue'),
-  },
-  {
     path: 'solar-calendar',
     name: 'solar-calendar',
     label: '节令日历',
@@ -69,7 +62,8 @@ export const menuRoutes: MenuItem[] = [
   {
     path: 'game-mall',
     name: 'game-mall',
-    label: '游戏商城',
+    // 页内已经按页签分成特惠/礼包/道具/神秘商人/SVIP 五个子商城，导航项只是入口，不再叫“游戏商城”。
+    label: '商城',
     icon: 'i-carbon-shopping-cart',
     component: () => import('@/views/GameMall.vue'),
   },

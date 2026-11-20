@@ -11,7 +11,9 @@ const { getUserState, getWsErrorState, sendMsgAsync } = require('../../utils/net
 const { toNum, getServerTimeSec, log, logWarn, sleep } = require('../../utils/utils');
 const { types } = require('../../utils/proto');
 const { getPlantRankings } = require('../analytics');
+const { recordSeedShopCatalog } = require('../seed-price-cache');
 const { recordOperation } = require('../stats');
+const { updateStatusGold } = require('../status');
 const { getBagSeeds } = require('../warehouse');
 const { getCareerInfoOrNull } = require('../career');
 const { getAllLands, buyGoods, removePlant, fertilizeOne } = require('./api');
@@ -27,7 +29,6 @@ const {
     buildFarmSocialEventDetails,
     analyzeLands,
     buildLandMap,
-    summarizeLandDetails,
     getOrganicFertilizerTargetsFromLands,
     filterLandIdsForNormalFertilizer,
     getFastMatureLands,
@@ -301,7 +302,7 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
     const allBagSeeds = (Array.isArray(bagSeeds) ? bagSeeds : []);
     
     const stateLevel = toNum(state && state.level);
-    const filteredForLevelAndCount = allBagSeeds.map((seed: any) => ({
+    const bagSeedCandidates = allBagSeeds.map((seed: any) => ({
         seedId: seed.seedId,
         name: seed.name,
         count: toNum(seed && seed.count),
@@ -311,7 +312,7 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
         landTypes: landTypeAvailable ? resolveSeedLandTypes(bagSeedLandTypes, seed && seed.seedId) : null,
         stateLevel,
     }));
-    // log('种植', `背包种子原始: ${filteredForLevelAndCount.map((s: any) => `${s.name}(${s.seedId})x${s.count},lv${s.requiredLevel},size${s.plantSize}`).join('; ')}`, {
+    // log('种植', `背包种子原始: ${bagSeedCandidates.map((s: any) => `${s.name}(${s.seedId})x${s.count},lv${s.requiredLevel},size${s.plantSize}`).join('; ')}`, {
     //     module: 'farm', event: '种植种子', result: 'bag_raw', priority: priorityList, stateLevel,
     // });
 
@@ -320,7 +321,7 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
     const skippedSeeds: any[] = [];
     const levelLockedSeeds: any[] = [];
     const usableSeeds = sortBagSeedsForPlanting(
-        filteredForLevelAndCount.filter((seed: any) => {
+        bagSeedCandidates.filter((seed: any) => {
             if (seed.count <= 0) {
                 skippedSeeds.push({ seedId: seed.seedId, name: seed.name, reason: 'count_zero', count: seed.count });
                 return false;
@@ -614,6 +615,8 @@ async function purchaseSeed(goodsIdInput: unknown, countInput: unknown): Promise
     for (const item of reply.cost_items || []) {
         if (toNum(item.id) === 1001) state.gold = Math.max(0, toNum(state.gold) - toNum(item.count));
     }
+    // 扣款后同步状态栏余额，避免状态栏与真实余额不一致
+    updateStatusGold(toNum(state.gold));
     return reply;
 }
 
@@ -626,6 +629,8 @@ async function getAvailableSeeds(propagateErrors: boolean = false): Promise<any[
     try {
         const shopReply = await getShopInfo(SEED_SHOP_ID);
         if (shopReply.goods_list) {
+            // 种子商店目录为全服标准目录：顺带校准单颗购买价，供离线账号的配置/分析页复用
+            try { recordSeedShopCatalog(shopReply.goods_list); } catch { /* 校准失败不影响列表展示 */ }
             for (const goods of shopReply.goods_list) {
                 // 不再过滤不可用的种子，而是返回给前端展示状态
                 let requiredLevel: number = 0;
@@ -682,9 +687,8 @@ async function getAvailableSeeds(propagateErrors: boolean = false): Promise<any[
     });
 }
 
-async function getLandsDetail(propagateErrors: boolean = false): Promise<{ lands: any[]; summary: any; socialEvents: any[]; career: any }> {
+async function getLandsDetail(propagateErrors: boolean = false): Promise<{ lands: any[]; socialEvents: any[]; career: any }> {
     let lands: any[] = [];
-    let summary: any = {};
     let socialEvents: any[] = [];
     try {
         const landsReply = await getAllLands();
@@ -697,18 +701,15 @@ async function getLandsDetail(propagateErrors: boolean = false): Promise<{ lands
                 landsMap,
                 nowSec,
             }));
-            summary = summarizeLandDetails(lands);
         }
     } catch (e) {
         if (propagateErrors) throw e;
         lands = [];
-        summary = {};
         socialEvents = [];
     }
 
     return {
         lands,
-        summary,
         socialEvents,
         career: await getCareerInfoOrNull(getUserState().gid, propagateErrors),
     };
@@ -969,6 +970,8 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
             }
             if (buyReply.cost_items) {
                 for (const item of buyReply.cost_items) state.gold -= toNum(item.count);
+                // 扣款后同步状态栏余额，避免状态栏与真实余额不一致
+                updateStatusGold(toNum(state.gold));
             }
             log('购买', `已购买${getPlantNameBySeedId(actualSeedId)}种子 x${purchaseUnits * unitItemCount}, 花费 ${candidate.price * purchaseUnits} 金币`, {
                 module: 'warehouse', event: '购买种子', result: 'ok', seedId: actualSeedId,
@@ -1232,7 +1235,7 @@ async function fertilizeOwnLand(landIdInput: unknown, fertilizerTypeInput: unkno
         if (error?.name === 'GatewayError'
             || typeof error?.errorMessage === 'string'
             || typeof error?.error_message === 'string'
-            || /^(?:[\w-]+\.)+[\w-]+(?:\s+.*?)?\bcode=\d+(?:\s|$)/.test(String(error?.message || '').trim())) {
+            || /^(?:[\w-]+\.)+[\w-]+(?:\s.*?)?\bcode=\d+(?:\s|$)/.test(String(error?.message || '').trim())) {
             throw error;
         }
         const message = String(error?.message || '').trim() || `${typeName}使用失败`;

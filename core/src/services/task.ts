@@ -7,8 +7,8 @@ const { isAutomationOn } = require('../models/store');
 const { sendMsgAsync, networkEvents } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, log, logWarn, sleep, getSystemDateKey } = require('../utils/utils');
+const { describeRewardItems, mergeRewardItems } = require('../utils/reward-items');
 const { createScheduler } = require('./scheduler');
-const { recordOperation } = require('./stats');
 
 let checking: boolean = false;
 let taskClaimDoneDateKey: string = '';
@@ -116,6 +116,13 @@ function getRewardSummary(items: any[]): string {
     return summary.join('/');
 }
 
+/**
+ * 任务奖励展示信息：普通奖励在前、额外奖励在后，补齐名称与图标。
+ */
+function describeTaskRewards(task: any): any[] {
+    return [...describeRewardItems(task && task.rewards, false), ...describeRewardItems(task && task.extra_rewards, true)];
+}
+
 interface NormalizedTaskInfo {
     growthTasks: any[];
     dailyTasks: any[];
@@ -218,7 +225,6 @@ async function checkAndClaimIllustratedRewards(): Promise<boolean> {
         });
         taskClaimDoneDateKey = getSystemDateKey();
         taskClaimLastAt = Date.now();
-        recordOperation('taskClaim', 1);
         return true;
     } catch {
         return false;
@@ -287,7 +293,6 @@ async function doClaim(task: any): Promise<boolean> {
         });
         taskClaimDoneDateKey = getSystemDateKey();
         taskClaimLastAt = Date.now();
-        recordOperation('taskClaim', 1);
         await sleep(300);
         if (task.category === 'growth') {
             // The server exposes one growth task at a time. Fetching again after a
@@ -377,6 +382,7 @@ module.exports = {
                 return isUnlocked && !isClaimed && totalProgress > 0;
             });
             const dailyClaimable: any[] = analyzeTaskList(dailyAll, 'daily');
+            const claimedCount: number = dailyAll.filter((t: any) => !!(t && t.is_claimed)).length;
             return {
                 key: 'task_claim',
                 // 每日任务总数按 3 计算，完成口径为 progress >= total_progress
@@ -384,8 +390,11 @@ module.exports = {
                 lastClaimAt: taskClaimLastAt,
                 claimableCount: dailyClaimable.length,
                 pendingCount: pendingDaily.length,
+                claimedCount,
                 completedCount,
                 totalCount: 3,
+                // 当天全部每日任务的奖励合计
+                rewards: mergeRewardItems(...dailyAll.map(describeTaskRewards)),
             };
         } catch (error) {
             if (propagateErrors) throw error;
@@ -395,8 +404,10 @@ module.exports = {
                 lastClaimAt: taskClaimLastAt,
                 claimableCount: 0,
                 pendingCount: 0,
+                claimedCount: 0,
                 completedCount: 0,
                 totalCount: 3,
+                rewards: [],
             };
         }
     },
@@ -419,6 +430,7 @@ module.exports = {
                     isClaimed,
                     isUnlocked,
                     isCompleted,
+                    rewards: describeTaskRewards(t),
                 };
             });
             const activeTasks: any[] = tasks.filter((t: any) => t.isUnlocked && !t.isClaimed);

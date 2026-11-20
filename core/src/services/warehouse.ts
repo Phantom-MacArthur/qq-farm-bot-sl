@@ -7,7 +7,7 @@ export {};
  */
 const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById, getSeedImageBySeedId, getEffectiveSellInfo, getMutantEffectsByIds } = require('../config/gameConfig');
 const { isAutomationOn } = require('../models/store');
-const { sendMsgAsync, networkEvents, getUserState } = require('../utils/network');
+const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toLong, toNum, toTimeSec, log, logWarn, sleep, getSystemDateKey } = require('../utils/utils');
 const { getSellConditionContext } = require('./activity-windows');
@@ -615,7 +615,6 @@ async function getBagDetail(): Promise<any> {
                 priceId,
                 price,
                 priceUnit,
-                level: info ? (Number(info.level) || 0) : 0,
                 interactionType,
                 description: info?.desc ? String(info.desc) : '',
                 viewable: Number(info?.to_see || 0) > 0,
@@ -772,11 +771,6 @@ async function sellAllFruits(): Promise<void> {
             totalsDeltaGold,
             totalsDeltaExp,
         });
-
-        // 发送出售事件，用于统计金币收益
-        if (totalGoldEarned > 0) {
-            networkEvents.emit('sell', totalGoldEarned);
-        }
     } catch (e: any) {
         logWarn('仓库', `出售失败: ${e.message}`);
     }

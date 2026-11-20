@@ -7,6 +7,7 @@ import ActivityHeader from '@/components/activity/ActivityHeader.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import BottomNav from '@/components/activity/BottomNav.vue'
 import { ConstellationTab, SolarTermsTab, StarSandExchangeDialog, StarSandShopTab, TravelPassTab } from '@/components/activity/gameplays/stellar'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore } from '@/stores/activity-center'
 import { useActivityClock } from './useActivityClock'
@@ -57,6 +58,11 @@ async function exchangeShopGoods(goodsId: string, count: number) {
 watch(activeTab, (tab) => {
   if (tab !== 'shop' && !pendingActions.value.exchange)
     selectedShopGoods.value = null
+})
+// 重新上线时按一次刷新键；星座页签没有刷新键
+useReconnectRefresh(() => {
+  if (activeTab.value !== 'constellation')
+    return refreshActivity()
 })
 </script>
 

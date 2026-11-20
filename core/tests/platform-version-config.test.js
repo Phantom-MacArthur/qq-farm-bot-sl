@@ -98,6 +98,53 @@ test('configuration snapshots and worker starts carry both versions with each ac
     } finally { config.updateRuntimeConfig(saved); }
 });
 
+test('worker manager distinguishes stopped accounts, disconnections, IPC business errors and IPC timeout', async () => {
+    const timers = new Map();
+    const children = [];
+    class Child extends EventEmitter {
+        constructor() { super(); children.push(this); }
+        postMessage(message) { this.lastMessage = message; }
+    }
+    const { createWorkerManager } = load('runtime/worker-manager.js', {
+        '../services/scheduler': { createScheduler: () => ({
+            clear: key => timers.delete(key),
+            setTimeoutTask: (key, _ms, fn) => timers.set(key, () => { timers.delete(key); fn(); }),
+        }) },
+    });
+    const manager = createWorkerManager({
+        WorkerThread: Child, processRef: process, workerScriptPath: 'synthetic.js',
+        workers: {}, globalLogs: [], log() {}, addAccountLog() {}, triggerOfflineReminder() {},
+        buildConfigSnapshotForAccount: () => ({}),
+    });
+    const call = id => manager.callWorkerApi(id, 'getLands');
+    await assert.rejects(call('a'), { code: 'ACCOUNT_OFFLINE' });
+    manager.startWorker({ id: 'a' });
+    const child = children[0];
+    const reply = error => child.emit('message', { type: 'api_response', id: child.lastMessage.id, error });
+    const login = call('a');
+    reply({ code: 'GAME_OFFLINE', message: '账号未连接' });
+    await assert.rejects(login, { code: 'GAME_OFFLINE' });
+    const business = call('a');
+    reply({ code: 1034014, name: 'GatewayError', message: 'gateway error', errorMessage: '已领取' });
+    await assert.rejects(business, { code: 1034014, name: 'GatewayError', errorMessage: '已领取' });
+    const timed = call('a');
+    timers.get(`api_timeout_a_${child.lastMessage.id}`)();
+    await assert.rejects(timed, error => error.message === 'API Timeout' && error.code === undefined);
+    const disconnected = call('a');
+    child.emit('message', { type: 'account_disconnected', code: 1006 });
+    await assert.rejects(disconnected, { code: 'GAME_OFFLINE' });
+    await assert.rejects(call('a'), { code: 'GAME_OFFLINE' });
+    child.emit('exit', 0);
+    await assert.rejects(call('a'), { code: 'ACCOUNT_OFFLINE' });
+    manager.startWorker({ id: 'a' });
+    const stopped = call('a');
+    manager.stopWorker('a');
+    await assert.rejects(stopped, { code: 'ACCOUNT_OFFLINE' });
+    await assert.rejects(call('a'), { code: 'ACCOUNT_OFFLINE' });
+    children[1].emit('exit', 0);
+    assert.equal(timers.size, 0);
+});
+
 test('parallel QQ and WeChat workers select their own protocol, App ID and WASM', async () => {
     const result = await Promise.all(['qq', 'wx'].map(platform => new Promise((resolve, reject) => {
         const worker = new Worker(`

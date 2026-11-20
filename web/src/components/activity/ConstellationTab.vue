@@ -319,20 +319,4 @@ watch(() => props.constellation, (value) => {
   color: #4b8b72;
   font-size: 50px;
 }
-@media (max-width: 760px) {
-  .constellation-tab {
-    grid-template-columns: 1fr;
-    gap: 10px;
-    padding: 14px;
-  }
-  .group-strip {
-    grid-column: auto;
-  }
-  .star-reward {
-    min-height: 150px;
-  }
-  .light-action {
-    min-height: 66px;
-  }
-}
 </style>

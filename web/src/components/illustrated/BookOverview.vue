@@ -14,7 +14,9 @@ const props = withDefaults(defineProps<{
   /** 0–100；为 null 时不显示进度条。 */
   percent?: number | null
   hint?: string
-}>(), { caption: '', progressText: '', percent: null, hint: '' })
+  /** 嵌入图鉴标题栏：去掉自身的卡片描边、底色与留白，由标题栏统一提供。 */
+  embedded?: boolean
+}>(), { caption: '', progressText: '', percent: null, hint: '', embedded: false })
 
 const slots = useSlots()
 /** 父组件用 v-if 关闭附加区时插槽只剩注释节点，此时不渲染分隔线和留白。 */
@@ -26,7 +28,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 </script>
 
 <template>
-  <section class="book-overview">
+  <section class="book-overview" :class="{ 'book-overview--embedded': embedded }">
     <div class="book-overview__badge" aria-hidden="true">
       <b>{{ badgeValue }}</b><small>{{ badgeLabel }}</small>
     </div>
@@ -64,6 +66,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 <style scoped>
 .book-overview {
   display: grid;
+  /* 徽章 + 进度条 + 操作按钮：始终一行三列，宽度不够时由进度条那一列让步，不换行 */
   grid-template-columns: 56px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px 16px;
@@ -76,6 +79,14 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
     var(--ui-shadow-sm);
 }
 
+.book-overview--embedded {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .book-overview__badge {
   display: flex;
   width: 56px;
@@ -86,6 +97,12 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   border-radius: 14px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
+}
+
+/* 标题栏底色与浅绿接近，嵌入时改用白色卡面 + 主色描边，徽章才能从底色里跳出来 */
+.book-overview--embedded .book-overview__badge {
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 45%, var(--ui-border));
+  background: var(--ui-surface);
 }
 
 .book-overview__badge b {
@@ -112,12 +129,15 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   display: flex;
   min-width: 0;
   align-items: baseline;
-  flex-wrap: wrap;
+  /* 标题与统计同行：放不下时由统计文案省略，不把标题栏顶高 */
+  flex-wrap: nowrap;
   gap: 4px 12px;
 }
 
 .book-overview__heading h3 {
   display: inline-flex;
+  /* 标题不参与压缩：整行放不下时先省略统计文案，标题自身不折行把栏顶高 */
+  flex: none;
   align-items: center;
   gap: 6px;
   margin: 0;
@@ -125,6 +145,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   font-size: 15px;
   font-weight: var(--fw-650);
   line-height: 1.3;
+  white-space: nowrap;
 }
 
 .book-overview__heading h3 > span {
@@ -133,6 +154,10 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 }
 
 .book-overview__caption {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--ui-muted);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
@@ -155,10 +180,19 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 
 .book-overview__foot {
   display: flex;
+  min-width: 0;
   justify-content: space-between;
   gap: 12px;
   color: var(--ui-subtle);
   font-size: 12px;
+}
+
+/* 说明文字先省略，右侧数值（如 860 / 1000）始终完整 */
+.book-overview__foot span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .book-overview__foot b {
@@ -171,6 +205,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 .book-overview__actions {
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
   gap: 8px;
 }
 
@@ -181,6 +216,12 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   gap: 6px;
   padding-top: 12px;
   border-top: 1px solid var(--ui-border);
+}
+
+/* 嵌入标题栏时分隔线向左、右出血 16px（BookToolbar 概览区的内边距），与卡片等宽 */
+.book-overview--embedded .book-overview__extra {
+  margin-inline: -16px;
+  padding-inline: 16px;
 }
 
 :slotted(.book-chip) {
@@ -200,27 +241,5 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   color: var(--ui-subtle);
   font-size: 12px;
   line-height: 24px;
-}
-
-@media (max-width: 639px) {
-  .book-overview {
-    grid-template-columns: 48px minmax(0, 1fr);
-    gap: 12px;
-    padding: 14px;
-  }
-
-  .book-overview__badge {
-    width: 48px;
-    height: 48px;
-    border-radius: 12px;
-  }
-
-  .book-overview__actions {
-    grid-column: 1 / -1;
-  }
-
-  .book-overview__actions > :deep(*) {
-    flex: 1;
-  }
 }
 </style>

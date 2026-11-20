@@ -311,20 +311,54 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    // API: 保存下线提醒配置
-    app.post('/api/settings/offline-reminder', async (req: Request, res: Response) => {
+    // API: 获取通知默认设置
+    app.get('/api/settings/offline-reminder/default', (_req: Request, res: Response) => {
+        try {
+            const def = typeof store.getOfflineReminderDefault === 'function' ? store.getOfflineReminderDefault() : null;
+            res.json({ ok: true, data: { exists: !!def, config: def || null } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 保存通知默认设置
+    app.put('/api/settings/offline-reminder/default', async (req: Request, res: Response) => {
         try {
             const body = (req.body && typeof req.body === 'object') ? req.body : {};
-            const channel = String(body.channel || '').trim().toLowerCase();
-            if (channel === 'dingtalk') {
-                try {
-                    const { buildDingTalkWebhook } = require('../../services/push');
-                    buildDingTalkWebhook(body.endpoint, body.token, body.secret);
-                } catch (error: any) {
-                    return res.status(400).json({ ok: false, error: error?.message || '钉钉 Webhook 地址格式无效' });
-                }
+            const cfg = (body.config && typeof body.config === 'object') ? body.config : body;
+            const data = typeof store.setOfflineReminderDefault === 'function' ? store.setOfflineReminderDefault(cfg) : null;
+            res.json({ ok: true, data: { exists: !!data, config: data || null } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 将通知默认设置应用到当前账号
+    app.post('/api/settings/offline-reminder/default/apply', async (req: Request, res: Response) => {
+        try {
+            const accountId = getAccId(ctx, req);
+            if (!accountId) {
+                return res.status(400).json({ ok: false, error: '请先选择账号' });
             }
-            const data = store.setOfflineReminder ? store.setOfflineReminder(body) : {};
+            const data = typeof store.applyOfflineReminderDefault === 'function' ? store.applyOfflineReminderDefault(accountId) : null;
+            if (!data) {
+                return res.status(400).json({ ok: false, error: '尚未保存通知默认设置' });
+            }
+            res.json({ ok: true, data });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 保存下线提醒配置（按账号）
+    app.post('/api/settings/offline-reminder', async (req: Request, res: Response) => {
+        try {
+            const accountId = getAccId(ctx, req);
+            if (!accountId) {
+                return res.status(400).json({ ok: false, error: '请先选择账号' });
+            }
+            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const data = store.setOfflineReminder ? store.setOfflineReminder(body, accountId) : {};
             res.json({ ok: true, data: data || {} });
         } catch (e: any) {
             handleApiError(res, e);
@@ -334,16 +368,23 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
     // API: 测试下线提醒推送（不落盘）
     app.post('/api/settings/offline-reminder/test', async (req: Request, res: Response) => {
         try {
-            const saved = store.getOfflineReminder ? store.getOfflineReminder() : {};
+            const accountId = getAccId(ctx, req);
+            const saved = (accountId && store.getOfflineReminder) ? store.getOfflineReminder(accountId) : {};
             const body = (req.body && typeof req.body === 'object') ? req.body : {};
             const cfg = { ...(saved || {}), ...body };
 
             const channel = String(cfg.channel || '').trim().toLowerCase();
             const endpoint = String(cfg.endpoint || '').trim();
-            const token = String(cfg.token || '').trim();
             const secret = String(cfg.secret || '').trim();
-            const titleBase = String(cfg.title || '账号下线提醒').trim();
-            const msgBase = String(cfg.msg || '账号下线').trim();
+            const credentials = (cfg.channelCredentials && typeof cfg.channelCredentials === 'object') ? cfg.channelCredentials : {};
+            const entry = credentials[channel] || {};
+            const token = String(entry.token || cfg.token || '').trim();
+            const wxPusherUid = String(entry.wxPusherUid || cfg.wxPusherUid || '').trim();
+            // 与真实下线推送保持一致：标题取账号备注，不再单独配置。
+            const accountName = String((ctx.provider.getAccounts().accounts || [])
+                .find((a: any) => String(a?.id) === String(accountId))?.name || '').trim();
+            const titleBase = String(cfg.title || '').trim() || accountName || '农场下线';
+            const msgBase = String(cfg.msg || '农场下线').trim();
 
             if (!channel) {
                 return res.status(400).json({ ok: false, error: '推送渠道不能为空' });
@@ -357,18 +398,27 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             if (channel !== 'webhook' && channel !== 'dingtalk' && !token) {
                 return res.status(400).json({ ok: false, error: '当前推送渠道需要填写 Token' });
             }
+            if (channel === 'wxpusher_wechat' && !wxPusherUid) {
+                return res.status(400).json({ ok: false, error: 'WxPusher 渠道需要填写接收者 UID' });
+            }
 
             const now = new Date();
             const ts = now.toISOString().replace('T', ' ').slice(0, 19);
-            const { sendPushooMessage } = require('../../services/push');
-            const ret = await sendPushooMessage({
+            const { sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage } = require('../../services/push');
+            const payload = {
                 channel,
                 endpoint,
                 token,
                 secret,
+                wxPusherUid,
                 title: `${titleBase}（测试）`,
                 content: `${msgBase}\n\n这是一条下线提醒测试消息。\n时间: ${ts}`,
-            });
+            };
+            const ret = channel === 'wxpusher'
+                ? await sendWxPusherMessage(payload)
+                : channel === 'wxpusher_wechat'
+                    ? await sendWxPusherWechatMessage(payload)
+                    : await sendPushooMessage(payload);
 
             if (!ret) {
                 return res.status(400).json({ ok: false, error: '推送失败：无返回结果' });
@@ -400,7 +450,6 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const friendQuietHours = id ? store.getFriendQuietHours(id) : null;
             const automation = id ? store.getAutomation(id) : {};
             const stealDelaySeconds = id && (typeof store.getStealDelaySeconds === 'function') ? store.getStealDelaySeconds(id) : 0;
-            const plantOrderRandom = id && (typeof store.getPlantOrderRandom === 'function') ? store.getPlantOrderRandom(id) : false;
             const plantDelaySeconds = id && (typeof store.getPlantDelaySeconds === 'function') ? store.getPlantDelaySeconds(id) : 0;
             const fertilizerBuyOrganicCount = id && (typeof store.getFertilizerBuyOrganicCount === 'function') ? store.getFertilizerBuyOrganicCount(id) : 0;
             const fertilizerBuyOrganicThresholdHours = id && (typeof store.getFertilizerBuyOrganicThresholdHours === 'function') ? store.getFertilizerBuyOrganicThresholdHours(id) : 10;
@@ -413,14 +462,12 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const bagSeedFallbackStrategy = id && (typeof store.getBagSeedFallbackStrategy === 'function') ? store.getBagSeedFallbackStrategy(id) : 'level';
             const autoAcceptFriendMinLevel = id && (typeof store.getAutoAcceptFriendMinLevel === 'function') ? store.getAutoAcceptFriendMinLevel(id) : 0;
             const autoAcceptRequireOwnLevel = id && (typeof store.getAutoAcceptRequireOwnLevel === 'function') ? store.getAutoAcceptRequireOwnLevel(id) : false;
-            const autoAcceptHarvestStealEnabled = id && (typeof store.getAutoAcceptHarvestStealEnabled === 'function') ? store.getAutoAcceptHarvestStealEnabled(id) : true;
-            const autoAcceptHarvestStealHarvest = id && (typeof store.getAutoAcceptHarvestStealHarvest === 'function') ? store.getAutoAcceptHarvestStealHarvest(id) : 8;
-            const autoAcceptHarvestStealSteal = id && (typeof store.getAutoAcceptHarvestStealSteal === 'function') ? store.getAutoAcceptHarvestStealSteal(id) : 1;
             const ui = store.getUI();
-            const offlineReminder = store.getOfflineReminder
-                ? store.getOfflineReminder()
-                : { channel: 'webhook', endpoint: '', token: '', secret: '', title: '账号下线提醒', msg: '账号下线', offlineDeleteSec: 0 };
-            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantOrderRandom, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, bagSeedPriority, bagSeedMultiLandReservationEnabled, bagSeedLandTypes, bagSeedFallbackStrategy, autoAcceptFriendMinLevel, autoAcceptRequireOwnLevel, autoAcceptHarvestStealEnabled, autoAcceptHarvestStealHarvest, autoAcceptHarvestStealSteal, ui, offlineReminder } });
+            const offlineReminder = (id && store.getOfflineReminder)
+                ? store.getOfflineReminder(id)
+                : (store.getOfflineReminderDefault ? store.getOfflineReminderDefault() : null)
+                    || { channel: 'wxpusher', endpoint: '', token: '', secret: '', wxPusherUid: '', channelCredentials: {}, title: '', msg: '农场下线' };
+            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, bagSeedPriority, bagSeedMultiLandReservationEnabled, bagSeedLandTypes, bagSeedFallbackStrategy, autoAcceptFriendMinLevel, autoAcceptRequireOwnLevel, ui, offlineReminder } });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -434,6 +481,67 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 return res.status(500).json({ ok: false, error: '无法获取默认配置' });
             }
             res.json({ ok: true, data: defaultConfig });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 默认方案（单用户全局一份，跨账号复用策略/自动化）
+    app.get('/api/settings/default-plan', (_req: Request, res: Response) => {
+        try {
+            res.json({ ok: true, data: store.getDefaultPlan() });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    app.put('/api/settings/default-plan', (req: Request, res: Response) => {
+        try {
+            const body = (req.body && typeof req.body === 'object') ? req.body : {};
+            const data = store.setDefaultPlan(body.config || {}, { enabled: body.enabled !== false });
+            res.json({ ok: true, data });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // 将指定账号的当前配置设为默认方案
+    app.post('/api/settings/default-plan/import', (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) {
+            return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+        }
+        try {
+            const data = store.importDefaultPlanFromAccount(id);
+            res.json({ ok: true, data });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // 将默认方案应用到指定账号，并同步到运行中的 worker
+    app.post('/api/settings/default-plan/apply', async (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) {
+            return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+        }
+        try {
+            const data = store.applyDefaultPlan(id);
+            if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function') {
+                ctx.provider.broadcastConfig(id);
+            }
+            res.json({ ok: true, data });
+        } catch (e: any) {
+            const status = e?.message === '尚未保存默认方案' ? 400 : 500;
+            res.status(status).json({ ok: false, error: e?.message || '应用默认方案失败' });
+        }
+    });
+
+    // 将默认方案重置为出厂默认配置
+    app.post('/api/settings/default-plan/reset', (_req: Request, res: Response) => {
+        try {
+            const data = store.resetDefaultPlan();
+            res.json({ ok: true, data });
         } catch (e: any) {
             handleApiError(res, e);
         }

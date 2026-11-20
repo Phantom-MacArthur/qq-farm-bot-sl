@@ -1,31 +1,13 @@
 <script setup lang="ts">
-import { NButton } from 'naive-ui/es/button'
-import { storeToRefs } from 'pinia'
 import TopAccountMenu from '@/components/TopAccountMenu.vue'
-import { useAppStore } from '@/stores/app'
-
-const appStore = useAppStore()
-const { sidebarOpen } = storeToRefs(appStore)
 </script>
 
 <template>
   <header class="page-header">
     <!-- 左侧：应用图标 + 标题 -->
     <div class="min-w-0 flex flex-1 items-center gap-3">
-      <NButton
-        class="lg:hidden"
-        quaternary
-        circle
-        aria-controls="app-sidebar"
-        :aria-expanded="sidebarOpen"
-        aria-label="打开侧栏"
-        title="打开侧栏"
-        @click="appStore.openSidebar"
-      >
-        <div class="i-carbon-menu text-xl" />
-      </NButton>
       <div class="page-header__brand">
-        <img src="/icon.png" alt="QQ农场智能助手图标" class="h-full w-full object-cover">
+        <img src="/icon.png?v=3" alt="QQ农场智能助手图标" class="h-full w-full object-cover">
       </div>
       <h1 class="page-header__title">
         QQ农场智能助手
@@ -69,14 +51,9 @@ const { sidebarOpen } = storeToRefs(appStore)
   color: var(--ui-ink);
   font-size: 20px;
   font-weight: var(--fw-700);
-  line-height: 1.3;
+  /* 28px 行盒在 48px 标题栏内居中后，文字上缘恰好落在侧栏「收起边栏」按钮的上沿（12px） */
+  line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-@media (max-width: 1023px) {
-  .page-header__title {
-    font-size: 17px;
-  }
 }
 </style>

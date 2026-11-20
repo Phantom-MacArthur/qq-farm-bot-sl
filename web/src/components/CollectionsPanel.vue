@@ -3,24 +3,26 @@ import type { CollectionItem } from '@/stores/collections'
 import { NButton } from 'naive-ui/es/button'
 import { NCard } from 'naive-ui/es/card'
 import { NModal } from 'naive-ui/es/modal'
-import { NSelect } from 'naive-ui/es/select'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import CollectionRulesPopover from '@/components/CollectionRulesPopover.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import BookOverview from '@/components/illustrated/BookOverview.vue'
-import BookSection from '@/components/illustrated/BookSection.vue'
 import BookTile from '@/components/illustrated/BookTile.vue'
 import BookToolbar from '@/components/illustrated/BookToolbar.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import OfflineState from '@/components/ui/OfflineState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { vLazySrc } from '@/directives/lazy-src'
 import { useAccountStore } from '@/stores/account'
 import { useCollectionsStore } from '@/stores/collections'
-import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 
 const { currentAccountId } = storeToRefs(useAccountStore())
-const { currentAccountConnected: isConnected } = storeToRefs(useStatusStore())
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
+const isConnected = computed(() => presence.value === 'online')
 const store = useCollectionsStore()
 const { data, loading, error, pending } = storeToRefs(store)
 const toast = useToastStore()
@@ -62,13 +64,12 @@ const statusFilters = computed(() => {
   ]
 })
 const seriesOptions = computed(() => [{ label: '全部系列', value: 0 }, ...(data.value?.series || []).map(series => ({ label: series.name, value: series.id }))])
-const visibleSeries = computed(() => {
+const visibleItems = computed(() => {
   const keyword = search.value.trim()
-  return (data.value?.series || []).filter(series => !seriesId.value || series.id === seriesId.value).map(series => ({
-    ...series,
-    items: series.items.filter(item => (!keyword || `${item.name} ${series.name}`.includes(keyword))
-      && (status.value === 'all' || itemStatus(item) === status.value)),
-  })).filter(series => series.items.length)
+  return (data.value?.series || []).filter(series => !seriesId.value || series.id === seriesId.value).flatMap(series => series.items
+    .filter(item => (!keyword || `${item.name} ${series.name}`.includes(keyword))
+      && (status.value === 'all' || itemStatus(item) === status.value))
+    .map(item => ({ item, accent: rarityColor(series.rarity) })))
 })
 const progress = computed(() => data.value?.nextRewardScore ? Math.min(100, data.value.score / data.value.nextRewardScore * 100) : 100)
 const selectedSeries = computed(() => data.value?.series.find(series => series.items.some(item => item.id === selected.value?.id)))
@@ -116,95 +117,88 @@ watch(data, () => {
   if (selected.value)
     selected.value = allItems.value.find(item => item.id === selected.value?.id) || null
 })
+// 切号或重新上线时都会执行刷新键的 refresh
 watch([currentAccountId, isConnected], () => {
   store.reset()
   selected.value = null
   rewardsOpen.value = false
   upgradeConfirmation.value = null
   void refresh()
-}, { immediate: true, flush: 'sync' })
+}, { immediate: true })
 onBeforeUnmount(() => store.reset())
 </script>
 
 <template>
-  <div class="book-page">
+  <div class="book-page panel-fill">
     <EmptyState v-if="!currentAccountId" title="请先选择账号" description="在左侧选择账号后查看藏品" icon="i-carbon-user-avatar" />
-    <EmptyState v-else-if="!isConnected" title="账号未运行" description="启动账号后会读取藏品" icon="i-carbon-connection-signal-off" />
+    <OfflineState v-else-if="isOffline" />
+    <div v-else-if="presence === 'unknown' || (loading && !data)" class="book-loading" role="status" aria-label="正在读取藏品">
+      <span class="i-svg-spinners-90-ring-with-bg" />
+    </div>
     <EmptyState v-else-if="error" title="藏品读取失败" :description="error" tone="error" icon="i-carbon-warning-alt">
       <NButton secondary :loading="loading" @click="refresh">
         重新读取
       </NButton>
     </EmptyState>
-    <div v-else-if="loading && !data" class="book-loading" role="status" aria-label="正在读取藏品">
-      <span class="i-svg-spinners-90-ring-with-bg" />
-    </div>
     <template v-else-if="data">
-      <BookOverview
-        title="蓝晶藏品"
-        icon="i-carbon-trophy"
-        :badge-value="data.activatedCount"
-        badge-label="已激活"
-        :caption="`共 ${data.totalCount} 款 · 总评分 ${data.score.toLocaleString()}`"
-        :progress-text="data.nextRewardScore === null ? '' : `${data.score.toLocaleString()} / ${data.nextRewardScore.toLocaleString()}`"
-        :percent="progress"
-        :hint="data.nextRewardScore === null ? '评分奖励已全部领取' : '距下一档评分奖励'"
-      >
-        <template #actions>
-          <NButton secondary @click="rewardsOpen = true">
-            评分奖励
-          </NButton>
-          <NButton secondary :loading="loading" :disabled="!!pending" aria-label="刷新藏品" title="刷新藏品" @click="refresh">
-            <template #icon>
-              <span class="i-carbon-renew" />
+      <BookToolbar v-model:filter="status" v-model:query="search" :filters="statusFilters" label="藏品筛选" placeholder="输入名称搜索">
+        <template #overview>
+          <BookOverview
+            embedded
+            title="蓝晶藏品"
+            icon="i-carbon-trophy"
+            :badge-value="data.activatedCount"
+            badge-label="已激活"
+            :caption="`共 ${data.totalCount} 款 · 总评分 ${data.score.toLocaleString()}`"
+            :progress-text="data.nextRewardScore === null ? '' : `${data.score.toLocaleString()} / ${data.nextRewardScore.toLocaleString()}`"
+            :percent="progress"
+            :hint="data.nextRewardScore === null ? '评分奖励已全部领取' : '距下一档评分奖励'"
+          >
+            <template #actions>
+              <NButton secondary @click="rewardsOpen = true">
+                评分奖励
+              </NButton>
             </template>
-          </NButton>
+            <template v-if="data.currentBuffs.length">
+              <span class="book-chip-label">当前加成</span>
+              <span v-for="buff in data.currentBuffs" :key="buff.id" class="book-chip">{{ buff.description }}</span>
+            </template>
+          </BookOverview>
         </template>
-        <template v-if="data.currentBuffs.length">
-          <span class="book-chip-label">当前加成</span>
-          <span v-for="buff in data.currentBuffs" :key="buff.id" class="book-chip">{{ buff.description }}</span>
+        <BaseSelect v-model="seriesId" :options="seriesOptions" fit-width aria-label="藏品系列" />
+        <template #actions>
+          <RefreshButton :loading="loading" :disabled="loading || !!pending" @click="refresh" />
         </template>
-      </BookOverview>
-
-      <BookToolbar v-model:filter="status" v-model:query="search" :filters="statusFilters" label="藏品筛选" placeholder="搜索藏品或系列">
-        <NSelect v-model:value="seriesId" :options="seriesOptions" size="small" class="series-select" aria-label="藏品系列" />
+        <!-- 所有藏品平铺在标题栏同一张卡片里，不再按系列分组；稀有度色标挂在各自的卡片上 -->
+        <template #body>
+          <div v-if="visibleItems.length" class="book-grid">
+            <BookTile
+              v-for="{ item, accent } in visibleItems"
+              :key="item.id"
+              :style="{ '--tile-accent': accent }"
+              :name="item.name"
+              :image="item.image"
+              :state="item.activated ? 'owned' : Number(item.ownCount) > 0 ? 'pending' : 'missing'"
+              :fresh="item.isNew"
+              :meta="itemMeta(item)"
+              :meta-tone="!item.activated && Number(item.ownCount) > 0 ? 'warning' : 'muted'"
+              interactive
+              :label="`${item.name}，${itemState(item)}，查看详情`"
+              @select="selected = item"
+            >
+              <template v-if="item.displayed" #corner>
+                <span class="tile-display" title="展示中"><span class="i-carbon-view" aria-hidden="true" />展示</span>
+              </template>
+              <template #extra>
+                <span class="tile-stars" :aria-label="`${item.starLevel} 星，共 ${item.maxStarLevel || 5} 星`">
+                  <span v-for="star in item.maxStarLevel || 5" :key="star" class="i-carbon-star-filled" :class="{ 'is-lit': star <= item.starLevel }" />
+                </span>
+              </template>
+            </BookTile>
+          </div>
+          <EmptyState v-else bare title="没有符合条件的藏品" description="换个系列、状态或搜索词试试" icon="i-carbon-search" />
+        </template>
       </BookToolbar>
-
-      <BookSection
-        v-for="series in visibleSeries"
-        :key="series.id"
-        :title="series.name"
-        :tag="series.rarityName"
-        :count="`${series.activatedCount} / ${series.totalCount}`"
-        :description="series.description"
-        :accent="rarityColor(series.rarity)"
-      >
-        <template #title-extra>
-          <CollectionRulesPopover :title="series.name" :rules="series.mutationRules" />
-        </template>
-        <BookTile
-          v-for="item in series.items"
-          :key="item.id"
-          :name="item.name"
-          :image="item.image"
-          :state="item.activated ? 'owned' : Number(item.ownCount) > 0 ? 'pending' : 'missing'"
-          :fresh="item.isNew"
-          :meta="itemMeta(item)"
-          :meta-tone="!item.activated && Number(item.ownCount) > 0 ? 'warning' : 'muted'"
-          interactive
-          :label="`${item.name}，${itemState(item)}，查看详情`"
-          @select="selected = item"
-        >
-          <template v-if="item.displayed" #corner>
-            <span class="tile-display" title="展示中"><span class="i-carbon-view" aria-hidden="true" />展示</span>
-          </template>
-          <template #extra>
-            <span class="tile-stars" :aria-label="`${item.starLevel} 星，共 ${item.maxStarLevel || 5} 星`">
-              <span v-for="star in item.maxStarLevel || 5" :key="star" class="i-carbon-star-filled" :class="{ 'is-lit': star <= item.starLevel }" />
-            </span>
-          </template>
-        </BookTile>
-      </BookSection>
-      <EmptyState v-if="!visibleSeries.length" bare title="没有符合条件的藏品" description="换个系列、状态或搜索词试试" icon="i-carbon-search" />
     </template>
 
     <NModal :show="!!selected" @update:show="show => { if (!show) selected = null }">
@@ -301,7 +295,10 @@ onBeforeUnmount(() => store.reset())
   min-width: 0;
   flex-direction: column;
   gap: 16px;
-  padding-bottom: 24px;
+}
+
+.book-page:not(:has(> .offline-state)) {
+  padding-bottom: 16px;
 }
 
 .book-loading {
@@ -312,9 +309,11 @@ onBeforeUnmount(() => store.reset())
   font-size: 28px;
 }
 
-.series-select {
-  width: 140px;
-  flex: none;
+/* 固定最小列宽自动排列：同一行卡片等宽等高，与作物图鉴的条目网格一致。 */
+.book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 10px;
 }
 
 .tile-display {
@@ -578,21 +577,5 @@ onBeforeUnmount(() => store.reset())
 .milestone.is-reached .milestone__state {
   color: var(--ui-primary);
   font-weight: var(--fw-600);
-}
-
-@media (max-width: 639px) {
-  .series-select {
-    width: auto;
-    flex: 1;
-  }
-
-  .milestone {
-    grid-template-columns: 60px minmax(0, 1fr);
-  }
-
-  .milestone__state {
-    grid-column: 2;
-    text-align: left;
-  }
 }
 </style>

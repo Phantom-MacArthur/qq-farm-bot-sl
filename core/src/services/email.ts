@@ -2,25 +2,26 @@ export {};
 /**
  * 邮箱系统 - 自动领取邮箱奖励
  *
- * 邮箱领取属于日常任务：每天在配置的时间点（默认 10:00，可设为 0 点）检查一次。
- * 领取完成、确认没有奖励或检查失败后，当天不再重复触发。
- * 执行途中退出留下的 running 记录不算已完成，重启后重新读取邮箱状态。
+ * 邮箱领取是默认开启的周期任务：登录（含刷新 code 后重新上线）立即检查一次，
+ * 之后由 worker 的 30 秒日常定时器轮询；服务层用冷却间隔限流，不再按每天一点触发。
+ * 领取成功/无奖励后隔一段时间再查；失败或部分领取用更短的重试间隔。
+ * 执行途中退出留下的 running 记录不算已完成，恢复后继续读取邮箱状态。
  */
 
 const crypto = require('node:crypto');
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { log, toNum, getSystemDateKey, getSystemClockMinutes, getServerTimeSec } = require('../utils/utils');
+const { log, toNum, getSystemDateKey } = require('../utils/utils');
 const { getDataFile } = require('../config/runtime-paths');
 const { readJsonFileStrict, writeJsonFileAtomic } = require('./json-db');
-const { parseHourOfDay } = require('../utils/hour-of-day');
 
 const DAILY_KEY: string = 'email_rewards';
-const DEFAULT_EMAIL_CLAIM_HOUR: number = 10;
-const STATE_VERSION: number = 1;
-const MINUTES_PER_DAY: number = 24 * 60;
+const STATE_VERSION: number = 2;
+/** 检查完成（成功/无奖励）后的重复检查间隔。 */
+const CHECK_DONE_COOLDOWN_MS: number = 30 * 60 * 1000;
+/** 失败或部分领取后的重试间隔（跨日也适用，避免午夜前失败就整天不再重试）。 */
+const CHECK_RETRY_COOLDOWN_MS: number = 5 * 60 * 1000;
 
-let claimHour: number = DEFAULT_EMAIL_CLAIM_HOUR;
 let stateAccountId: string = '';
 let attemptedDateKey: string = '';
 let lastCheckAt: number = 0;
@@ -28,10 +29,6 @@ let lastResult: string = '';
 let lastError: string = '';
 let lastClaimed: number = 0;
 let stateLoaded: boolean = false;
-
-function normalizeClaimHour(value: any, fallback: number = DEFAULT_EMAIL_CLAIM_HOUR): number {
-    return parseHourOfDay(value) ?? parseHourOfDay(fallback) ?? DEFAULT_EMAIL_CLAIM_HOUR;
-}
 
 function getStateFile(): string {
     if (!stateAccountId) return '';
@@ -46,9 +43,8 @@ function loadState(): void {
     const state: any = readJsonFileStrict(file, () => ({}));
     stateLoaded = true;
     if (!state || Number(state.version) !== STATE_VERSION) return;
-    const dateKey: string = String(state.dateKey || '');
-    if (dateKey !== getSystemDateKey()) return;
-    attemptedDateKey = dateKey;
+    if (String(state.dateKey || '') !== getSystemDateKey()) return;
+    attemptedDateKey = String(state.dateKey || '');
     lastCheckAt = Math.max(0, Number(state.attemptedAt) || 0);
     lastResult = String(state.result || '');
     lastError = String(state.lastError || state.error || '');
@@ -81,16 +77,28 @@ function persistState(): boolean {
     }
 }
 
-function isDoneToday(): boolean {
-    loadState();
-    return attemptedDateKey === getSystemDateKey() && lastResult !== 'running';
+/** 上次结果对应的下次检查冷却；running 表示正在执行，返回 Infinity 挡住重入。 */
+function cooldownMsFor(result: string): number {
+    if (result === 'running') return Infinity;
+    if (result === 'error' || result === 'partial') return CHECK_RETRY_COOLDOWN_MS;
+    if (result === 'ok' || result === 'none') return CHECK_DONE_COOLDOWN_MS;
+    return 0;
 }
 
-/** 配置当前账号的邮箱领取时间；切换账号时重新加载该账号的当日状态。 */
-function configureEmailClaim(options: any = {}): void {
-    if (options.hour !== undefined) {
-        claimHour = normalizeClaimHour(options.hour, claimHour);
+/** 距上次检查是否已超过对应冷却间隔；跨日时用更短的重试间隔兜底。 */
+function isCheckDue(nowMs: number = Date.now()): boolean {
+    loadState();
+    if (lastResult === 'running' && attemptedDateKey === getSystemDateKey()) return false;
+    let cooldown: number = cooldownMsFor(lastResult);
+    if (attemptedDateKey !== getSystemDateKey() && cooldown > CHECK_RETRY_COOLDOWN_MS) {
+        cooldown = CHECK_RETRY_COOLDOWN_MS;
     }
+    return nowMs - lastCheckAt >= cooldown;
+}
+
+/** 配置当前账号；切换账号时重新加载该账号的最近检查状态。 */
+function configureEmailClaim(options: any = {}): void {
+    // hour 选项已废弃（邮箱改为周期检查），保留入参兼容旧调用方，不再参与判断。
     if (options.accountId !== undefined) {
         const nextAccountId: string = String(options.accountId || '');
         if (nextAccountId !== stateAccountId) {
@@ -106,28 +114,12 @@ function configureEmailClaim(options: any = {}): void {
     }
 }
 
-function getEmailClaimHour(): number {
-    return claimHour;
-}
-
-/** 判断某个整点小时是否已经到达（按系统配置时区计算）。 */
-function isEmailClaimTimeReached(hour: any, nowMs: number = getServerTimeSec() * 1000): boolean {
-    return getSystemClockMinutes(nowMs) >= normalizeClaimHour(hour) * 60;
-}
-
-/** 下一次到达设定时间点的本地时间戳；已经过点则顺延到明天。 */
-function getNextScheduledLocalAt(nowMs: number = Date.now()): number {
-    const serverNowMs: number = getServerTimeSec() * 1000;
-    const minutesNow: number = getSystemClockMinutes(serverNowMs);
-    let deltaMinutes: number = claimHour * 60 - minutesNow;
-    if (deltaMinutes <= 0) deltaMinutes += MINUTES_PER_DAY;
-    const secondOfMinute: number = Math.floor((serverNowMs % 60000) / 1000);
-    return nowMs + deltaMinutes * 60000 - secondOfMinute * 1000;
-}
-
-function getNextCheckAt(): number {
-    if (!isDoneToday() && isEmailClaimTimeReached(claimHour)) return 0;
-    return getNextScheduledLocalAt();
+/** 下一次到期的本地时间戳；执行中返回 0 以外的未来值无意义，由 result='running' 展示。 */
+function getNextCheckAt(nowMs: number = Date.now()): number {
+    loadState();
+    if (isCheckDue(nowMs)) return 0;
+    if (lastResult === 'running') return 0;
+    return lastCheckAt + cooldownMsFor(lastResult);
 }
 
 function markAttempted(): boolean {
@@ -155,7 +147,6 @@ function finishAttempt(result: string, error: string = '', claimed: number = 0):
 
 /** 仅供测试重置内存状态；不会删除真实账号的落盘文件。 */
 function resetEmailClaimStateForTest(): void {
-    claimHour = DEFAULT_EMAIL_CLAIM_HOUR;
     stateAccountId = '';
     attemptedDateKey = '';
     lastCheckAt = 0;
@@ -219,9 +210,11 @@ function getRewardSummary(items: any[]): string {
 }
 
 async function checkAndClaimEmails(force: boolean = false): Promise<{ claimed: number; rewardItems: number; skipped?: string; error?: string }> {
-    if (isDoneToday()) return { claimed: 0, rewardItems: 0, skipped: 'done' };
+    // 不再区分自然日：只有执行中的检查能挡住重入，其余靠冷却间隔限流；
+    // force（登录/刷新 code 上线）忽略冷却立即检查。
+    loadState();
     if (lastResult === 'running') return { claimed: 0, rewardItems: 0, skipped: 'running' };
-    if (!force && !isEmailClaimTimeReached(claimHour)) return { claimed: 0, rewardItems: 0, skipped: 'waiting' };
+    if (!force && !isCheckDue()) return { claimed: 0, rewardItems: 0, skipped: 'cooldown' };
 
     // 先记录执行中，避免并发检查；只有取得最终结果后才结束当天检查。
     if (!markAttempted()) {
@@ -345,18 +338,17 @@ module.exports = {
     batchDeleteEmail,
     checkAndClaimEmails,
     configureEmailClaim,
-    getEmailClaimHour,
-    isEmailClaimTimeReached,
     getEmailDailyState: () => {
         loadState();
-        const doneToday: boolean = isDoneToday();
         const checkedToday: boolean = attemptedDateKey === getSystemDateKey();
+        const due: boolean = isCheckDue();
         return {
             key: DAILY_KEY,
-            doneToday,
+            // 周期检查模式下没有「当天已完成」：冷却未过视为刚完成，到期后自动重试。
+            doneToday: !due && checkedToday && (lastResult === 'ok' || lastResult === 'none'),
             lastCheckAt,
             nextCheckAt: getNextCheckAt(),
-            scheduledHour: claimHour,
+            checkIntervalMs: due ? 0 : cooldownMsFor(lastResult),
             // 已结束的结果跨日清除；尚在执行中的检查继续展示 running。
             result: lastResult === 'running' || checkedToday ? lastResult : '',
             lastError: checkedToday ? lastError : '',

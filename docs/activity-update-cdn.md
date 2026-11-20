@@ -23,7 +23,7 @@
 - **已知活动集合**：B 用 `activity` 服务的 `*_ACTIVITY_ID` 常量导出。SL 改为从
   `activity-gameplay-registry` 的静态登记（`buildActivityGameplayBindings({})` 的键）叠加
   CDN 卡片规则表 `ACTIVITY_CARD_ASSET_RULES` 收集。
-- **鉴权**：沿用 SL 全局 `/api/*` 强制 `x-admin-token`；手机直取的源码图片路由
+- **鉴权**：面板已改为免认证访问；手机直取的源码图片路由
   `GET /activity-source-asset/:bundle/:filename` 置于 `/api` 之外（与抓包证书一致）。
 
 ## 平台限制（重要）

@@ -3,6 +3,7 @@ import type { PetItem } from '@/stores/pet-diary'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useFriendStore } from '@/stores/friend'
 import { usePetDiaryStore } from '@/stores/pet-diary'
@@ -185,6 +186,8 @@ watch(() => accountStore.currentAccountId, () => {
   tab.value = 'home'
   void load()
 }, { immediate: true })
+// 重新上线时按一次刷新键（离线读不到活动时刷新键不显示，这里仍照常读取）
+useReconnectRefresh(load)
 watch(tab, () => {
   diary.clearNotice()
   if (scrollViewport.value)
@@ -2162,171 +2165,6 @@ watch(pet, (value) => {
 
 .pet-log strong {
   color: var(--pet-accent-deep);
-}
-/* ---------- 响应式 ---------- */
-@media (max-width: 1023px) {
-  .pet-hero {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 12px;
-  }
-
-  .pet-hero__art {
-    min-height: 170px;
-  }
-
-  .pet-hero__art > svg {
-    width: 160px;
-    height: 160px;
-  }
-
-  .pet-solar__card {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 14px;
-  }
-}
-
-@media (max-width: 720px) {
-  .pet-content {
-    padding: 14px 14px 20px;
-  }
-
-  .pet-album__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .pet-goods {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .pet-hero {
-    padding: 15px;
-  }
-
-  .pet-hero__art {
-    min-height: 152px;
-  }
-
-  .pet-hero__art > svg {
-    width: 144px;
-    height: 144px;
-  }
-
-  .pet-hero__head h2 {
-    font-size: 19px;
-  }
-
-  .pet-care .pet-button {
-    flex: 1 1 100%;
-  }
-
-  .pet-steal select {
-    flex: 1 1 100%;
-  }
-
-  .pet-steal__preview .pet-button {
-    margin-left: 0;
-  }
-
-  .pet-nav {
-    padding: 4px 6px;
-  }
-
-  .pet-nav__inner {
-    gap: 4px;
-  }
-
-  .pet-nav__inner > button {
-    height: 44px;
-    min-height: 44px;
-    gap: 2px;
-    border-radius: 10px;
-    font-size: 11px;
-  }
-
-  .pet-nav__icon {
-    width: 18px;
-    height: 18px;
-  }
-
-  .pet-nav__badge {
-    top: 7px;
-    margin-left: 6px;
-  }
-}
-
-@media (max-width: 520px) {
-  .pet-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .pet-dialog__body {
-    padding: 14px 14px 18px;
-  }
-
-  .pet-quantity {
-    flex-wrap: wrap;
-  }
-
-  .pet-quantity input {
-    flex: 1 1 72px;
-  }
-
-  .pet-quantity button:last-child {
-    flex: 1 1 100%;
-  }
-}
-
-@media (max-width: 420px) {
-  .pet-header {
-    gap: 6px;
-    padding: 0 10px;
-  }
-
-  .pet-header__brand {
-    gap: 8px;
-  }
-
-  .pet-title small {
-    display: none;
-  }
-
-  .pet-title h1 {
-    font-size: 16px;
-  }
-
-  .pet-back {
-    justify-content: center;
-    width: 34px;
-    padding: 0;
-  }
-
-  .pet-back__text {
-    display: none;
-  }
-
-  .pet-countdown {
-    height: 30px;
-    padding: 0 9px;
-    font-size: 11.5px;
-  }
-
-  .pet-countdown__label {
-    display: none;
-  }
-
-  .pet-wallet-menu > summary {
-    height: 30px;
-  }
-
-  .pet-nav__inner {
-    gap: 4px;
-  }
-
-  .pet-reward {
-    width: 88px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

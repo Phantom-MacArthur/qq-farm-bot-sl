@@ -6,6 +6,7 @@ export {};
 const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, getSystemDateKey } = require('../utils/utils');
+const { describeRewardItems } = require('../utils/reward-items');
 
 const DAILY_KEY: string = 'daily_share';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
@@ -18,6 +19,8 @@ let lastCheckAt: number = 0;
 let lastClaimAt: number = 0;
 let checkStatus: ShareCheckStatus = 'unchecked';
 let canShare: boolean | null = null;
+// 分享礼包领取前无法得知奖励，只记录本次进程内最近一次领到的物品。
+let lastRewards: any[] = [];
 
 function isCheckedToday(): boolean {
     return checkedDateKey === getSystemDateKey();
@@ -89,6 +92,7 @@ async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
         const items: any[] = Array.isArray(claimReply?.items) ? claimReply.items : [];
         claimedDateKey = checkedDateKey;
         lastClaimAt = Date.now();
+        lastRewards = describeRewardItems(items);
         log('分享', `分享礼包领取成功${items.length > 0 ? `，获得 ${items.length} 种物品` : ''}`, {
             module: 'task',
             event: DAILY_KEY,
@@ -134,5 +138,6 @@ module.exports = {
         doneToday: claimedDateKey === getSystemDateKey(),
         lastCheckAt,
         lastClaimAt,
+        rewards: claimedDateKey === getSystemDateKey() ? lastRewards : [],
     }),
 };

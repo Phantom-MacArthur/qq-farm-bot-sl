@@ -1,9 +1,57 @@
+import type { AxiosResponse, InternalAxiosRequestConfig } from 'axios'
 import { useStorage } from '@vueuse/core'
 import axios from 'axios'
+import { readonly, ref, watch } from 'vue'
 import { useToastStore } from '@/stores/toast'
 
-const tokenRef = useStorage('admin_token', '')
-const accountIdRef = useStorage('current_account_id', '')
+export const selectedAccountId = useStorage('current_account_id', '')
+const offlineResponse = ref(false)
+export const hasAccountOfflineResponse = readonly(offlineResponse)
+
+let accountEpoch = 0
+let offlineRevision = 0
+let confirmedConnected: boolean | undefined
+const accountRequests = new WeakMap<InternalAxiosRequestConfig, { epoch: number, offlineRevision: number }>()
+
+watch(selectedAccountId, () => {
+  accountEpoch++
+  confirmedConnected = undefined
+  offlineResponse.value = false
+}, { flush: 'sync' })
+
+export function isAccountOfflineCode(code: unknown): boolean {
+  return code === 'ACCOUNT_OFFLINE' || code === 'GAME_OFFLINE'
+}
+
+export function reportAccountOfflineResponse(response: AxiosResponse, code: unknown) {
+  if (!isAccountOfflineCode(code))
+    return false
+
+  const { config } = response
+  if (selectedAccountId.value && !config.signal?.aborted && accountRequests.get(config)?.epoch === accountEpoch) {
+    if (!offlineResponse.value)
+      offlineRevision++
+    offlineResponse.value = true
+  }
+  return true
+}
+
+export function confirmAccountConnection(accountId: string, connected: boolean, response?: AxiosResponse) {
+  if (!accountId || accountId !== selectedAccountId.value)
+    return
+  if (response) {
+    const request = accountRequests.get(response.config)
+    if (request?.epoch !== accountEpoch || (connected && request.offlineRevision !== offlineRevision))
+      return
+  }
+
+  // Do not let requests issued before a reconnection mark the account offline again.
+  if (connected && (confirmedConnected === false || offlineResponse.value)) {
+    accountEpoch++
+    offlineResponse.value = false
+  }
+  confirmedConnected = connected
+}
 
 const api = axios.create({
   baseURL: '/',
@@ -15,7 +63,7 @@ export function normalizeApiErrorMessage(raw: unknown): string {
   if (!text)
     return ''
 
-  const codeMatch = text.match(/\bcode=\d+\b\s*(.*)$/)
+  const codeMatch = text.match(/\bcode=\d+\b(.*)$/)
   const codeIndex = codeMatch?.index ?? -1
   if (codeMatch?.[1] && codeIndex >= 0 && text.slice(0, codeIndex).includes('.'))
     return codeMatch[1].trim()
@@ -35,23 +83,21 @@ export function getApiErrorMessage(error: unknown, fallback = '请求失败'): s
 }
 
 api.interceptors.request.use((config) => {
-  const token = tokenRef.value
-  if (token) {
-    config.headers['x-admin-token'] = token
-  }
-  const accountId = accountIdRef.value
+  const accountId = selectedAccountId.value
   if (accountId && !config.headers.has('x-account-id')) {
     config.headers.set('x-account-id', accountId)
   }
+  if (accountId && config.headers.get('x-account-id') === accountId)
+    accountRequests.set(config, { epoch: accountEpoch, offlineRevision })
   return config
-}, (error) => {
-  return Promise.reject(error)
-})
+}, undefined, { synchronous: true })
 
 api.interceptors.response.use((response) => {
   const responseData = response?.data
   const skipToast = (response?.config as any)?.skipErrorToast
   if (responseData && typeof responseData === 'object' && responseData.ok === false) {
+    if (reportAccountOfflineResponse(response, responseData.errorCode))
+      return response
     const message = getApiErrorMessage(responseData, '')
     if (message) {
       responseData.error = message
@@ -63,6 +109,8 @@ api.interceptors.response.use((response) => {
 }, (error) => {
   // Aborting an in-flight request is expected when a modal closes or a QR flow restarts.
   if (axios.isCancel(error) || error?.code === 'ERR_CANCELED')
+    return Promise.reject(error)
+  if (error?.response && reportAccountOfflineResponse(error.response, error.response.data?.errorCode))
     return Promise.reject(error)
 
   const toast = useToastStore()
@@ -77,18 +125,10 @@ api.interceptors.response.use((response) => {
   const skipToast = error.config?.skipErrorToast
 
   if (error.response) {
-    if (error.response.status === 401) {
-      // Avoid redirect loop or multiple redirects
-      if (!window.location.pathname.includes('/login')) {
-        tokenRef.value = ''
-        window.location.href = '/login'
-        toast.warning('登录已过期，请重新登录')
-      }
-    }
-    else if (error.response.status >= 500) {
+    if (error.response.status >= 500) {
       const backendError = getApiErrorMessage(error, '')
       // 后端运行态可预期错误：不弹全局500，交给页面状态处理
-      if (backendError === '账号未运行' || backendError === 'API Timeout') {
+      if (backendError === 'API Timeout') {
         return Promise.reject(error)
       }
       if (!skipToast) {

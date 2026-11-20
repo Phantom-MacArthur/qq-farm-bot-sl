@@ -192,3 +192,43 @@ test('limited mall uses its own slot, current price and finite availability with
  await assert.rejects(unavailable.service.purchaseMallProduct(1061,1,5,{id:1002,count:25}));
  assert.equal(unavailable.bought.length,0);
 });
+
+test('regular malls expose the same four currencies in gold, coupon, bean, diamond order', async () => {
+ const bag=[{id:1001,count:100},{id:1002,count:200},{id:1005,count:300}];
+ // 商品只用点券一种价格，币栏仍应补齐金币/点券/金豆豆/钻石四种。
+ const transformGoods=()=>[{
+  goods_id:1061,name:'点券礼包',goods_type:5,is_available:true,price:{id:1002,count:25},
+  reward_items:[{id:29005,count:1}],purchase_limit:null,
+ }];
+ // 礼包商城(1)与特惠商城(5)是常规商城；SVIP(4) 不展示四种常规货币。
+ for (const slotType of [1,5]) {
+  const h=harness({slotType,bag,diamond:400,mallFile:'001343-recv.bin',transformGoods});
+  const catalog=await h.service.getMallCatalog(slotType);
+  assert.deepEqual(catalog.currencies.map(c=>c.id),[1001,1002,1005,1004]);
+  assert.deepEqual(catalog.currencies.map(c=>c.count),[100,200,300,400]);
+  assert.ok(catalog.currencies.every(c=>c.balanceKnown===true));
+ }
+});
+
+test('SVIP mall lists only the currencies its own goods are priced in', async () => {
+ // 这件 SVIP 商品用钻石（1004）结算，金币/点券/金豆豆不应该出现。
+ const transformGoods=()=>[{
+  goods_id:1053,name:'SVIP 免费礼包',goods_type:5,is_available:true,price:{id:1004,count:0},
+  reward_items:[{id:29005,count:1}],purchase_limit:null,
+ }];
+ const h=harness({slotType:4,mallFile:'000327-recv.bin',bag:[{id:1901,count:20}],diamond:400,transformGoods});
+ const catalog=await h.service.getMallCatalog(4);
+ assert.deepEqual(catalog.currencies.map(c=>c.id),[1004]);
+});
+
+test('unknown balance in the fixed currency bar stays unknown instead of reading as zero', async () => {
+ const h=harness({slotType:1,mallFile:'001343-recv.bin',bagFailure:true,diamond:7});
+ const catalog=await h.service.getMallCatalog(1);
+ const byId=Object.fromEntries(catalog.currencies.map(c=>[c.id,c]));
+ for (const id of [1001,1002,1005]) {
+  assert.equal(byId[id].count,0);
+  assert.equal(byId[id].balanceKnown,false);
+ }
+ assert.equal(byId[1004].count,7);
+ assert.equal(byId[1004].balanceKnown,true);
+});

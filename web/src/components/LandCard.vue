@@ -1028,35 +1028,6 @@ function markMutantIconFailed(effect: any) {
   outline-offset: 1px;
 }
 
-/* 手机端：收紧留白与图片，操作按钮加高到便于点击的尺寸。 */
-@media (max-width: 640px) {
-  .land-card {
-    min-height: 0;
-    padding: 8px 8px 10px;
-  }
-
-  .land-card:hover {
-    transform: none;
-  }
-
-  .plant-container {
-    width: 40px;
-    height: 40px;
-    margin-top: 14px;
-  }
-
-  .farming-action-wrap,
-  .fertilizer-actions {
-    margin-top: 6px;
-  }
-
-  .farming-action,
-  .fertilizer-action {
-    min-height: 32px;
-    font-size: 12px;
-  }
-}
-
 .fertilizer-actions {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

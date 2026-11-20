@@ -6,12 +6,14 @@ import api, { getApiErrorMessage } from '@/api'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import EmptyState from '@/components/ui/EmptyState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
 import { useIllustratedStore } from '@/stores/illustrated'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { formatCompactAmount, formatNumber } from '@/utils/format-number'
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
@@ -25,12 +27,47 @@ const {
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const isOnline = computed(() => !!currentAccount.value?.running && status.value?.connection?.connected === true)
+const presence = useAccountPresence()
+const isOnline = computed(() => presence.value === 'online')
+const isOffline = computed(() => presence.value === 'offline')
 const { dashboardItems } = storeToRefs(bagStore)
 const logContainer = ref<HTMLElement | null>(null)
 const autoScroll = ref(true)
 const lastBagFetchAt = ref(0)
 const clearingLogs = ref(false)
+
+/**
+ * 方案B：保留上一次有效的种植经验。
+ *
+ * 土地快照靠 AllLands 刷新，在两次刷新之间可能短暂取不到（好友操作占满连接、网关繁忙等），
+ * 这时整行直接消失会让人以为「种植经验丢了」。所以这里缓存上一次的有效值：
+ * 只有后端明确给出「快照有效且地里没有作物」时才清掉缓存，其余情况沿用旧值。
+ */
+const cachedPlantExp = ref<number | null>(null)
+
+watch(
+  () => status.value?.levelForecast,
+  (forecast: any) => {
+    if (!forecast) {
+      cachedPlantExp.value = null
+      return
+    }
+    const plotCount = Number(forecast.plotCount || 0)
+    const scheduledExp = Number(forecast.scheduledExp || 0)
+    if (forecast.snapshotValid === true) {
+      // 快照可信：地里确实没作物才清空，否则更新为最新值。
+      cachedPlantExp.value = plotCount > 0 ? scheduledExp : null
+      return
+    }
+    // 快照暂时不可用：保留上一次的有效值，不要让整行闪烁消失。
+    if (plotCount > 0)
+      cachedPlantExp.value = scheduledExp
+  },
+  { immediate: true },
+)
+
+const showPlantExp = computed(() => !!status.value?.connection?.connected && cachedPlantExp.value !== null)
+const plantExpValue = computed(() => cachedPlantExp.value ?? 0)
 
 const allLogs = computed(() => {
   return [...(statusLogs.value || [])]
@@ -178,11 +215,11 @@ const illustratedLevels = computed(() => ({
 
 function formatBucketTime(item: any) {
   if (!item)
-    return '0.0h'
+    return '0h'
   if (item.hoursText)
-    return item.hoursText.replace('小时', 'h')
+    return `${formatAssetAmount(Number(item.hoursText.replace('小时', '')))}h`
   const count = Number(item.count || 0)
-  return `${(count / 3600).toFixed(1)}h`
+  return `${formatAssetAmount(count / 3600)}h`
 }
 
 // Next Check Countdown：农场 / 好友任务 两环倒计时。
@@ -192,7 +229,6 @@ function formatBucketTime(item: any) {
 // ±1 抖动会把本地值向上顶回，导致环形在倒计时未结束时提前"复位"。
 const nextFarmCheck = ref('--:--:--')
 const nextFriendCheck = ref('--:--:--')
-const localUptime = ref(0)
 const farmRemainNow = ref(0)
 const friendRemainNow = ref(0)
 const farmCountdownTotal = ref(1)
@@ -227,9 +263,9 @@ function getCountdownRingStyle(remain: number, total: typeof farmCountdownTotal 
 }
 
 function updateCountdowns() {
-  if (!status.value?.connection?.connected) {
-    nextFarmCheck.value = '账号未登录'
-    nextFriendCheck.value = '账号未登录'
+  if (!isOnline.value) {
+    nextFarmCheck.value = '--'
+    nextFriendCheck.value = '--'
     farmRemainNow.value = 0
     friendRemainNow.value = 0
     return
@@ -269,11 +305,6 @@ watch(() => status.value?.nextChecks, (nextChecks) => {
   }
 }, { immediate: true })
 
-watch(() => status.value?.uptime, (uptime) => {
-  if (uptime !== undefined)
-    localUptime.value = uptime
-}, { immediate: true })
-
 function formatDuration(seconds: number) {
   if (seconds <= 0)
     return '00:00:00'
@@ -298,48 +329,36 @@ function formatLogTime(timeStr: string) {
   return parts.length > 1 ? parts[1] : timeStr
 }
 
-// 今日统计操作元数据：对齐 origin 的 OP_META（含颜色），保留 sl 特有的 helpFarming。
-const OP_META: Record<string, { label: string, icon: string, color: string }> = {
+// 今日统计的操作元数据：只保留实际展示的 4 项动作计数。
+type OperationKey = 'harvest' | 'fertilize' | 'plant' | 'steal'
+
+const OP_META: Record<OperationKey, { label: string, icon: string, color: string }> = {
   harvest: { label: '收获', icon: 'i-carbon-crop-growth', color: 'text-green-500' },
-  water: { label: '浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-400' },
-  weed: { label: '除草', icon: 'i-carbon-cut', color: 'text-yellow-500' },
-  bug: { label: '除虫', icon: 'i-carbon-pest', color: 'text-red-400' },
-  farming: { label: '一键务农', icon: 'i-carbon-clean', color: 'text-teal-500' },
   fertilize: { label: '施肥', icon: 'i-carbon-chemistry', color: 'text-emerald-500' },
   plant: { label: '种植', icon: 'i-carbon-tree', color: 'text-lime-500' },
   steal: { label: '偷菜', icon: 'i-carbon-run', color: 'text-orange-500' },
-  helpWater: { label: '帮浇水', icon: 'i-carbon-rain-drop', color: 'text-blue-300' },
-  goldenBugClear: { label: '清黄金虫', icon: 'i-carbon-clean', color: 'text-amber-500' },
-  goldenBugPut: { label: '放黄金虫', icon: 'i-carbon-pest', color: 'text-yellow-500' },
-  helpWeed: { label: '帮除草', icon: 'i-carbon-cut', color: 'text-yellow-400' },
-  helpBug: { label: '帮除虫', icon: 'i-carbon-pest', color: 'text-red-300' },
-  helpFarming: { label: '帮务农', icon: 'i-carbon-collaborate', color: 'text-yellow-400' },
-  taskClaim: { label: '任务', icon: 'i-carbon-task-complete', color: 'text-indigo-500' },
-  tongQiGift: { label: '同气礼包', icon: 'i-carbon-gift', color: 'text-rose-500' },
 }
 
+// 后端只统计这 4 项，这里按固定顺序取值，保证格子布局稳定。
 const filteredOperations = computed(() => {
   const ops = status.value?.operations || {}
-  const result: Record<string, number> = {}
-  for (const key of Object.keys(ops)) {
-    // upgrade/levelUp 归属等级信息；farming（一键务农）为复合动作，其结果已按收获/浇水/除草/除虫细分展示
-    if (key !== 'upgrade' && key !== 'levelUp' && key !== 'farming' && key !== 'sell') {
-      result[key] = ops[key]
-    }
+  const result = {} as Record<OperationKey, number>
+  for (const key of Object.keys(OP_META) as OperationKey[]) {
+    result[key] = Number(ops[key]) || 0
   }
   return result
 })
 
 function getOpName(key: string | number) {
-  return OP_META[String(key)]?.label || String(key)
+  return OP_META[String(key) as OperationKey].label
 }
 
 function getOpIcon(key: string | number) {
-  return OP_META[String(key)]?.icon || 'i-carbon-circle-dash'
+  return OP_META[String(key) as OperationKey].icon
 }
 
 function getOpColor(key: string | number) {
-  return OP_META[String(key)]?.color || 'text-gray-400'
+  return OP_META[String(key) as OperationKey].color
 }
 
 const platformLabel = computed(() => getPlatformLabel(accountStore.currentAccount?.platform))
@@ -362,28 +381,29 @@ function handleAccountAvatarError(event: Event) {
   failedAccountAvatar.value = (event.currentTarget as HTMLImageElement | null)?.getAttribute('src') || ''
 }
 
-function formatPlainNumber(value: unknown) {
-  const num = Number(value)
-  return Number.isFinite(num) ? num.toLocaleString('zh-CN') : '0'
-}
-
 function getExpPercent(p: any) {
   if (!p || !p.needed)
     return 0
   return Math.min(100, Math.max(0, (p.current / p.needed) * 100))
 }
 
+// 概览页资产：统一用紧凑写法展示，悬停时显示完整数值。
+const assetBalances = computed(() => ({
+  gold: Number(status.value?.status?.gold) || 0,
+  coupon: Number(status.value?.status?.coupon) || 0,
+  goldBean: Number(status.value?.status?.goldBean) || 0,
+  diamond: Number(diamondBalance.value) || 0,
+}))
+
 function formatAssetAmount(value: unknown) {
   const amount = Number(value)
-  return Number.isFinite(amount) ? Math.max(0, Math.trunc(amount)).toLocaleString('zh-CN') : '0'
+  if (!Number.isFinite(amount))
+    return '0'
+  return Math.max(0, Math.round(amount * 10) / 10).toLocaleString('zh-CN', { maximumFractionDigits: 1 })
 }
 
 async function refreshBag(force = false) {
-  if (!currentAccountId.value)
-    return
-  if (!currentAccount.value?.running)
-    return
-  if (!status.value?.connection?.connected)
+  if (!currentAccountId.value || !isOnline.value)
     return
 
   const now = Date.now()
@@ -394,17 +414,13 @@ async function refreshBag(force = false) {
 }
 
 async function refreshDiamond() {
-  if (!currentAccountId.value || !currentAccount.value?.running)
-    return
-  if (!status.value?.connection?.connected)
+  if (!currentAccountId.value || !isOnline.value)
     return
   await statusStore.fetchDiamond(currentAccountId.value)
 }
 
 async function refreshIllustrated() {
-  if (!currentAccountId.value || !currentAccount.value?.running)
-    return
-  if (!status.value?.connection?.connected)
+  if (!currentAccountId.value || !isOnline.value)
     return
   await illustratedStore.fetch(currentAccountId.value)
 }
@@ -442,7 +458,7 @@ function onLogSearchTrigger() {
   refresh(true)
 }
 
-// 今日统计按金币、点券、金豆顺序展示本次会话的增量。
+// 今日统计按金币、点券顺序展示今日累计变化（净变化：收入 − 支出，支出为负数，跨天自动清零，账号重启不清零）。
 const sessionCurrencyGains = computed(() => [
   {
     key: 'gold',
@@ -456,12 +472,6 @@ const sessionCurrencyGains = computed(() => [
     icon: '/game-config/resource-icons/coupon.png',
     value: Number(status.value?.sessionCouponGained) || 0,
   },
-  {
-    key: 'goldBean',
-    label: '金豆',
-    icon: '/game-config/resource-icons/gold-bean.png',
-    value: Number(status.value?.sessionGoldBeanGained) || 0,
-  },
 ])
 
 watch(currentAccountId, async () => {
@@ -473,7 +483,8 @@ watch(currentAccountId, async () => {
   scrollToBottom()
 })
 
-watch(() => status.value?.connection?.connected, (connected) => {
+// 概览没有刷新键：上线（含重新上线）时重读背包、钻石与图鉴，日志与状态由实时推送补齐
+watch(isOnline, (connected) => {
   if (connected) {
     refreshBag(true)
     refreshDiamond()
@@ -570,11 +581,6 @@ onBeforeUnmount(() => {
 useIntervalFn(refresh, 10000)
 // Countdown ring: 每 250ms 平滑刷新（锚点式推算，见上方 updateCountdowns 注释）
 useIntervalFn(updateCountdowns, 250)
-// 运行时长：每秒本地推进，服务端广播到达时由上方 uptime watch 校正
-useIntervalFn(() => {
-  if (status.value?.connection?.connected)
-    localUptime.value++
-}, 1000)
 </script>
 
 <template>
@@ -584,10 +590,9 @@ useIntervalFn(() => {
       <!-- 账号：身份、在线状态与等级进度 -->
       <section class="ov-card ov-account">
         <div class="ov-account__head">
-          <div class="ov-avatar" :class="{ 'is-online': isOnline }">
+          <div class="ov-avatar">
             <img v-if="accountAvatar && accountAvatar !== failedAccountAvatar" :key="accountAvatar" :src="accountAvatar" alt="" @error="handleAccountAvatarError">
             <span v-else class="i-carbon-user-avatar" />
-            <i class="ov-avatar__dot" />
           </div>
           <div class="min-w-0 flex-1">
             <div class="ov-account__name-row">
@@ -595,8 +600,7 @@ useIntervalFn(() => {
               <span class="ov-level">Lv.{{ status?.status?.level || 0 }}</span>
             </div>
             <div class="ov-presence">
-              <span class="ov-presence__state" :class="isOnline ? 'is-online' : 'is-offline'">{{ isOnline ? '在线' : '离线' }}</span>
-              <span v-if="isOnline" class="ov-presence__item"><span class="i-carbon-time" />已运行 {{ formatDuration(localUptime) }}</span>
+              <span v-if="isOnline || isOffline" class="ov-presence__state" :class="isOnline ? 'is-online' : 'is-offline'">{{ isOnline ? '在线' : '离线' }}</span>
               <span v-if="platformLabel" class="ov-presence__item">{{ platformLabel }}</span>
             </div>
           </div>
@@ -606,7 +610,7 @@ useIntervalFn(() => {
           <div class="ov-exp__labels">
             <span>经验</span>
             <span class="ov-exp__value">
-              {{ formatPlainNumber(status?.levelProgress?.current) }} / {{ status?.levelProgress?.needed ? formatPlainNumber(status.levelProgress.needed) : '?' }}
+              {{ formatNumber(status?.levelProgress?.current) }} / {{ status?.levelProgress?.needed ? formatNumber(status.levelProgress.needed) : '?' }}
               <b>{{ Math.floor(getExpPercent(status?.levelProgress)) }}%</b>
             </span>
           </div>
@@ -615,12 +619,12 @@ useIntervalFn(() => {
           </div>
         </div>
         <div
-          v-if="status?.connection?.connected && Number(status?.levelForecast?.plotCount) > 0"
+          v-if="showPlantExp"
           class="ov-plant-exp"
           title="按当前土地作物和经验加成估算，收获后获得"
         >
           <span>种植经验：</span>
-          <b>{{ formatPlainNumber(status?.levelForecast?.scheduledExp) }}</b>
+          <b>{{ formatNumber(plantExpValue) }}</b>
         </div>
       </section>
 
@@ -631,25 +635,33 @@ useIntervalFn(() => {
             <span class="ov-asset__label">
               <img src="/game-config/resource-icons/gold.png" alt="金币">金币
             </span>
-            <strong class="ov-asset__value text-gold">{{ formatAssetAmount(status?.status?.gold) }}</strong>
+            <strong class="ov-asset__value text-gold" :title="`金币 ${formatNumber(assetBalances.gold)}`">
+              {{ formatCompactAmount(assetBalances.gold) }}
+            </strong>
           </div>
           <div class="ov-asset">
             <span class="ov-asset__label">
               <img src="/game-config/resource-icons/coupon.png" alt="点券">点券
             </span>
-            <strong class="ov-asset__value text-coupon">{{ formatAssetAmount(status?.status?.coupon) }}</strong>
+            <strong class="ov-asset__value text-coupon" :title="`点券 ${formatNumber(assetBalances.coupon)}`">
+              {{ formatCompactAmount(assetBalances.coupon) }}
+            </strong>
           </div>
           <div class="ov-asset">
             <span class="ov-asset__label">
               <img src="/game-config/resource-icons/gold-bean.png" alt="金豆豆">金豆豆
             </span>
-            <strong class="ov-asset__value text-bean">{{ formatAssetAmount(status?.status?.goldBean) }}</strong>
+            <strong class="ov-asset__value text-bean" :title="`金豆豆 ${formatNumber(assetBalances.goldBean)}`">
+              {{ formatCompactAmount(assetBalances.goldBean) }}
+            </strong>
           </div>
           <div class="ov-asset">
             <span class="ov-asset__label">
               <img src="/game-config/resource-icons/diamond.png" alt="钻石">钻石
             </span>
-            <strong class="ov-asset__value text-diamond">{{ formatAssetAmount(diamondBalance) }}</strong>
+            <strong class="ov-asset__value text-diamond" :title="`钻石 ${formatNumber(assetBalances.diamond)}`">
+              {{ formatCompactAmount(assetBalances.diamond) }}
+            </strong>
           </div>
           <div class="ov-asset">
             <span class="ov-asset__label">
@@ -680,10 +692,10 @@ useIntervalFn(() => {
     </div>
 
     <!-- 下次巡查倒计时 + 今日统计（并排展示，位于日志之上） -->
-    <div class="overview-followup flex flex-col md:flex-row">
+    <div class="overview-followup">
       <!-- Next Checks：两环倒计时（sl 的帮助/偷菜共用同一个好友任务循环，合并为一环） -->
-      <div class="overview-followup__countdown flex flex-col farm-card rounded-2xl bg-white p-5 shadow-md">
-        <h3 class="mb-3 flex items-center gap-2 text-lg font-display font-medium">
+      <div class="overview-followup__countdown flex flex-col page-card-surface rounded-2xl bg-white p-3 shadow-md">
+        <h3 class="mb-2 flex items-center gap-2 text-lg font-display font-medium">
           <span class="i-carbon-hourglass" /> <span>下次巡查倒计时</span>
         </h3>
         <div class="grid grid-cols-2 flex-1 items-center gap-2">
@@ -708,7 +720,7 @@ useIntervalFn(() => {
             >
               <div class="ov-countdown__inner">
                 <span class="i-carbon-user-multiple text-xl text-blue-500" />
-                <span class="ov-countdown__name">好友任务</span>
+                <span class="ov-countdown__name">好友</span>
               </div>
             </div>
             <div class="ov-countdown__value" :title="nextFriendCheck">
@@ -719,65 +731,60 @@ useIntervalFn(() => {
       </div>
 
       <!-- Operations Grid：今日统计，项目对齐 origin -->
-      <div class="flex-1 farm-card rounded-2xl bg-white p-5 shadow-md">
-        <h3 class="mb-3 flex items-center gap-2 text-lg font-display font-medium">
+      <div class="page-card-surface rounded-2xl bg-white px-3 pt-3 shadow-md" :class="isOffline ? 'pb-0' : 'pb-3'">
+        <h3 class="flex items-center gap-2 text-lg font-display font-medium" :class="{ 'mb-2': !isOffline }">
           <span class="i-carbon-chart-column" /> <span>今日统计</span>
         </h3>
-        <EmptyState
-          v-if="!status?.connection?.connected"
-          bare
-          title="账号未登录"
-          description="请先运行账号或检查网络连接"
-          icon="i-carbon-connection-signal-off"
-        />
-        <div v-else class="grid grid-cols-2 gap-2 xl:grid-cols-3 2xl:gap-3">
+        <div v-if="isOffline" class="flex justify-center py-[12px]">
+          <RefreshButton
+            label="重新加载账号信息"
+            :loading="accountStore.bulkKind === 'start'"
+            :disabled="accountStore.bulkRunning"
+            @click="accountStore.startAllAccounts()"
+          />
+        </div>
+        <div v-else class="grid grid-cols-3 gap-3">
           <div
             v-for="gain in sessionCurrencyGains"
             :key="gain.key"
-            class="ov-stat-tile text-gray-900 dark:text-gray-100"
+            class="ov-stat-tile"
           >
             <div class="min-w-0 flex items-center gap-1.5">
               <img class="size-5 shrink-0 object-contain" :src="gain.icon" alt="">
-              <div class="truncate text-xs 2xl:text-sm" :title="gain.label">
+              <div class="truncate text-xs text-gray-500" :title="gain.label">
                 {{ gain.label }}
               </div>
             </div>
-            <div class="text-sm text-gray-900 font-bold 2xl:text-base dark:text-gray-100">
-              {{ formatPlainNumber(gain.value) }}
+            <div
+              class="text-sm"
+              :class="gain.value < 0 ? 'text-red-500' : ''"
+              :title="`${gain.label} ${formatNumber(gain.value)}`"
+            >
+              {{ formatCompactAmount(gain.value) }}
             </div>
           </div>
-          <template v-if="Object.keys(filteredOperations).length">
-            <div
-              v-for="(val, key) in filteredOperations"
-              :key="key"
-              class="ov-stat-tile"
-            >
-              <div class="min-w-0 flex items-center gap-1.5">
-                <span class="select-none text-base 2xl:text-lg" :class="[getOpIcon(key), getOpColor(key)]" />
-                <div class="truncate text-xs text-gray-500 2xl:text-sm" :title="getOpName(key)">
-                  {{ getOpName(key) }}
-                </div>
-              </div>
-              <div class="text-sm font-bold 2xl:text-base">
-                {{ val }}
+          <div
+            v-for="(val, key) in filteredOperations"
+            :key="key"
+            class="ov-stat-tile"
+          >
+            <div class="min-w-0 flex items-center gap-1.5">
+              <span class="select-none text-base" :class="[getOpIcon(key), getOpColor(key)]" />
+              <div class="truncate text-xs text-gray-500" :title="getOpName(key)">
+                {{ getOpName(key) }}
               </div>
             </div>
-          </template>
-          <EmptyState
-            v-else
-            class="col-span-full"
-            bare
-            title="暂无主动作统计"
-            description="通常是刚启动、刚切换账号，或本轮巡查尚未完成"
-            icon="i-carbon-chart-column"
-          />
+            <div class="text-sm">
+              {{ val }}
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
     <!-- 运行日志（页面最下方，整宽展示） -->
-    <div class="dashboard-log-card flex flex-col farm-card rounded-2xl bg-white p-5 shadow-md">
-      <div class="mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+    <div class="dashboard-log-card flex flex-col page-card-surface rounded-2xl bg-white p-3 shadow-md">
+      <div class="mb-4 flex flex-row items-center justify-between gap-3">
         <h3 class="flex shrink-0 items-center gap-2 whitespace-nowrap text-lg font-bold">
           <span class="i-carbon-document" /> <span>运行日志</span>
         </h3>
@@ -786,23 +793,27 @@ useIntervalFn(() => {
           <BaseSelect
             v-model="filter.module"
             :options="modules"
+            fit-width
             @change="onLogFilterChange"
           />
 
           <BaseSelect
             v-model="filter.event"
             :options="events"
+            fit-width
             @change="onLogFilterChange"
           />
 
           <BaseSelect
             v-model="filter.isWarn"
             :options="logs"
+            fit-width
             @change="onLogFilterChange"
           />
 
           <BaseInput
             v-model="filter.keyword"
+            type="search"
             placeholder="关键词"
             clearable
             @keyup.enter="onLogSearchTrigger"
@@ -836,7 +847,7 @@ useIntervalFn(() => {
         </div>
       </div>
 
-      <div ref="logContainer" class="log-list min-h-0 flex-1 overflow-y-auto" @scroll="onLogScroll">
+      <div ref="logContainer" class="log-list flex-1 overflow-y-auto" @scroll="onLogScroll">
         <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
           暂无日志
         </div>
@@ -865,7 +876,10 @@ useIntervalFn(() => {
 
 <style scoped>
 .dashboard-log-card {
-  min-height: 0;
+  /* 作为页面 flex 子项：flex-basis 0 吃剩余高度（宽屏时撑满、日志列表内滚）。
+     不设 min-height: 0，保留自动最小高度（auto = min-content），避免窄屏下卡片
+     收缩到内容高度以下、筛选器/按钮溢出白底；日志列表的 contain: size（见 .log-list）
+     使日志内容不参与该最小高度计算，卡片高度不足时由页面整体滚动。 */
   flex: 1 1 0;
 }
 
@@ -880,22 +894,35 @@ useIntervalFn(() => {
   gap: min(var(--page-pad), 12px);
 }
 
-@media (min-width: 768px) {
-  .overview-grid {
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
-  }
+.overview-grid {
+  /* 个人信息卡片占主页面宽度 35%，右侧资产卡片占 65% */
+  grid-template-columns: 35% minmax(0, 1fr);
+}
 
-  .overview-followup__countdown {
-    flex: 0 0 calc(40% - 4.8px);
-  }
+.overview-followup {
+  /* 与 .overview-grid 控制逻辑一致：左侧卡片占 35%，右侧（今日统计）占 65% */
+  display: grid;
+  grid-template-columns: 35% minmax(0, 1fr);
+}
+
+.overview-followup__countdown {
+  min-width: 0;
+}
+
+/* 概览四个卡片左上角标题：统一字体族、字号与字重（较原值 18px 减小） */
+.overview-followup h3,
+.dashboard-log-card h3 {
+  font-family: "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: var(--fw-600);
 }
 
 .ov-card {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-card);
   background: var(--ui-surface);
@@ -912,16 +939,15 @@ useIntervalFn(() => {
 }
 
 .ov-avatar {
-  position: relative;
-  width: 52px;
-  height: 52px;
+  width: 46px;
+  height: 46px;
   display: grid;
   flex: none;
   place-items: center;
   border-radius: 16px;
   color: var(--ui-subtle);
   background: var(--ui-surface-soft);
-  font-size: 26px;
+  font-size: 24px;
 }
 
 .ov-avatar img {
@@ -929,21 +955,6 @@ useIntervalFn(() => {
   height: 100%;
   border-radius: inherit;
   object-fit: cover;
-}
-
-.ov-avatar__dot {
-  position: absolute;
-  right: -3px;
-  bottom: -3px;
-  width: 14px;
-  height: 14px;
-  border: 3px solid var(--ui-surface-strong);
-  border-radius: 999px;
-  background: var(--ui-subtle);
-}
-
-.ov-avatar.is-online .ov-avatar__dot {
-  background: #3fa765;
 }
 
 .ov-account__name-row {
@@ -957,8 +968,9 @@ useIntervalFn(() => {
   min-width: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 18px;
-  font-weight: var(--fw-700);
+  font-family: "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
+  font-size: 15px;
+  font-weight: var(--fw-600);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -966,13 +978,13 @@ useIntervalFn(() => {
 
 .ov-level {
   flex: none;
-  padding: 1px 8px;
+  padding: 0 6px;
   border-radius: 999px;
   color: var(--ui-blue);
   background: var(--ui-blue-soft);
   font-size: 12px;
   font-weight: var(--fw-700);
-  line-height: 20px;
+  line-height: 16px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -989,11 +1001,11 @@ useIntervalFn(() => {
 .ov-presence__state {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 1px 9px 1px 7px;
+  gap: 4px;
+  padding: 0 7px 0 6px;
   border-radius: 999px;
   font-weight: var(--fw-600);
-  line-height: 20px;
+  line-height: 16px;
 }
 
 .ov-presence__state::before {
@@ -1060,7 +1072,6 @@ useIntervalFn(() => {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 10px;
   color: var(--ui-muted);
   font-size: 12px;
 }
@@ -1073,24 +1084,28 @@ useIntervalFn(() => {
 
 /* 资产与库存：四列两行 */
 .ov-assets {
+  --ov-asset-gap: 12px;
   justify-content: center;
+  /* 资源格子到外框 12px，与其余卡片的内边距一致 */
+  padding: 12px;
 }
 
 .ov-assets__grid {
   display: grid;
   flex: 1;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
-  align-content: center;
+  grid-auto-rows: minmax(0, 1fr);
+  gap: var(--ov-asset-gap);
 }
 
 .ov-asset {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  justify-content: flex-start;
+  justify-content: center;
   gap: 4px;
-  padding: 10px 12px;
+  /* 格子内边距固定 8px，不随卡片间距变量放大，保持紧凑 */
+  padding: 8px;
   border-radius: 12px;
   background: var(--ui-surface-soft);
 }
@@ -1107,16 +1122,16 @@ useIntervalFn(() => {
 
 .ov-asset__label img {
   flex: none;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   object-fit: contain;
 }
 
 .ov-asset__value {
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 18px;
-  font-weight: var(--fw-700);
+  font-size: 14px;
+  font-weight: var(--fw-400);
   line-height: 1.25;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -1150,8 +1165,8 @@ useIntervalFn(() => {
 
 .ov-countdown__ring {
   display: grid;
-  height: 72px;
-  width: 72px;
+  height: 52px;
+  width: 52px;
   place-items: center;
   padding: 4px;
   border-radius: 999px;
@@ -1178,9 +1193,8 @@ useIntervalFn(() => {
 .ov-countdown__value {
   width: 100%;
   overflow: hidden;
-  margin-top: 6px;
+  margin-top: 4px;
   font-size: 13px;
-  font-weight: var(--fw-700);
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1194,31 +1208,12 @@ useIntervalFn(() => {
   justify-content: space-between;
   border-radius: 12px;
   background: var(--ui-surface-soft);
-  padding: 8px 12px;
+  padding: 6px 12px;
   transition: background 0.2s ease;
 }
 
 .ov-stat-tile:hover {
   background: color-mix(in srgb, var(--ui-primary) 6%, var(--ui-surface-soft));
-}
-
-@media (max-width: 520px) {
-  .ov-card {
-    padding: 16px;
-  }
-
-  .ov-asset {
-    padding: 8px 10px;
-  }
-
-  .ov-asset__value {
-    font-size: clamp(15px, 4.5vw, 18px);
-  }
-
-  .ov-countdown__ring {
-    height: 60px;
-    width: 60px;
-  }
 }
 
 .log-filters {
@@ -1242,18 +1237,21 @@ useIntervalFn(() => {
   padding: 0 !important;
 }
 
-@media (min-width: 640px) {
-  .log-filters {
-    grid-template-columns: repeat(4, minmax(0, 8.5rem)) auto;
-    align-items: center;
-  }
+.log-filters {
+  grid-template-columns: repeat(4, max-content) auto;
+  align-items: center;
+}
 
-  .log-filters__buttons {
-    grid-column: auto;
-  }
+.log-filters__buttons {
+  grid-column: auto;
 }
 
 .log-list {
+  /* contain: size：日志行内容不参与卡片的内在高度计算，否则卡片最小高度会被
+     全部日志内容撑开（页面变成几千 px 长、内滚也失效）。给 120px 下限保证
+     短视口下日志区始终可见，剩余高度由 flex 分配、超出部分列表内部滚动。 */
+  contain: size;
+  min-height: 120px;
   padding: 6px;
   border-radius: var(--ui-radius-control);
   background: var(--ui-surface-soft);
@@ -1343,16 +1341,5 @@ useIntervalFn(() => {
 .log-row--error .log-row__tag,
 .log-row--error .log-row__msg {
   color: var(--ui-danger);
-}
-
-@media (max-width: 640px) {
-  .log-row {
-    grid-template-columns: auto minmax(0, 1fr);
-    gap: 2px 8px;
-  }
-
-  .log-row__body {
-    grid-column: 1 / -1;
-  }
 }
 </style>

@@ -46,9 +46,10 @@ if (isWorkerProcess) {
         },
     });
 
+    // 服务启动时就自动把已配置的账号全部拉起，不再依赖打开面板触发。
     runtimeEngine.start({
         startAdminServer: true,
-        autoStartAccounts: false,
+        autoStartAccounts: true,
     }).catch((err: any) => {
         mainLogger.error('runtime bootstrap failed', { error: err && err.message ? err.message : String(err) });
     });

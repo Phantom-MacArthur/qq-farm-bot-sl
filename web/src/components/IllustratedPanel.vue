@@ -3,26 +3,30 @@ import { NButton } from 'naive-ui/es/button'
 import { NCard } from 'naive-ui/es/card'
 import { NInputNumber } from 'naive-ui/es/input-number'
 import { NModal } from 'naive-ui/es/modal'
+import { NPopover } from 'naive-ui/es/popover'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import BookOverview from '@/components/illustrated/BookOverview.vue'
-import BookSection from '@/components/illustrated/BookSection.vue'
 import BookTile from '@/components/illustrated/BookTile.vue'
 import BookToolbar from '@/components/illustrated/BookToolbar.vue'
+import BaseSelect from '@/components/ui/BaseSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import OfflineState from '@/components/ui/OfflineState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { vLazySrc } from '@/directives/lazy-src'
 import { useAccountStore } from '@/stores/account'
 import { useIllustratedStore } from '@/stores/illustrated'
-import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
 
 const props = withDefaults(defineProps<{ bookType?: 'crop' | 'mutant' }>(), { bookType: 'crop' })
 const accountStore = useAccountStore()
 const illustratedStore = useIllustratedStore()
-const statusStore = useStatusStore()
 const { currentAccountId } = storeToRefs(accountStore)
-const { currentAccountConnected: isConnected } = storeToRefs(statusStore)
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
+const isConnected = computed(() => presence.value === 'online')
 const { data, loading, error } = storeToRefs(illustratedStore)
 const currentType = computed(() => props.bookType)
 const isMutant = computed(() => currentType.value === 'mutant')
@@ -37,6 +41,7 @@ const selectedSeedItem = ref<any>(null)
 const purchaseCount = ref(1)
 const purchasingSeedId = ref<number | null>(null)
 const filter = ref('all')
+const group = ref('all')
 const query = ref('')
 
 const book = computed(() => data.value?.[currentType.value] || null)
@@ -86,21 +91,20 @@ const MUTANT_GROUPS = [
   { key: 'decoration', label: '装扮果实' },
   { key: 'activity', label: '活动果实' },
 ] as const
-/** 超变图鉴按果实来源分组显示；作物图鉴只有一组。 */
-const sections = computed(() => {
+/** 超变图鉴按果实来源排序（不属于已知来源的不展示），来源改由下拉框筛选；作物图鉴直接全部展示。 */
+const bookItems = computed(() => {
   if (!isMutant.value)
-    return [{ key: 'crop', label: '全部作物', all: items.value, items: items.value.filter(matches) }]
+    return items.value
   const sorted = [...items.value].sort((a, b) => Number(a.sort || 0) - Number(b.sort || 0))
-  return MUTANT_GROUPS.map((group) => {
-    const all = sorted.filter(item => item.group === group.key)
-    return { key: group.key, label: group.label, all, items: all.filter(matches) }
-  }).filter(section => section.all.length)
+  return MUTANT_GROUPS.flatMap(entry => sorted.filter(item => item.group === entry.key))
 })
-const visibleSections = computed(() => sections.value.filter(section => section.items.length))
-
-function sectionCount(section: { all: any[] }) {
-  return `${section.all.filter(item => item.unlocked).length} / ${section.all.length}`
-}
+const groupOptions = computed(() => [
+  { value: 'all', label: `全部果实 (${bookItems.value.length})` },
+  ...MUTANT_GROUPS.map(entry => ({ value: entry.key, label: entry.label, count: bookItems.value.filter(item => item.group === entry.key).length }))
+    .filter(entry => entry.count)
+    .map(entry => ({ value: entry.value, label: `${entry.label} (${entry.count})` })),
+])
+const visibleItems = computed(() => bookItems.value.filter(item => matches(item) && (!isMutant.value || group.value === 'all' || item.group === group.value)))
 
 function progressPercent(value: any, next: any) {
   const current = Math.max(0, Number(value) || 0)
@@ -226,6 +230,7 @@ async function scrollToNextReward() {
 
 watch(currentType, () => {
   filter.value = 'all'
+  group.value = 'all'
   query.value = ''
   detailsOpen.value = false
 })
@@ -238,96 +243,101 @@ watch([currentAccountId, isConnected], () => {
   purchasingSeedId.value = null
   detailsOpen.value = false
   illustratedStore.reset()
-}, { flush: 'sync' })
-watch([currentAccountId, isConnected], refresh, { immediate: true })
+  void refresh()
+}, { immediate: true })
 </script>
 
 <template>
-  <div class="book-page">
+  <div class="book-page panel-fill">
     <EmptyState v-if="!currentAccountId" title="请先选择账号" description="在左侧选择账号后查看图鉴进度" icon="i-carbon-user-avatar" />
-    <EmptyState v-else-if="!isConnected" title="账号未运行" description="启动账号后会读取图鉴进度" icon="i-carbon-connection-signal-off" />
-    <div v-else-if="loading && !data" class="book-loading" role="status" aria-label="正在读取图鉴">
+    <OfflineState v-else-if="isOffline" />
+    <div v-else-if="presence === 'unknown' || (loading && !data)" class="book-loading" role="status" aria-label="正在读取图鉴">
       <span class="i-svg-spinners-90-ring-with-bg" />
     </div>
-    <EmptyState v-else-if="error" tone="error" title="图鉴读取失败" :description="error" icon="i-carbon-warning-alt">
-      <NButton secondary @click="refresh">
-        重新读取
-      </NButton>
-    </EmptyState>
+    <OfflineState v-else-if="error" />
     <template v-else-if="book">
-      <BookOverview
-        :title="bookName"
-        :icon="isMutant ? 'i-carbon-gem' : 'i-carbon-sprout'"
-        :badge-value="book.level || 0"
-        badge-label="等级"
-        :caption="`已收藏 ${collectedCount} / ${items.length}`"
-        :progress-text="`${book.progress || 0} / ${book.nextLevelProgress || '—'}`"
-        :percent="progressPercent(book.progress, book.nextLevelProgress)"
-        :hint="progressHint"
-      >
-        <template #actions>
-          <NButton secondary @click="detailsOpen = true">
-            {{ isMutant ? '加成详情' : '奖励详情' }}
-          </NButton>
-          <NButton v-if="book.claimable" type="primary" :loading="claiming" :disabled="loading" @click="claimRewards">
-            领取奖励
-          </NButton>
-          <NButton secondary :loading="loading" aria-label="刷新图鉴" title="刷新图鉴" @click="refresh">
-            <template #icon>
-              <span class="i-carbon-renew" />
+      <BookToolbar v-model:filter="filter" v-model:query="query" :filters="filters" :label="`${bookName}筛选`" placeholder="输入名称搜索">
+        <template #overview>
+          <BookOverview
+            embedded
+            :title="bookName"
+            :icon="isMutant ? 'i-carbon-gem' : 'i-carbon-sprout'"
+            :badge-value="book.level || 0"
+            badge-label="等级"
+            :caption="`已收藏 ${collectedCount} / ${items.length}`"
+            :progress-text="`${book.progress || 0} / ${book.nextLevelProgress || '—'}`"
+            :percent="progressPercent(book.progress, book.nextLevelProgress)"
+            :hint="progressHint"
+          >
+            <template #actions>
+              <NButton secondary @click="detailsOpen = true">
+                {{ isMutant ? '加成详情' : '奖励详情' }}
+              </NButton>
+              <NButton v-if="book.claimable" type="primary" :loading="claiming" :disabled="loading" @click="claimRewards">
+                领取奖励
+              </NButton>
             </template>
-          </NButton>
+            <template v-if="isMutant">
+              <span class="book-chip-label">当前加成</span>
+              <template v-if="currentIllustratedBuffs.length">
+                <!-- 标签只显示加成名，具体数值悬停弹窗查看 -->
+                <NPopover v-for="bonus in currentIllustratedBuffs" :key="`current-buff-${bonus.id}`" trigger="hover">
+                  <template #trigger>
+                    <span class="book-chip book-chip--plain">{{ bonus.name }}</span>
+                  </template>
+                  {{ formatBuffValue(bonus) }}
+                </NPopover>
+              </template>
+              <span v-else class="book-chip-label">暂无，提升图鉴等级后解锁</span>
+            </template>
+          </BookOverview>
         </template>
-        <template v-if="isMutant">
-          <span class="book-chip-label">当前加成</span>
-          <template v-if="currentIllustratedBuffs.length">
-            <span v-for="bonus in currentIllustratedBuffs" :key="`current-buff-${bonus.id}`" class="book-chip">{{ bonus.name }} · {{ formatBuffValue(bonus) }}</span>
-          </template>
-          <span v-else class="book-chip-label">暂无，提升图鉴等级后解锁</span>
+        <BaseSelect v-if="isMutant" v-model="group" :options="groupOptions" fit-width aria-label="超变图鉴分组" />
+        <template #actions>
+          <RefreshButton :loading="loading" :disabled="loading" @click="refresh" />
         </template>
-      </BookOverview>
-
-      <BookToolbar v-model:filter="filter" v-model:query="query" :filters="filters" :label="`${bookName}筛选`" :placeholder="isMutant ? '搜索果实' : '搜索作物'" />
-
-      <BookSection v-for="section in visibleSections" :key="section.key" :title="section.label" :count="sectionCount(section)" :accent="isMutant ? 'var(--ui-warning)' : undefined">
-        <template v-if="isMutant">
-          <BookTile
-            v-for="item in section.items"
-            :key="item.seedId"
-            :name="item.name"
-            :image="item.image"
-            :state="item.unlocked ? 'owned' : 'missing'"
-            :fresh="item.isNew"
-            :meta="item.unlocked ? '已收藏' : '未收藏'"
+        <template #body>
+          <div v-if="visibleItems.length" class="book-grid" :style="isMutant ? { '--tile-accent': 'var(--ui-warning)' } : undefined">
+            <template v-if="isMutant">
+              <BookTile
+                v-for="item in visibleItems"
+                :key="item.seedId"
+                :name="item.name"
+                :image="item.image"
+                :state="item.unlocked ? 'owned' : 'missing'"
+                :fresh="item.isNew"
+                :meta="item.unlocked ? '已收藏' : '未收藏'"
+              />
+            </template>
+            <template v-else>
+              <BookTile
+                v-for="item in visibleItems"
+                :key="item.seedId"
+                :name="item.name"
+                :image="item.image"
+                :state="item.unlocked ? 'owned' : 'missing'"
+                :fresh="item.isNew"
+                :interactive="canPurchaseSeed(item)"
+                :label="canPurchaseSeed(item) ? `购买${item.name}种子` : ''"
+                :meta-tone="canPurchaseSeed(item) ? 'primary' : 'muted'"
+                :meta="cropMeta(item)"
+                @select="openSeedPurchase(item)"
+              >
+                <template v-if="canPurchaseSeed(item)" #meta>
+                  <span class="i-carbon-shopping-cart" aria-hidden="true" />购买种子
+                </template>
+              </BookTile>
+            </template>
+          </div>
+          <EmptyState
+            v-else
+            bare
+            :title="items.length ? '没有符合条件的条目' : '暂无图鉴记录'"
+            :description="items.length ? '换个筛选或搜索词试试' : `当前账号还没有${bookName}记录`"
+            :icon="items.length ? 'i-carbon-search' : 'i-carbon-book'"
           />
         </template>
-        <template v-else>
-          <BookTile
-            v-for="item in section.items"
-            :key="item.seedId"
-            :name="item.name"
-            :image="item.image"
-            :state="item.unlocked ? 'owned' : 'missing'"
-            :fresh="item.isNew"
-            :interactive="canPurchaseSeed(item)"
-            :label="canPurchaseSeed(item) ? `购买${item.name}种子` : ''"
-            :meta-tone="canPurchaseSeed(item) ? 'primary' : 'muted'"
-            :meta="cropMeta(item)"
-            @select="openSeedPurchase(item)"
-          >
-            <template v-if="canPurchaseSeed(item)" #meta>
-              <span class="i-carbon-shopping-cart" aria-hidden="true" />购买种子
-            </template>
-          </BookTile>
-        </template>
-      </BookSection>
-      <EmptyState
-        v-if="!visibleSections.length"
-        bare
-        :title="items.length ? '没有符合条件的条目' : '暂无图鉴记录'"
-        :description="items.length ? '换个筛选或搜索词试试' : `当前账号还没有${bookName}记录`"
-        :icon="items.length ? 'i-carbon-search' : 'i-carbon-book'"
-      />
+      </BookToolbar>
 
       <NModal v-model:show="purchaseDialogOpen" :mask-closable="purchasingSeedId === null" :close-on-esc="purchasingSeedId === null">
         <NCard class="max-w-sm w-[calc(100vw-32px)]" :title="`购买${selectedSeedItem?.name || ''}种子`" :closable="purchasingSeedId === null" @close="purchaseDialogOpen = false">
@@ -413,7 +423,10 @@ watch([currentAccountId, isConnected], refresh, { immediate: true })
   min-width: 0;
   flex-direction: column;
   gap: 16px;
-  padding-bottom: 24px;
+}
+
+.book-page:not(:has(> .offline-state)) {
+  padding-bottom: 16px;
 }
 
 .book-loading {
@@ -422,6 +435,28 @@ watch([currentAccountId, isConnected], refresh, { immediate: true })
   place-items: center;
   color: var(--ui-primary);
   font-size: 28px;
+}
+
+/* 固定最小列宽自动排列：同一行卡片等宽等高，与藏品页的条目网格一致。 */
+.book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+/* 当前加成标签：白色卡面 + 主色描边（与等级徽章一致），从标题栏底色里跳出来；
+   内边距减去描边的 1px，保持与原标签等高。 */
+.book-chip.book-chip--plain {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--ui-primary) 45%, var(--ui-border));
+  border-radius: 999px;
+  color: var(--ui-primary);
+  background: var(--ui-surface);
+  font-size: 12px;
+  line-height: 18px;
+  cursor: default;
 }
 
 .seed-purchase {
@@ -621,16 +656,5 @@ watch([currentAccountId, isConnected], refresh, { immediate: true })
   color: var(--ui-muted);
   font-size: 12px;
   line-height: 1.5;
-}
-
-@media (max-width: 520px) {
-  .reward-row {
-    grid-template-columns: 56px minmax(0, 1fr);
-  }
-
-  .reward-row__state {
-    grid-column: 2;
-    text-align: left;
-  }
 }
 </style>

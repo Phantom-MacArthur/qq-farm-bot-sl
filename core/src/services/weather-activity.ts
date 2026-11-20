@@ -780,7 +780,7 @@ async function useWeatherSummonBottle(): Promise<any> {
         const bagBefore = await getBag();
         const stack = availableStack(bagBefore, SUMMON_BOTTLE_ID);
         if (!stack) throw businessError('WEATHER_SUMMON_UNAVAILABLE', '背包中没有可用的雷雨召唤瓶');
-        const selfGid = positiveDecimal(int64String(getUserState()?.gid), 'WEATHER_ACCOUNT_UNAVAILABLE', 'hostGid');
+        const selfGid = positiveDecimal(int64String(getUserState()?.gid), 'GAME_OFFLINE', 'hostGid');
         const reply = await sendBottleUse(SUMMON_BOTTLE_ID, stack, {
             host_gid: selfGid,
             land_ids: [],

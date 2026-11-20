@@ -3,6 +3,8 @@ const { getPlantById } = require('../config/gameConfig');
 const { getServerTimeSec } = require('../utils/utils');
 
 const SNAPSHOT_MAX_AGE_SEC = 180;
+// 超过这个时间就算「陈旧」，需要重新拉一次土地快照。
+const STALE_SNAPSHOT_SEC = 60;
 const HISTORY_MIN_SECONDS = 60;
 const num = (value: any) => Number(value?.toString?.() ?? value) || 0;
 const seconds = (value: any) => num(value) > 1e12 ? Math.floor(num(value) / 1000) : num(value);
@@ -70,22 +72,47 @@ function calculateLevelForecast(options: {
 }
 
 let revision = 0;
+// 自家土地变化后快照内容已过期：旧数据留着展示，但要重新拉一次。
+let snapshotDirty = true;
 let snapshot: { lands: any[]; gid: number; exp: number; at: number } | null = null;
-function invalidateLandForecast() { snapshot = null; revision++; }
+// 收获/种植/施肥后土地已变化，只是在途的新快照还没回来。保留上一份快照用于展示，
+// 避免状态同步恰好落在两次刷新之间时种植经验整栏闪烁消失。
+function invalidateLandForecast() { revision++; snapshotDirty = true; }
 function getLandForecastRevision() { return revision; }
 function rememberLandForecast(lands: any[], user: any, expectedRevision: number) {
     if (revision !== expectedRevision || !Array.isArray(lands)) return;
     snapshot = { lands, gid: num(user.gid), exp: num(user.exp), at: getServerTimeSec() };
+    snapshotDirty = false;
+}
+/**
+ * 土地快照是否需要重新拉取。
+ *
+ * 巡田循环只在「农场自动化」开关打开时才会带出 AllLands 快照，所以这里单独给一个判定：
+ * 快照缺失、过期或自家土地变动过时都算陈旧，登录后可以立刻补拉，
+ * 不再出现「账号已经在线，种植经验却迟迟不出现」的情况。
+ */
+function isLandForecastStale(user?: any): boolean {
+    if (!snapshot) return true;
+    if (user && snapshot.gid !== num(user.gid)) return true;
+    const nowSec = getServerTimeSec();
+    if (nowSec < snapshot.at) return true;
+    return snapshotDirty || nowSec - snapshot.at >= STALE_SNAPSHOT_SEC;
 }
 function getLevelForecast(user: any, progress: any, stats: any, automation: any, quiet: boolean) {
     const nowSec = getServerTimeSec();
-    const valid = snapshot && snapshot.gid === num(user.gid) && snapshot.exp === num(user.exp)
-        && nowSec >= snapshot.at && nowSec - snapshot.at <= SNAPSHOT_MAX_AGE_SEC;
+    // 只校验账号归属与时效：经验值随收获实时变化，用它做土地快照的新鲜度代理会让
+    // 每次收获后种植经验消失到下次 AllLands 回来为止。
+    const valid = !!(snapshot && snapshot.gid === num(user.gid)
+        && nowSec >= snapshot.at && nowSec - snapshot.at <= SNAPSHOT_MAX_AGE_SEC);
+    const connected = !!stats.connection?.connected;
     const sessionSeconds = Math.max(0, num(stats.sessionElapsedSeconds));
-    return calculateLevelForecast({ lands: valid ? snapshot.lands : [], nowSec,
+    const forecast = calculateLevelForecast({ lands: valid ? snapshot.lands : [], nowSec,
         remainingExp: progress ? num(progress.needed) - num(progress.current) : 0,
         historyRate: sessionSeconds >= HISTORY_MIN_SECONDS ? Math.max(0, num(stats.sessionExpGained)) / sessionSeconds * 3600 : 0,
-        connected: !!stats.connection?.connected, autoHarvest: !!automation?.farm, quiet });
+        connected, autoHarvest: !!automation?.farm, quiet });
+    // snapshotValid 用来区分「确实没有在田作物」和「快照暂时不可用」：
+    // 前者要清掉前端缓存，后者要沿用上一次的有效值。
+    return { ...forecast, snapshotValid: valid && connected };
 }
 
-module.exports = { buildHarvestEvents, calculateLevelForecast, invalidateLandForecast, getLandForecastRevision, rememberLandForecast, getLevelForecast };
+module.exports = { buildHarvestEvents, calculateLevelForecast, invalidateLandForecast, getLandForecastRevision, rememberLandForecast, isLandForecastStale, getLevelForecast };

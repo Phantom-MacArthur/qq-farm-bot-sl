@@ -48,7 +48,6 @@ watch(() => props.image, () => failed.value = false)
       <img v-if="image && !failed" v-lazy-src="image" alt="" loading="lazy" decoding="async" @error="failed = true">
       <span v-else class="book-tile__fallback i-carbon-image" aria-hidden="true" />
       <span v-if="fresh" class="book-tile__fresh">新</span>
-      <span v-if="state === 'owned'" class="book-tile__check" aria-hidden="true"><span class="i-carbon-checkmark" /></span>
       <slot name="corner" />
     </span>
     <span class="book-tile__name">{{ name }}</span>
@@ -147,20 +146,6 @@ watch(() => props.image, () => failed.value = false)
   font-size: 10px;
   font-weight: var(--fw-600);
   line-height: 16px;
-}
-
-.book-tile__check {
-  position: absolute;
-  top: 5px;
-  right: 5px;
-  display: grid;
-  width: 16px;
-  height: 16px;
-  place-items: center;
-  border-radius: 999px;
-  color: #fff;
-  background: var(--ui-primary-fill);
-  font-size: 10px;
 }
 
 .book-tile__name {

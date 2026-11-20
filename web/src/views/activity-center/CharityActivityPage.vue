@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import ActivityHeader from '@/components/activity/ActivityHeader.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import { CharityRedFlowerView } from '@/components/activity/gameplays/charity'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore } from '@/stores/activity-center'
 import { useActivityClock } from './useActivityClock'
@@ -22,6 +23,8 @@ function accountId() {
 function refreshActivity() {
   return activityStore.loadDetails(accountId(), 'charity')
 }
+// 重新上线时按一次刷新键
+useReconnectRefresh(refreshActivity)
 </script>
 
 <template>

@@ -2,7 +2,7 @@ import type { Application, Request, Response } from 'express';
 import type { AdminContext } from './context';
 export {};
 
-const { getAccId } = require('./middleware');
+const { getAccId, getOfflineErrorCode, handleApiError } = require('./middleware');
 
 const ERROR_MESSAGES: Record<string, string> = {
     INVALID_GOODS_ID: '商品信息无效，请刷新商城后重试',
@@ -23,9 +23,6 @@ function friendlyError(error: any): { code: string; message: string } {
     const protocolMessage = String(error?.errorMessage || '').trim()
         || raw.match(/\bcode=\d+\b(.*)$/)?.[1]?.trim();
     if (protocolMessage) return { code, message: protocolMessage };
-    if (raw.includes('账号未运行') || raw.includes('账号已离线') || raw.includes('连接未打开') || raw.includes('账号尚未登录')) {
-        return { code: 'ACCOUNT_OFFLINE', message: '当前账号尚未运行，请启动账号后重试' };
-    }
     if (raw.includes('请求超时') || raw === 'API Timeout') {
         return { code: 'COMMERCE_TIMEOUT', message: '游戏服务响应超时，请稍后重试' };
     }
@@ -41,6 +38,7 @@ function mountCommerceRoutes(app: Application, ctx: AdminContext): void {
                 const data = await handler(accountId, req);
                 return res.json({ ok: true, data });
             } catch (error: any) {
+                if (getOfflineErrorCode(error)) return handleApiError(res, error);
                 const result = friendlyError(error);
                 return res.json({ ok: false, error: result.message, errorMessage: result.message, errorCode: result.code });
             }
@@ -73,6 +71,11 @@ function mountCommerceRoutes(app: Application, ctx: AdminContext): void {
         ctx.provider.purchaseProps(accountId, req.body?.goodsId, req.body?.count, req.body?.expectedOffer)
     )));
 
+    app.get('/api/pet-shop', withAccount((accountId: string) => ctx.provider.getPetShop(accountId)));
+    app.post('/api/pet-shop/purchase', withAccount((accountId: string, req: Request) => (
+        ctx.provider.purchasePetShop(accountId, req.body?.goodsId, req.body?.count, req.body?.expectedOffer)
+    )));
+
     app.get('/api/game-mall', withAccount((accountId: string, req: Request) => (
         ctx.provider.getMallCatalog(accountId, req.query.slotType, req.query.subSlotType)
     )));
@@ -83,6 +86,13 @@ function mountCommerceRoutes(app: Application, ctx: AdminContext): void {
 
     app.get('/api/mystery-shop', withAccount((accountId: string) => (
         ctx.provider.getMysteryShop(accountId)
+    )));
+
+    // 购买历史落盘在 data/mystery_shop_history/<accountId>.json，按账号分文件，
+    // 直接读即可，不必绕 worker（worker 未运行时也要能看到历史记录）。
+    // 本文件在 src/controllers/admin/ 下，到 services 要跨两级目录。
+    app.get('/api/mystery-shop/history', withAccount(async (accountId: string) => (
+        require('../../services/mystery-shop').getMysteryShopHistory(accountId)
     )));
 
     app.post('/api/mystery-shop/purchase', withAccount((accountId: string, req: Request) => (

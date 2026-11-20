@@ -3,7 +3,6 @@ import type { FertilizerType } from '@/stores/farm'
 import type { FriendInteractionItemDto, FriendInteractionResultDto } from '@/stores/friend'
 import { useIntervalFn, useResizeObserver } from '@vueuse/core'
 import { NButton } from 'naive-ui/es/button'
-import { NPopover } from 'naive-ui/es/popover'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -12,6 +11,9 @@ import LandCard from '@/components/FarmLandCard.vue'
 import LandDetailModal from '@/components/LandDetailModal.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import OfflineState from '@/components/ui/OfflineState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useFarmStore } from '@/stores/farm'
 import { useSettingStore } from '@/stores/setting'
@@ -22,12 +24,10 @@ import { interactionItemTargetReason } from '@/utils/interaction-item-rules'
 const farmStore = useFarmStore()
 const accountStore = useAccountStore()
 const settingStore = useSettingStore()
-const statusStore = useStatusStore()
 const toast = useToastStore()
 const route = useRoute()
 const {
   lands,
-  summary,
   socialEvents,
   loading,
   loaded,
@@ -40,9 +40,9 @@ const {
   fertilizePending,
   fertilizeError,
 } = storeToRefs(farmStore)
-const { currentAccountId, currentAccount } = storeToRefs(accountStore)
+const { currentAccountId } = storeToRefs(accountStore)
 const { settings } = storeToRefs(settingStore)
-const { status } = storeToRefs(statusStore)
+const { status } = storeToRefs(useStatusStore())
 const detailLandId = ref<number | null>(null)
 const detailLand = computed(() => lands.value.find(land => land.id === detailLandId.value) || null)
 const detailUpgradePending = ref(false)
@@ -51,15 +51,9 @@ watch(currentAccountId, () => {
   detailUpgradePending.value = false
 })
 
-const currentAccountConnected = computed(() => {
-  const accountId = String(currentAccountId.value || '')
-  return !!accountId
-    && String(status.value?.accountId || '') === accountId
-    && !!status.value?.connection?.connected
-})
-const currentAccountRunning = computed(() => (
-  !!currentAccount.value?.running || currentAccountConnected.value
-))
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
+const currentAccountConnected = computed(() => presence.value === 'online')
 
 const operating = ref(false)
 const fertilizerConfirmVisible = ref(false)
@@ -77,12 +71,6 @@ watch(currentAccountId, () => {
 })
 const farmingLandId = ref<number | null>(null)
 const manualRefreshing = ref(false)
-const confirmVisible = ref(false)
-const confirmConfig = ref({
-  title: '',
-  message: '',
-  opType: '',
-})
 
 const selectedInteractionItemId = ref<string>()
 const lastInteractionResults = ref<Record<string, FriendInteractionResultDto[]>>({})
@@ -190,13 +178,73 @@ function isLandFarmingCandidate(land: any) {
     || Number(land?.id) === socialCleanupLandId.value
 }
 
-async function executeOperate() {
-  if (!currentAccountId.value || !confirmConfig.value.opType)
+/**
+ * 批量务农动作（收获/务农/种植/升级/一键打理）直接执行，结果走右上角 toast；
+ * 只有铲除这类不可恢复的操作保留二次确认弹窗。
+ * 注意：土地卡片上的“务农”同样按全场处理，不限定在当前地块。
+ */
+const GLOBAL_OP_LABELS: Record<string, string> = {
+  harvest: '收获',
+  clear: '务农',
+  plant: '种植',
+  upgrade: '升级',
+  all: '一键打理',
+}
+
+function describeOperateResult(result: any, label: string) {
+  if (typeof result?.message === 'string' && result.message)
+    return result.message
+  const actions = Array.isArray(result?.actions) ? result.actions.filter(Boolean) : []
+  if (!actions.length)
+    return ''
+  return `${label}完成：${actions.join('，')}`
+}
+
+// 一键打理会把后端本轮跑完的 5 个动作（对应工具条上的 5 个按钮）全部汇总，
+// 数量是实际处理过的地块数，未干活的也要显式归零，否则只剩一条施肥提示会误判。
+const ALL_OP_SUMMARY_FIELDS = [
+  { key: 'harvest', label: '收获' },
+  { key: 'farming', label: '务农' },
+  { key: 'plant', label: '种植' },
+  { key: 'upgrade', label: '升级' },
+  { key: 'fertilize', label: '施肥' },
+] as const
+
+function describeAllOperateSummary(counts: any): string {
+  if (!counts || typeof counts !== 'object')
+    return ''
+  return ALL_OP_SUMMARY_FIELDS
+    .map(field => `${field.label}: ${Number(counts[field.key]) || 0}`)
+    .join('，')
+}
+
+async function runGlobalOperate(opType: string) {
+  const accountId = currentAccountId.value
+  const label = GLOBAL_OP_LABELS[opType] || '打理'
+  if (!accountId || operating.value || fertilizePending.value || farmingLandId.value !== null)
     return
-  confirmVisible.value = false
   operating.value = true
   try {
-    await farmStore.operate(currentAccountId.value, confirmConfig.value.opType)
+    const result = await farmStore.operate(accountId, opType)
+    // 中途切号不再回报，避免把上一个账号的结果贴到当前账号上
+    if (currentAccountId.value !== accountId)
+      return
+    const summary = opType === 'all' ? describeAllOperateSummary(result?.counts) : ''
+    if (summary) {
+      if (result?.hadWork)
+        toast.success(`${label}：${summary}`)
+      else
+        toast.info(`${label}：${summary}（本轮无需处理）`)
+      return
+    }
+    const detail = describeOperateResult(result, label)
+    if (result?.hadWork && detail)
+      toast.success(detail)
+    else
+      toast.info(`${label}：当前没有需要处理的内容`)
+  }
+  catch (error) {
+    toast.error(error instanceof Error ? error.message : `${label}失败`)
   }
   finally {
     operating.value = false
@@ -204,23 +252,7 @@ async function executeOperate() {
 }
 
 function handleOperate(opType: string) {
-  if (!currentAccountId.value)
-    return
-
-  const confirmMap: Record<string, string> = {
-    harvest: '确定要收获所有成熟作物吗？',
-    clear: '确定要务农吗？',
-    plant: '确定要一键种植吗？(根据策略配置)',
-    upgrade: '确定要升级所有可升级的土地吗？(消耗金币)',
-    all: '确定要一键打理吗？(包含收获、除草、种植等)',
-  }
-
-  confirmConfig.value = {
-    title: '确认操作',
-    message: confirmMap[opType] || '确定执行此操作吗？',
-    opType,
-  }
-  confirmVisible.value = true
+  void runGlobalOperate(opType)
 }
 
 async function upgradeDetailLand() {
@@ -483,13 +515,6 @@ function interactionFailures() {
   return results.filter(result => !result.ok)
 }
 
-const summaryItems = computed(() => [
-  { key: 'harvestable', label: '可收', icon: 'i-carbon-wheat text-amber-600 dark:text-amber-400', value: Number(summary.value?.harvestable) || 0 },
-  { key: 'growing', label: '生长', icon: 'i-carbon-sprout text-green-600 dark:text-green-400', value: Number(summary.value?.growing) || 0 },
-  { key: 'empty', label: '空闲', icon: 'text-gray-500', path: 'M12 4 22 9 12 14 2 9 12 4ZM2 14l10 5 10-5', value: Number(summary.value?.empty) || 0 },
-  { key: 'dead', label: '枯萎', icon: 'text-red-600 dark:text-red-400', path: 'M12 21V11c0-4-2-6-5-6M7 5c-3 0-4 2-4 5 3 0 5-1 5-4M12 15c0-3 2-5 5-5m0 0c3 0 4 2 4 5-3 0-5-1-5-4M8 21h8', value: Number(summary.value?.dead) || 0 },
-])
-
 // 列数取土地数量的因数，让每一行都排满：24 块地可排成 8×3、6×4、4×6 等。
 // 在卡片宽度落在合适区间的因数里取最大的；没有合适的因数（比如质数块数）时按宽度自然换行。
 const gridEl = ref<HTMLElement | null>(null)
@@ -568,7 +593,7 @@ async function fertilizeSelected(fertilizerType: FertilizerType) {
 }
 
 async function handleFertilizeAll() {
-  if (!currentAccountId.value || !currentAccountRunning.value || fertilizePending.value || operating.value)
+  if (!currentAccountId.value || !currentAccountConnected.value || fertilizePending.value || operating.value)
     return
   if (!bulkFertilizerCount.value) {
     fertilizerConfirmVisible.value = false
@@ -641,7 +666,7 @@ async function operateSelected(opType: 'harvest' | 'plant' | 'upgrade' | 'remove
   let done = 0
   let idle = 0
   let failed = 0
-  const isCandidate = {
+  const isOperationCandidate = {
     harvest: isHarvestCandidate,
     plant: isPlantCandidate,
     upgrade: isUpgradeCandidate,
@@ -650,7 +675,7 @@ async function operateSelected(opType: 'harvest' | 'plant' | 'upgrade' | 'remove
   try {
     for (const landId of landIds) {
       const land = lands.value.find(item => Number(item.id) === landId)
-      if (!land || !isCandidate(land)) {
+      if (!land || !isOperationCandidate(land)) {
         idle++
         continue
       }
@@ -721,12 +746,12 @@ async function executeUseInteractionItem() {
     toast.warning(result.message || `所选地块当前均不可使用${item.name}`)
 }
 
-async function refreshFarmData() {
+async function refreshFarmData(readLands = true) {
   const accountId = currentAccountId.value
-  if (!accountId || !currentAccountRunning.value)
+  if (!accountId || !currentAccountConnected.value)
     return
   await Promise.all([
-    farmStore.fetchLands(accountId),
+    readLands ? farmStore.fetchLands(accountId) : undefined,
     farmStore.fetchInteractionItems(accountId),
     settingStore.fetchSettings(accountId),
   ])
@@ -770,12 +795,12 @@ watch(interactionItems, (items) => {
     selectedInteractionItemId.value = String(first.itemId)
 })
 
-watch([currentAccountId, () => currentAccount.value?.running, currentAccountConnected], () => {
-  if (!currentAccountRunning.value) {
+// 首次确认在线、切到在线账号或重连后，都重读土地；不依赖旧请求是否留有错误。
+watch([currentAccountId, presence], ([, next]) => {
+  if (next === 'offline')
     farmStore.resetLandState()
-    return
-  }
-  void refreshFarmData()
+  else if (next === 'online')
+    void refreshFarmData()
 }, { immediate: true })
 
 const { pause, resume } = useIntervalFn(() => {
@@ -785,7 +810,7 @@ const { pause, resume } = useIntervalFn(() => {
   }
 }, 1000)
 
-const { pause: pauseRefresh, resume: resumeRefresh } = useIntervalFn(refreshFarmData, 60000)
+const { pause: pauseRefresh, resume: resumeRefresh } = useIntervalFn(() => refreshFarmData(!error.value), 60000)
 
 onMounted(() => {
   resume()
@@ -801,26 +826,14 @@ onUnmounted(() => {
 
 <template>
   <div class="personal-panel">
-    <div class="personal-panel__card cartoon-card farm-card rounded-2xl bg-white shadow-lg dark:bg-gray-800 !p-0">
-      <div class="farm-head panel-sticky flex shrink-0 flex-col gap-3 border-b border-gray-100 p-4 dark:border-gray-700">
+    <div class="personal-panel__card cartoon-card page-card-surface rounded-2xl bg-white shadow-lg dark:bg-gray-800 !p-0 panel-scroll-layout">
+      <div class="farm-head panel-titlebar panel-titlebar--flush shrink-0">
         <div class="farm-actions">
-          <NButton
-            type="primary"
-            aria-label="刷新"
-            title="刷新"
-            :disabled="selectionBusy || !currentAccountId || !currentAccountRunning"
-            @click="refreshFarm"
-          >
-            <template #icon>
-              <span class="i-carbon-renew" :class="{ 'animate-spin': manualRefreshing }" />
-            </template>
-            <span class="farm-action-label">刷新</span>
-          </NButton>
           <NButton
             v-if="!selecting"
             aria-label="施肥"
             title="施肥"
-            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning || !loaded || !!error || !lands.some(isFertilizeCandidate)"
+            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountConnected || !loaded || !!error || !lands.some(isFertilizeCandidate)"
             @click="fertilizerConfirmVisible = true"
           >
             <span class="i-carbon-soil-moisture" />
@@ -830,7 +843,7 @@ onUnmounted(() => {
             v-for="op in (selecting ? [] : operations)"
             :key="op.type"
             :type="op.buttonType"
-            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning"
+            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountConnected"
             :aria-label="op.label"
             :title="op.label"
             @click="handleOperate(op.type)"
@@ -838,69 +851,43 @@ onUnmounted(() => {
             <span :class="op.icon" />
             <span class="farm-action-label">{{ op.label }}</span>
           </NButton>
-          <div class="farm-mobile-summary">
-            <NPopover v-if="!selecting" trigger="click" placement="bottom-start" :show-arrow="false">
-              <template #trigger>
-                <NButton size="small" circle quaternary title="土地概况" aria-label="土地概况">
-                  <template #icon>
-                    <span class="i-carbon-overflow-menu-horizontal" />
-                  </template>
-                </NButton>
-              </template>
-              <div class="w-60 space-y-3">
-                <div class="grid grid-cols-2 gap-2 text-xs text-gray-500">
-                  <span>可收 {{ loaded && !error ? (summary?.harvestable || 0) : '--' }}</span>
-                  <span>生长 {{ loaded && !error ? (summary?.growing || 0) : '--' }}</span>
-                  <span>空闲 {{ loaded && !error ? (summary?.empty || 0) : '--' }}</span>
-                  <span>枯萎 {{ loaded && !error ? (summary?.dead || 0) : '--' }}</span>
-                </div>
-              </div>
-            </NPopover>
-          </div>
           <NButton
-            class="farm-selection-toggle"
+            class="panel-multiselect-toggle"
+            size="medium"
             :type="selecting ? 'default' : 'primary'"
             :secondary="!selecting"
             :aria-label="selecting ? '取消' : '多选'"
             :title="selecting ? '取消' : '多选'"
-            :disabled="selectionBusy || !currentAccountRunning || !loaded || !!error"
+            :disabled="selectionBusy || !currentAccountConnected || !loaded || !!error"
             @click="selecting ? exitSelecting() : enterSelecting()"
           >
             <span class="i-carbon-checkbox-checked" />
-            <span class="farm-action-label">{{ selecting ? '取消' : '多选' }}</span>
+            <span class="panel-multiselect-toggle__label">{{ selecting ? '取消' : '多选' }}</span>
           </NButton>
+          <RefreshButton
+            class="farm-refresh"
+            size="medium"
+            :loading="manualRefreshing"
+            :disabled="selectionBusy || !currentAccountId || !currentAccountConnected || !!error"
+            @click="refreshFarm"
+          />
         </div>
       </div>
 
-      <!-- Summary：当前土地状态；颜色只留给图标 -->
-      <div class="farm-summary shrink-0 border-b border-gray-100 px-4 py-3 dark:border-gray-700">
-        <div class="farm-summary__states">
-          <span v-for="item in summaryItems" :key="item.key" class="farm-state" :class="{ 'is-zero': item.value === 0 }">
-            <svg v-if="item.path" :class="item.icon" class="h-3.5 w-3.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path :d="item.path" />
-            </svg>
-            <span v-else :class="item.icon" aria-hidden="true" />
-            {{ item.label }}<b>{{ loaded && !error ? item.value : '--' }}</b>
-          </span>
-        </div>
-      </div>
+      <div class="panel-scroll-body">
 
       <!-- Grid -->
-      <div class="personal-panel__card p-4">
-        <div v-if="loading || !currentAccountId || !currentAccountRunning || error || !loaded || !lands?.length" class="personal-panel__scroll custom-scrollbar" role="region" aria-label="土地状态" tabindex="0">
-          <div v-if="loading" class="flex justify-center py-12">
+      <div class="personal-panel__card px-4" :class="{ 'py-4': !isOffline && !error }">
+        <div v-if="loading || !currentAccountId || !currentAccountConnected || error || !loaded || !lands?.length" role="region" aria-label="土地状态" tabindex="0">
+          <EmptyState v-if="!currentAccountId" bare title="请先选择账号" description="添加并选择账号后查看土地" icon="i-carbon-user-avatar" />
+
+          <OfflineState v-else-if="isOffline" />
+
+          <div v-else-if="loading || presence === 'unknown'" class="flex justify-center py-12">
             <div class="i-svg-spinners-90-ring-with-bg text-4xl text-green-500" />
           </div>
 
-          <EmptyState v-else-if="!currentAccountId" bare title="请先选择账号" description="添加并选择账号后查看土地" icon="i-carbon-user-avatar" />
-
-          <EmptyState v-else-if="!currentAccountRunning" bare title="账号未运行" description="启动账号后会立即读取土地" icon="i-carbon-connection-signal-off" />
-
-          <EmptyState v-else-if="error" bare tone="error" title="土地读取失败" :description="error" icon="i-carbon-warning-alt">
-            <NButton secondary @click="refreshFarm">
-              重新读取
-            </NButton>
-          </EmptyState>
+          <OfflineState v-else-if="error" />
 
           <EmptyState v-else-if="!loaded" bare title="尚未读取土地" icon="i-carbon-data-view-alt">
             <NButton secondary @click="refreshFarm">
@@ -960,7 +947,7 @@ onUnmounted(() => {
             </div>
           </div>
 
-          <div class="personal-panel__scroll custom-scrollbar" role="region" aria-label="土地列表" tabindex="0">
+          <div role="region" aria-label="土地列表" tabindex="0">
             <div v-if="cleanableFarmSocialEvents.length > 0" class="mb-4 flex flex-wrap items-center justify-between gap-2 border border-emerald-200 rounded-xl bg-emerald-50/85 px-3 py-2 text-sm text-emerald-900 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-100">
               <span class="flex items-center gap-2">
                 <span class="i-carbon-pedestrian-child" />
@@ -977,7 +964,7 @@ onUnmounted(() => {
                 :selected="isLandSelected(land)"
                 :selection-disabled="!canSelectLand(land)"
                 :selection-label="selectReason(land)"
-                :farm-disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountRunning"
+                :farm-disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountConnected"
                 @open="detailLandId = $event.id"
                 @select="toggleLand(land)"
                 @farm="handleOperate('clear')"
@@ -985,6 +972,7 @@ onUnmounted(() => {
             </div>
           </div>
         </div>
+      </div>
       </div>
     </div>
 
@@ -1011,13 +999,6 @@ onUnmounted(() => {
         可施肥 {{ bulkFertilizerCount }} 株作物
       </p>
     </ConfirmModal>
-    <ConfirmModal
-      :show="confirmVisible"
-      :title="confirmConfig.title"
-      :message="confirmConfig.message"
-      @confirm="executeOperate"
-      @cancel="confirmVisible = false"
-    />
 
     <ConfirmModal
       :show="removeConfirmVisible"
@@ -1193,87 +1174,12 @@ onUnmounted(() => {
   border-radius: 10px;
 }
 
-@media (max-width: 1023px) {
-  .farm-selection-row {
-    display: block;
-  }
-
-  .farm-mode-switch {
-    width: min(360px, 100%);
-    flex-basis: 360px;
-  }
-
-  .farm-selectbar {
-    position: fixed;
-    z-index: 30;
-    right: 12px;
-    bottom: calc(88px + env(safe-area-inset-bottom));
-    left: 12px;
-    flex-direction: column;
-    align-items: stretch;
-    margin: 0;
-    padding: 12px 14px;
-    border: 1px solid var(--ui-border);
-    border-radius: 14px;
-    background: var(--ui-surface-strong);
-    box-shadow: var(--ui-shadow-lg);
-  }
-
-  .farm-grid.is-selecting {
-    padding-bottom: 110px;
-  }
-}
-
-@media (max-width: 479px) {
-  .farm-mode-switch {
-    width: 100%;
-  }
-
-  .farm-mode-switch button > span {
-    display: none;
-  }
-}
-
+/* 标题栏格式（底色/分隔线/圆角/留白）全部走全局 .panel-titlebar + --flush；
+   这里只留农场工具栏自己的多行排布。 */
 .farm-head {
-  container-type: inline-size;
-  border-top-left-radius: var(--ui-radius-card);
-  border-top-right-radius: var(--ui-radius-card);
-}
-
-.farm-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 16px;
-  font-size: 13px;
-}
-
-.farm-summary__states {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.farm-state {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 3px 10px 3px 8px;
-  border-radius: 999px;
-  color: var(--ui-muted);
-  background: var(--ui-surface-soft);
-  font-variant-numeric: tabular-nums;
-}
-
-.farm-state b {
-  margin-left: 2px;
-  color: var(--ui-ink);
-  font-weight: var(--fw-650);
-}
-
-.farm-state.is-zero {
-  opacity: 0.65;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
 }
 
 .farm-actions {
@@ -1282,9 +1188,20 @@ onUnmounted(() => {
   justify-content: flex-start;
   flex-wrap: nowrap;
   gap: 8px;
+  width: 100%;
   max-width: 100%;
   overflow-x: auto;
   overflow-y: hidden;
+  /* 裁剪容器贴边取整会削掉紧挨边缘的按钮左边框/下边框（宽屏居中后
+     容器落在小数像素上时尤为明显）：用 2px 内边距留余量，负 margin 抵消，
+     不影响与四周的对齐；同时尚可避免窄屏溢出时滚动条压住按钮底边。 */
+  padding: 2px;
+  margin: -2px;
+  scrollbar-width: none;
+}
+
+.farm-actions::-webkit-scrollbar {
+  display: none;
 }
 
 .farm-actions :deep(.n-button) {
@@ -1297,32 +1214,14 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
-.farm-selection-toggle {
-  margin-left: auto;
-}
-
-.farm-action-label {
-  white-space: nowrap;
-}
-
-.farm-mobile-summary {
-  display: none;
+.farm-refresh {
   flex: 0 0 auto;
 }
 
 @container (max-width: 700px) {
-  .farm-action-label {
-    display: none;
-  }
-}
-
-@media (max-width: 479px) {
-  .farm-summary {
-    display: none;
-  }
-
-  .farm-mobile-summary {
-    display: flex;
+  /* 刷新键只负责收起文案，图标等距、宽度由全局 .panel-refresh 模板算 */
+  .farm-refresh {
+    --refresh-label: none;
   }
 }
 </style>

@@ -100,7 +100,7 @@ function selectGoods(item: ShopGoodsDto) {
 <style scoped>
 .shop-tab {
   min-height: 100%;
-  padding: calc(126px + env(safe-area-inset-top)) 14px 120px;
+  padding: 126px 14px 120px;
   background: radial-gradient(ellipse at 50% 25%, rgba(42, 136, 196, 0.38), transparent 54%);
 }
 .shop-categories {
@@ -338,21 +338,7 @@ article {
 .shop-empty span {
   color: rgba(58, 111, 89, 0.26);
 }
-@media (min-width: 1080px) {
-  .goods-grid {
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-  }
-}
-@media (max-width: 760px) {
-  .shop-tab {
-    padding: 14px;
-  }
-  .goods-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 8px;
-  }
-  .goods-image {
-    height: 92px;
-  }
+.goods-grid {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
 }
 </style>

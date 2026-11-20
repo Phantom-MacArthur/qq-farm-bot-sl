@@ -516,16 +516,4 @@ function itemCount(uid: string) {
   text-align: center;
   color: #5e7569;
 }
-@media (max-width: 360px) {
-  .balance-panel {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .seed-button {
-    width: 100%;
-  }
-  .qingmei-hero h1 {
-    font-size: 26px;
-  }
-}
 </style>

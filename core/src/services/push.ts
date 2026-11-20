@@ -163,9 +163,68 @@ async function sendPushooMessage(payload: any = {}): Promise<{ ok: boolean; code
     };
 }
 
+interface PushResult { ok: boolean; code: string; msg: string; raw: any }
+
+function mapWxPusherResponse(response: any): PushResult {
+    const raw: any = response && response.data;
+    const code: string = raw && raw.code !== undefined ? String(raw.code) : '';
+    const ok: boolean = code === '1000';
+    return {
+        ok,
+        code: code || 'error',
+        msg: String(raw && (raw.msg || raw.message) || (ok ? '发送成功' : 'WxPusher 消息发送失败')),
+        raw,
+    };
+}
+
+/**
+ * 通过 WxPusher 极简推送（Simple Push Token）发送通知。payload.token 为 SPT。
+ */
+async function sendWxPusherMessage(payload: any = {}, post: any = axios.post): Promise<PushResult> {
+    const spt: string = assertRequiredText('WxPusher SPT', payload.token);
+    if (!spt.startsWith('SPT_')) {
+        throw new Error('WxPusher SPT 必须以 SPT_ 开头');
+    }
+    const title: string = assertRequiredText('推送标题', payload.title);
+    const content: string = assertRequiredText('推送内容', payload.content);
+    const response: any = await post('https://wxpusher.zjiecode.com/api/send/message/simple-push', {
+        spt,
+        content,
+        summary: title.slice(0, 100),
+        contentType: 1,
+    }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+    });
+    return mapWxPusherResponse(response);
+}
+
+/**
+ * 通过 WxPusher 标准接口向已订阅 UID 发送通知。payload.token 为 AppToken，payload.wxPusherUid 为接收者。
+ */
+async function sendWxPusherWechatMessage(payload: any = {}, post: any = axios.post): Promise<PushResult> {
+    const appToken: string = assertRequiredText('WxPusher AppToken', payload.token);
+    const uid: string = assertRequiredText('WxPusher 接收者 UID', payload.wxPusherUid);
+    const title: string = assertRequiredText('推送标题', payload.title);
+    const content: string = assertRequiredText('推送内容', payload.content);
+    const response: any = await post('https://wxpusher.zjiecode.com/api/send/message', {
+        appToken,
+        uids: [uid],
+        content,
+        summary: title.slice(0, 100),
+        contentType: 1,
+    }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+    });
+    return mapWxPusherResponse(response);
+}
+
 module.exports = {
     buildDingTalkWebhook,
     createDingTalkSign,
     sendMeowMessage,
     sendPushooMessage,
+    sendWxPusherMessage,
+    sendWxPusherWechatMessage,
 };

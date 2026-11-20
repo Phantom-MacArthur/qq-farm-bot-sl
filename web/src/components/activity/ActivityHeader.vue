@@ -2,6 +2,7 @@
 import { NButton } from 'naive-ui/es/button'
 import { NConfigProvider } from 'naive-ui/es/config-provider'
 import { computed } from 'vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { createNaiveThemeOverrides } from '@/ui/naive-theme'
 
 const props = defineProps<{
@@ -80,11 +81,14 @@ const meta = computed(() => {
           <img v-if="currencyImage" :src="currencyImage" alt="">
           <b>{{ balance || '--' }}</b>
         </div>
-        <NButton v-if="showRefresh" secondary circle :loading="loading" title="刷新活动数据" aria-label="刷新活动数据" @click="$emit('refresh')">
-          <template #icon>
-            <span class="i-carbon-renew" />
-          </template>
-        </NButton>
+        <RefreshButton
+          v-if="showRefresh"
+          icon-only
+          title="刷新活动数据"
+          :loading="loading"
+          :disabled="loading"
+          @click="$emit('refresh')"
+        />
       </div>
     </header>
   </NConfigProvider>
@@ -102,11 +106,11 @@ const meta = computed(() => {
   position: absolute;
   z-index: 20;
   inset: 0 0 auto;
-  height: calc(86px + env(safe-area-inset-top));
+  height: 86px;
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: env(safe-area-inset-top) 22px 0 18px;
+  padding: 0 22px 0 18px;
   border-bottom: 1px solid var(--ui-border);
   color: var(--ui-ink);
   background: color-mix(in srgb, var(--ui-bg) 84%, transparent);
@@ -195,27 +199,5 @@ h1 {
   width: 24px;
   height: 24px;
   object-fit: contain;
-}
-
-@media (max-width: 900px) {
-  .activity-header {
-    height: calc(72px + env(safe-area-inset-top));
-    gap: 6px;
-    padding-right: 10px;
-    padding-left: 6px;
-  }
-
-  h1 {
-    font-size: 17px;
-  }
-
-  .activity-header__meta {
-    font-size: 11px;
-  }
-
-  .activity-header__balance {
-    height: 30px;
-    padding-right: 9px;
-  }
 }
 </style>

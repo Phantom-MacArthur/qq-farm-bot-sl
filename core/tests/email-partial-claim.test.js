@@ -81,6 +81,7 @@ test('邮箱部分领取失败会记录为 partial，而不是伪装成全部成
     assert.equal(getEmailDailyState().result, 'partial');
 
     const second = await checkAndClaimEmails(false);
-    assert.equal(second.skipped, 'done');
-    assert.equal(methods.length, 5, '当天已经触发后不再请求邮箱');
+    assert.equal(second.skipped, 'cooldown');
+    assert.equal(methods.length, 5, '冷却未到不再请求邮箱');
+    assert.equal(getEmailDailyState().doneToday, false, 'partial 不算已完成');
 });

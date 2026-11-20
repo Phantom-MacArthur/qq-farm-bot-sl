@@ -1,5 +1,7 @@
 import type { Response } from 'express';
 
+const { getOfflineErrorCode, handleApiError } = require('../middleware');
+
 const ACTIVITY_ERROR_MESSAGES: Record<string, string> = {
     '1034014': '今日青梅种子已经领取，无需重复领取',
     '1034091': '当前爱心不足，无法捐赠',
@@ -57,7 +59,6 @@ const ACTIVITY_ERROR_MESSAGES: Record<string, string> = {
     WEATHER_CLOUD_UNAVAILABLE: '背包中没有可用的乌云使坏瓶',
     INVALID_WEATHER_LAND_ID: '地块信息无效，请刷新好友天气后重试',
     WEATHER_CLOUD_TARGET_UNAVAILABLE: '好友当前没有可使用乌云使坏瓶的作物',
-    WEATHER_ACCOUNT_UNAVAILABLE: '当前账号尚未就绪，请稍后重试',
     INVALID_WEATHER_RESEARCH_NODE: '气象研究节点信息无效，请刷新后重试',
     WEATHER_RESEARCH_UNAVAILABLE: '气象研究数据暂不可用，请刷新后重试',
     WEATHER_RESEARCH_ALREADY_COMPLETED: '该气象研究节点已经完成',
@@ -84,9 +85,7 @@ function activityErrorResponse(error: any): { code: string; message: string } {
     if (rawMessage.includes('当前赛季未发现活动商店')) return { code: 'SHOP_UNAVAILABLE', message: '星砂商店暂未开放，请稍后再来看看' };
     if (rawMessage.includes('当前赛季数据为空')) return { code: 'SEASON_UNAVAILABLE', message: '当前活动数据暂未开放，请稍后刷新重试' };
     if (rawMessage.includes('termId 必须')) return { code: 'INVALID_SOLAR_TERM', message: '节令信息已失效，请刷新页面后重试' };
-    if (rawMessage === '账号未运行' || rawMessage === '账号已离线') return { code: 'ACCOUNT_OFFLINE', message: '当前账号尚未运行，请先启动账号后再试' };
     if (rawMessage === 'API Timeout' || rawMessage.includes('请求超时')) return { code: 'ACTIVITY_TIMEOUT', message: '活动服务响应超时，请稍后重试' };
-    if (rawMessage.includes('连接未打开') || rawMessage.includes('账号尚未登录')) return { code: 'GAME_OFFLINE', message: '游戏连接尚未就绪，请稍后重试' };
     if (rawMessage.includes('请求队列已满')) return { code: 'ACTIVITY_BUSY', message: '活动操作过于频繁，请稍后再试' };
     if (rawMessage.includes('发送失败') || rawMessage.includes('请求被中断')) return { code: 'ACTIVITY_REQUEST_INTERRUPTED', message: '活动请求未能完成，请稍后重试' };
     if (rawMessage.includes('不匹配的活动 ID') || rawMessage.includes('未知操作类型') || rawMessage.includes('回包缺少动态状态')) {
@@ -96,6 +95,7 @@ function activityErrorResponse(error: any): { code: string; message: string } {
 }
 
 export function handleActivityApiError(res: Response, error: any): Response {
+    if (getOfflineErrorCode(error)) return handleApiError(res, error);
     const result = activityErrorResponse(error);
     return res.json({ ok: false, error: result.message, errorCode: result.code });
 }

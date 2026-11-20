@@ -1,17 +1,24 @@
 <script setup lang="ts">
+import type { MysteryShopHistoryRecord } from '@/stores/commerce'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import CommerceItemImage from '@/components/commerce/CommerceItemImage.vue'
 import CommerceShopBar from '@/components/commerce/CommerceShopBar.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import OfflineState from '@/components/ui/OfflineState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence, useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useCommerceStore } from '@/stores/commerce'
+import { formatCompactAmount } from '@/utils/format-number'
 
 const accountStore = useAccountStore()
 const commerceStore = useCommerceStore()
 const { currentAccountId } = storeToRefs(accountStore)
-const { mystery, mysteryLoading, mysteryPurchasing, error, notice } = storeToRefs(commerceStore)
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
+const { mystery, mysteryLoading, mysteryPurchasing, mysteryHistory, error, notice } = storeToRefs(commerceStore)
 const clock = ref(Date.now())
 const purchaseDialogOpen = ref(false)
 let timer: number | undefined
@@ -29,20 +36,19 @@ const remaining = computed(() => {
 })
 
 const shopStatus = computed(() => {
+  // 状态文案常驻标题栏、刷新键左侧：未到访/来访中/已离开三态都在这一行读。
   if (!mystery.value?.active || !mystery.value.npc)
-    return mystery.value ? '神秘商人暂未来访' : ''
+    return '神秘商人暂未来访'
   return remaining.value ? `神秘商人来访中 · ${remaining.value} 后离开` : '神秘商人已离开'
 })
 
-const currencies = computed(() => {
-  const price = mystery.value?.active ? mystery.value.npc?.price : null
-  return price ? [{ id: price.id, name: price.name, image: price.image, amount: price.balance }] : []
-})
-
-const openedAt = computed(() => {
-  const time = mystery.value?.activeTime
-  return time ? new Date(time).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : ''
-})
+// 四种货币由后端固定下发（金币、点券、金豆豆、钻石），与商人要用哪种货币付款无关。
+const currencies = computed(() => (mystery.value?.currencies || []).map(currency => ({
+  id: currency.id,
+  name: currency.name,
+  image: currency.image,
+  amount: currency.balanceKnown ? currency.count : null,
+})))
 
 const discountLabel = computed(() => {
   const percent = mystery.value?.npc?.discountPercent || 0
@@ -61,8 +67,28 @@ const purchaseHint = computed(() => {
 
 const buttonLabel = computed(() => mysteryPurchasing.value ? '购买中' : canPurchase.value ? '购买' : '暂不可购买')
 
+function formatTime(timestamp: number) {
+  return new Intl.DateTimeFormat('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).format(timestamp)
+}
+
+// 折扣只在确有优惠时显示，避免每条记录都挂一个「10折」。
+function recordDiscountLabel(record: MysteryShopHistoryRecord) {
+  return record.discountPercent > 0 && record.discountPercent < 100
+    ? `${(record.discountPercent / 10).toFixed(record.discountPercent % 10 ? 1 : 0)}折`
+    : ''
+}
+
+// 商人状态与购买历史一起刷新：两者互不依赖，历史读失败也不影响当前货品展示。
 function load() {
-  commerceStore.fetchMystery(String(currentAccountId.value || ''))
+  const accountId = String(currentAccountId.value || '')
+  void commerceStore.fetchMystery(accountId)
+  void commerceStore.fetchMysteryHistory(accountId)
 }
 
 function purchase() {
@@ -83,9 +109,17 @@ async function confirmPurchase() {
 
 watch(currentAccountId, () => {
   purchaseDialogOpen.value = false
+  mysteryHistory.value = []
   load()
 })
+watch(isOffline, (offline) => {
+  if (offline)
+    purchaseDialogOpen.value = false
+})
+// 重新上线时按一次刷新键
+useReconnectRefresh(load)
 onMounted(() => {
+  mysteryHistory.value = []
   load()
   timer = window.setInterval(() => clock.value = Date.now(), 1000)
 })
@@ -96,76 +130,107 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="mystery-panel">
-    <CommerceShopBar
-      :status="shopStatus"
-      :status-tone="mystery?.active && mystery.npc && remaining ? 'violet' : 'muted'"
-      status-icon="i-carbon-hourglass"
-      :currencies="currencies"
-      :loading="mysteryLoading"
-      :disabled="!currentAccountId || mysteryPurchasing"
-      refresh-label="刷新神秘商人"
-      @refresh="load"
-    />
-
-    <div v-if="(error && mystery) || notice" class="shop-message" :class="{ 'is-success': !!notice && !error }" role="status">
-      {{ error || notice }}
-    </div>
-
-    <EmptyState v-if="!currentAccountId" title="请先选择账号" description="神秘商人按当前账号读取" icon="i-carbon-user-avatar" />
-    <div v-else-if="mysteryLoading && !mystery" class="shop-loading">
-      <span class="i-svg-spinners-90-ring-with-bg" />
-    </div>
-    <EmptyState v-else-if="error && !mystery" tone="error" title="神秘商人读取失败" :description="error" icon="i-carbon-warning-alt">
-      <NButton secondary @click="load">
-        重新读取
-      </NButton>
-    </EmptyState>
-    <EmptyState v-else-if="!mystery?.active || !mystery.npc" title="神秘商人暂未来访" description="商人出现后会在这里显示本轮货品" icon="i-carbon-store" />
-
-    <article v-else class="merchant-card" aria-label="神秘商人商品">
-      <header class="merchant-card__head">
-        <span class="merchant-avatar" aria-hidden="true"><span class="i-carbon-store" /></span>
-        <div class="min-w-0">
-          <strong>本轮神秘货品</strong>
-          <small>{{ openedAt ? `${openedAt} 开始营业` : '限时营业' }} · 商人 #{{ mystery.npc.id }}</small>
-        </div>
-        <span v-if="discountLabel" class="merchant-discount">{{ discountLabel }}</span>
-      </header>
-
-      <div class="merchant-offer">
-        <div class="merchant-offer__visual">
-          <CommerceItemImage :src="mystery.npc.reward.image" :alt="mystery.npc.reward.name" size="md" />
-        </div>
-        <div class="merchant-offer__info">
-          <h3 :title="`${mystery.npc.reward.name} #${mystery.npc.reward.id}`">
-            <span class="merchant-offer__name">{{ mystery.npc.reward.name }}</span>
-            <span class="merchant-offer__qty">×{{ mystery.npc.reward.count.toLocaleString() }}</span>
-          </h3>
-          <p v-if="mystery.npc.unitPrice">
-            单价 {{ mystery.npc.unitPrice.toLocaleString() }}<del v-if="mystery.npc.unitOriginalPrice > mystery.npc.unitPrice">{{ mystery.npc.unitOriginalPrice.toLocaleString() }}</del>
-          </p>
-          <div class="merchant-price">
-            <CommerceItemImage :src="mystery.npc.price.image" :alt="mystery.npc.price.name" size="sm" />
-            <strong :title="mystery.npc.price.name">{{ mystery.npc.price.count.toLocaleString() }}</strong>
-            <del v-if="mystery.npc.originalPrice > mystery.npc.price.count">{{ mystery.npc.originalPrice.toLocaleString() }}</del>
-          </div>
-        </div>
-        <div class="merchant-offer__buy">
-          <NButton type="primary" :loading="mysteryPurchasing" :disabled="!canPurchase || mysteryPurchasing" @click="purchase">
-            {{ buttonLabel }}
-          </NButton>
-        </div>
+  <div class="mystery-panel panel-fill">
+    <section class="mystery-card page-card-surface rounded-2xl panel-scroll-layout">
+      <div class="mystery-head panel-titlebar shrink-0">
+        <CommerceShopBar
+          class="mystery-shopbar"
+          :status="!isOffline && mystery ? shopStatus : undefined"
+          :status-tone="mystery?.active && mystery.npc && remaining ? 'violet' : 'muted'"
+          status-icon="i-carbon-hourglass"
+          :currencies="currencies"
+          :loading="mysteryLoading"
+          :disabled="!currentAccountId || mysteryPurchasing"
+          refresh-label="刷新神秘商人"
+          @refresh="load"
+        />
       </div>
 
-      <p v-if="purchaseHint" class="merchant-hint" role="status">
-        <span class="i-carbon-information" aria-hidden="true" />{{ purchaseHint }}
-      </p>
-    </article>
+      <div class="mystery-body panel-scroll-body panel-scroll-body--bleed">
+        <div v-if="!isOffline && ((error && mystery) || notice)" class="shop-message" :class="{ 'is-success': !!notice && !error }" role="status">
+          <span>{{ error || notice }}</span>
+          <RefreshButton v-if="error" label="重新读取" size="small" @click="commerceStore.fetchMystery(currentAccountId)" />
+        </div>
+
+        <EmptyState v-if="!currentAccountId" title="请先选择账号" description="神秘商人按当前账号读取" icon="i-carbon-user-avatar" />
+        <OfflineState v-else-if="isOffline" />
+        <div v-else-if="mysteryLoading && !mystery" class="shop-loading">
+          <span class="i-svg-spinners-90-ring-with-bg" />
+        </div>
+        <EmptyState v-else-if="error && !mystery" title="神秘商人读取失败" :description="error" tone="error" bare>
+          <RefreshButton label="重新读取" :loading="mysteryLoading" @click="commerceStore.fetchMystery(currentAccountId)" />
+        </EmptyState>
+
+        <!-- 商人未在访时不再放空态占位，正文位置交给购买历史；未到访状态由标题栏文案说明。 -->
+        <article v-else-if="mystery?.active && mystery.npc" class="merchant-card" aria-label="神秘商人商品">
+          <!-- 来访状态条：标题栏已删，状态行同时承担折扣徽标。 -->
+          <div class="merchant-status" role="status">
+            <span class="merchant-status__icon i-carbon-hourglass" aria-hidden="true" />
+            <span class="merchant-status__text">{{ shopStatus }}</span>
+            <span v-if="discountLabel" class="merchant-discount">{{ discountLabel }}</span>
+          </div>
+
+          <div class="merchant-offer">
+            <div class="merchant-offer__visual">
+              <CommerceItemImage :src="mystery.npc.reward.image" :alt="mystery.npc.reward.name" size="md" />
+            </div>
+            <div class="merchant-offer__info">
+              <h3 :title="`${mystery.npc.reward.name} #${mystery.npc.reward.id}`">
+                <span class="merchant-offer__name">{{ mystery.npc.reward.name }}</span>
+                <span class="merchant-offer__qty">×{{ mystery.npc.reward.count.toLocaleString() }}</span>
+              </h3>
+              <!-- 价格只保留下方带图标的一行：单价与总价重复，纯文本价格已去掉。 -->
+              <div class="merchant-price">
+                <CommerceItemImage :src="mystery.npc.price.image" :alt="mystery.npc.price.name" size="sm" />
+                <strong :title="mystery.npc.price.name">{{ mystery.npc.price.count.toLocaleString() }}</strong>
+                <del v-if="mystery.npc.originalPrice > mystery.npc.price.count">{{ mystery.npc.originalPrice.toLocaleString() }}</del>
+              </div>
+            </div>
+            <div class="merchant-offer__buy">
+              <NButton type="primary" :loading="mysteryPurchasing" :disabled="!canPurchase || mysteryPurchasing" @click="purchase">
+                {{ buttonLabel }}
+              </NButton>
+            </div>
+          </div>
+
+          <p v-if="purchaseHint" class="merchant-hint" role="status">
+            <span class="i-carbon-information" aria-hidden="true" />{{ purchaseHint }}
+          </p>
+        </article>
+
+        <!-- 购买历史：商人未在访时占正文位置，在访时接在货品卡下方；超出高度在列表内部滚动。 -->
+        <template v-if="currentAccountId && (mystery || mysteryHistory.length)">
+          <p v-if="!mysteryHistory.length" class="history-empty">
+            暂无购买记录，手动和自动购买都会记录在这里。
+          </p>
+          <ul v-else class="history-list panel-list has-divider" aria-label="购买历史">
+            <li v-for="record in mysteryHistory" :key="record.id" class="history-row">
+              <CommerceItemImage :src="record.itemImage" :alt="record.itemName" size="sm" />
+              <div class="history-row__main">
+                <div class="history-row__name" :title="`${record.itemName} #${record.itemId}`">
+                  {{ record.itemName }} <b>×{{ record.itemCount.toLocaleString() }}</b>
+                </div>
+                <div class="history-row__meta">
+                  {{ formatTime(record.purchasedAt) }} · {{ record.source === 'auto' ? '自动购买' : '手动购买' }}
+                </div>
+              </div>
+              <div class="history-row__cost">
+                <div class="history-row__price">
+                  {{ formatCompactAmount(record.price) }} {{ record.currencyName }}
+                </div>
+                <div v-if="recordDiscountLabel(record)" class="history-row__discount">
+                  {{ recordDiscountLabel(record) }}
+                </div>
+              </div>
+            </li>
+          </ul>
+        </template>
+      </div>
+    </section>
 
     <Teleport to="body">
       <Transition name="merchant-dialog">
-        <div v-if="purchaseDialogOpen && mystery?.npc" class="purchase-overlay" role="presentation" @click.self="!mysteryPurchasing && (purchaseDialogOpen = false)">
+        <div v-if="!isOffline && purchaseDialogOpen && mystery?.npc" class="purchase-overlay" role="presentation" @click.self="!mysteryPurchasing && (purchaseDialogOpen = false)">
           <section class="purchase-dialog" role="dialog" aria-modal="true" aria-labelledby="mystery-purchase-title">
             <button class="dialog-close" type="button" aria-label="关闭" :disabled="mysteryPurchasing" @click="purchaseDialogOpen = false">
               <div class="i-carbon-close" />
@@ -200,11 +265,35 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+/* 面板撑满页签内容区：卡片内上半是货币栏与货品，剩余高度交给购买历史列表。
+   min-height: 0 必须保留，否则历史列表无法在内部滚动而会把页面整体顶高。 */
 .mystery-panel {
   display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.mystery-card {
+  gap: 14px;
+}
+
+.mystery-shopbar {
+  flex: 1;
+  min-width: 0;
+}
+
+/* 正文吃掉标题栏以下的剩余高度：货品卡按内容收缩，其余空间全给购买历史。 */
+.mystery-body {
+  display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 14px;
-  padding-bottom: 24px;
+  min-height: 0;
+}
+
+.mystery-body > :not(.history-list) {
+  margin-inline: var(--panel-pad, 16px);
 }
 
 .shop-loading {
@@ -228,54 +317,30 @@ onUnmounted(() => {
   background: var(--ui-primary-soft);
 }
 
-/* 来访商人卡：顶部身份条带紫色点缀，下方是唯一一件货品。 */
-.merchant-card {
-  width: 100%;
-  max-width: 760px;
-  overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--ui-violet) 22%, var(--ui-border));
-  border-radius: var(--ui-radius-card);
-  background: var(--ui-surface);
-  box-shadow:
-    inset 0 1px 0 var(--glass-highlight),
-    var(--ui-shadow-sm);
-}
-
-.merchant-card__head {
+/* 来访状态条：样式沿用原标题行的底色与分隔线，去掉头像与标题后高度收窄。 */
+.merchant-status {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 14px 18px;
+  gap: 8px;
+  padding: 10px 18px;
   border-bottom: 1px solid var(--ui-border);
   background: linear-gradient(90deg, var(--ui-violet-soft), transparent 75%);
 }
 
-.merchant-card__head strong {
-  display: block;
-  color: var(--ui-ink);
-  font-size: 15px;
+.merchant-status__icon {
+  flex: none;
+  color: var(--ui-violet);
+  font-size: 14px;
 }
 
-.merchant-card__head small {
-  display: block;
-  margin-top: 2px;
+.merchant-status__text {
+  min-width: 0;
   overflow: hidden;
   color: var(--ui-muted);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.merchant-avatar {
-  width: 38px;
-  height: 38px;
-  display: grid;
-  flex: none;
-  place-items: center;
-  border-radius: 12px;
-  color: var(--ui-violet);
-  background: var(--ui-surface-strong);
-  font-size: 20px;
+  font-variant-numeric: tabular-nums;
 }
 
 .merchant-discount {
@@ -395,35 +460,100 @@ onUnmounted(() => {
   margin-top: 3px;
 }
 
-@media (max-width: 560px) {
-  .merchant-card__head {
-    padding: 12px 14px;
-  }
+/* 来访商人卡：与购买历史同在正文里，按内容收缩不参与弹性高度分配。 */
+.merchant-card {
+  width: 100%;
+  min-width: 0;
+  flex: none;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ui-violet) 22%, var(--ui-border));
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--ui-shadow-sm);
+}
 
-  .merchant-offer {
-    grid-template-columns: 64px minmax(0, 1fr);
-    gap: 14px;
-    padding: 14px;
-  }
+/* 购买历史铺满正文宽度，分割线走全局 .has-divider 模板，超出高度在列表内部滚动。 */
+.history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
 
-  .merchant-offer__visual :deep(.item-image) {
-    width: 64px;
-    height: 64px;
-    border-radius: 16px;
-  }
+.history-empty {
+  display: grid;
+  flex: 1 1 auto;
+  min-height: 0;
+  place-items: center;
+  padding: 28px 18px;
+  color: var(--ui-muted);
+  font-size: 13px;
+  text-align: center;
+}
 
-  .merchant-offer__buy {
-    grid-column: 1 / -1;
-  }
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px 10px 12px;
+}
 
-  .merchant-offer__buy :deep(.n-button) {
-    width: 100%;
-    height: 38px;
-  }
+/* 历史里的物品图不需要方块底板，去掉边框与底色只留图形。 */
+.history-row :deep(.item-image) {
+  width: 32px;
+  height: 32px;
+  border: 0;
+  background: transparent;
+}
 
-  .merchant-hint {
-    padding: 0 14px 12px;
-  }
+.history-row__main {
+  min-width: 0;
+  flex: 1;
+}
+
+.history-row__name {
+  overflow: hidden;
+  color: var(--ui-ink);
+  font-size: 13px;
+  font-weight: var(--fw-600);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-row__name b {
+  color: var(--ui-muted);
+  font-weight: var(--fw-600);
+  font-variant-numeric: tabular-nums;
+}
+
+.history-row__meta {
+  margin-top: 2px;
+  color: var(--ui-subtle);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-row__cost {
+  flex: none;
+  text-align: right;
+}
+
+.history-row__price {
+  color: var(--ui-ink);
+  font-size: 13px;
+  font-weight: var(--fw-600);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-row__discount {
+  margin-top: 2px;
+  color: var(--ui-warning);
+  font-size: 11px;
 }
 
 .purchase-overlay {

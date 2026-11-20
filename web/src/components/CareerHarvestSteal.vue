@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { formatCompactAmount, formatNumber } from '@/utils/format-number'
 
+/** 官方生涯统计的字段名，和 /api/career、好友土地详情返回的 career 保持一致。 */
 export interface CareerHarvestSteal {
-  harvest: number
-  steal: number
+  totalHarvestCount?: number
+  totalStealCount?: number
 }
 
 const props = defineProps<{
@@ -11,16 +13,10 @@ const props = defineProps<{
   compact?: boolean
 }>()
 
-function formatWan(count: number) {
-  const wan = Math.max(0, count) / 10000
-  const text = wan.toFixed(2).replace(/\.?0+$/, '')
-  return `${text}万`
-}
-
-const harvest = computed(() => Math.max(0, Number(props.career?.harvest) || 0))
-const steal = computed(() => Math.max(0, Number(props.career?.steal) || 0))
-const harvestText = computed(() => formatWan(harvest.value))
-const stealText = computed(() => formatWan(steal.value))
+const harvest = computed(() => Math.max(0, Number(props.career?.totalHarvestCount) || 0))
+const steal = computed(() => Math.max(0, Number(props.career?.totalStealCount) || 0))
+const harvestText = computed(() => formatCompactAmount(harvest.value))
+const stealText = computed(() => formatCompactAmount(steal.value))
 const ratioText = computed(() => {
   if (harvest.value <= 0)
     return steal.value > 0 ? '--' : '0%'
@@ -32,12 +28,12 @@ const ratioText = computed(() => {
 <template>
   <template v-if="career">
     <template v-if="compact">
-      <span class="career-stat" title="生涯收获">
+      <span class="career-stat" :title="`生涯收获 ${formatNumber(harvest)}`">
         <span class="i-carbon-wheat text-green-600 dark:text-green-400" aria-hidden="true" />
         <span class="career-stat__label">生涯收获</span>
         <b>{{ harvestText }}</b>
       </span>
-      <span class="career-stat" title="生涯偷菜">
+      <span class="career-stat" :title="`生涯偷菜 ${formatNumber(steal)}`">
         <span class="i-carbon-run text-orange-600 dark:text-orange-400" aria-hidden="true" />
         <span class="career-stat__label">生涯偷菜</span>
         <b>{{ stealText }}</b>
@@ -49,11 +45,11 @@ const ratioText = computed(() => {
       </span>
     </template>
     <template v-else>
-      <div class="flex items-center gap-1.5 text-green-700 dark:text-green-300">
+      <div class="flex items-center gap-1.5 text-green-700 dark:text-green-300" :title="`生涯收获 ${formatNumber(harvest)}`">
         <div class="i-carbon-wheat" />
         <span class="font-body font-semibold">生涯收获: {{ harvestText }}</span>
       </div>
-      <div class="flex items-center gap-1.5 text-orange-700 dark:text-orange-300">
+      <div class="flex items-center gap-1.5 text-orange-700 dark:text-orange-300" :title="`生涯偷菜 ${formatNumber(steal)}`">
         <div class="i-carbon-run" />
         <span class="font-body font-semibold">生涯偷菜: {{ stealText }}</span>
       </div>

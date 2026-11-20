@@ -232,6 +232,12 @@ async function unlockLand(landId: number, doShared: boolean = false): Promise<an
 
 // ============ 商店 API ============
 
+async function getShopProfiles(): Promise<any> {
+    const body = types.ShopProfilesRequest.encode(types.ShopProfilesRequest.create({})).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.shoppb.ShopService', 'ShopProfiles', body);
+    return types.ShopProfilesReply.decode(replyBody);
+}
+
 async function getShopInfo(shopId: number): Promise<any> {
     const body = types.ShopInfoRequest.encode(types.ShopInfoRequest.create({
         shop_id: toLong(shopId),
@@ -288,6 +294,7 @@ module.exports = {
     removePlant,
     upgradeLand,
     unlockLand,
+    getShopProfiles,
     getShopInfo,
     buyGoods,
     encodePlantRequest,

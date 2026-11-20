@@ -38,6 +38,27 @@ function itemDto(item: any, fallbackName = ''): any {
     };
 }
 
+/**
+ * 常规商城（礼包/特惠/道具）固定展示的四种货币：金币、点券、金豆豆、钻石。
+ * 与商品实际用哪种货币无关 —— 不管切到哪个商城，余额栏位都保持同一组、同一顺序，
+ * 用户不需要因为换了页签就重新找位置。
+ */
+const STANDARD_CURRENCY_IDS: number[] = [1001, 1002, 1005, 1004];
+
+// SVIP 商城（slotType 4）买的是头像框/铭牌碎片这类专属币，金币钻石与它无关，
+// 硬塞四个常规货币只会占位，所以那里只下发商品实际用到的币种。
+function currencyIdsOf(priceIds: number[], includeStandard = true): number[] {
+    const base = includeStandard ? STANDARD_CURRENCY_IDS : [];
+    return [...new Set([...base, ...priceIds.filter(id => id > 0)])];
+}
+
+function currencyList(ids: number[], balances: Record<string, number>): any[] {
+    return ids.map(id => ({
+        ...itemDto({ id, count: balances[String(id)] || 0 }),
+        balanceKnown: Object.hasOwn(balances, String(id)),
+    }));
+}
+
 async function currencyBalances(ids: number[]): Promise<Record<string, number>> {
     const wanted = new Set(ids.filter(id => id > 0));
     const balances: Record<string, number> = {};
@@ -141,7 +162,7 @@ async function getMallCatalog(slotTypeInput: unknown = 1, subSlotTypeInput: unkn
     }
     const reply = await mallService.getMallListBySlotType(slotType, subSlotType);
     const goods = Array.isArray(reply?.goods_list) ? reply.goods_list : [];
-    const currencyIds = goods.map((entry: any) => Math.max(0, toNum(entry?.price?.id))).filter(Boolean);
+    const currencyIds = currencyIdsOf(goods.map((entry: any) => Math.max(0, toNum(entry?.price?.id))), slotType !== 4);
     const balances = await currencyBalances(currencyIds);
     return {
         slotType,
@@ -149,7 +170,7 @@ async function getMallCatalog(slotTypeInput: unknown = 1, subSlotTypeInput: unkn
         membership,
         serverTime: getServerTimeSec() * 1000,
         refreshCountdown: Math.max(0, toNum(reply?.refresh_countdown)),
-        currencies: Array.from(new Set(currencyIds), id => ({ ...itemDto({ id, count: balances[String(id)] || 0 }), balanceKnown: Object.hasOwn(balances, String(id)) })),
+        currencies: currencyList(currencyIds, balances),
         goods: goods.map((entry: any) => {
             const product = mallGoodsDto(entry, balances, slotType);
             return membership && !membership.isSvip
@@ -217,7 +238,7 @@ const PROPS_CURRENCY_ID = 1005;
 
 async function getPropsShop(): Promise<any> {
     const reply = await require('./farm/api').getShopInfo(PROPS_SHOP_ID);
-    const balances = await currencyBalances([PROPS_CURRENCY_ID]);
+    const balances = await currencyBalances(STANDARD_CURRENCY_IDS);
     const now = getServerTimeSec();
     return {
         shopId: PROPS_SHOP_ID,
@@ -225,7 +246,7 @@ async function getPropsShop(): Promise<any> {
         subSlotType: 0,
         serverTime: now * 1000,
         refreshCountdown: 0,
-        currencies: [{ ...itemDto({ id: PROPS_CURRENCY_ID, count: balances[PROPS_CURRENCY_ID] || 0 }), balanceKnown: Object.hasOwn(balances, PROPS_CURRENCY_ID) }],
+        currencies: currencyList(STANDARD_CURRENCY_IDS, balances),
         goods: (reply.goods_list || []).map((goods: any) => {
             const start = toNum(goods.discount_start_time);
             const end = toNum(goods.discount_end_time);
@@ -296,22 +317,128 @@ async function purchaseProps(goodsIdInput: unknown, countInput: unknown, expecte
     });
 }
 
+const PET_SHOP_TYPE = 3;
+const PET_SHOP_PRICES: Record<number, { currencyId: number; expectedPrice?: number }> = {
+    90002: { currencyId: 1002 },
+    90003: { currencyId: 1001, expectedPrice: 1000000 },
+    90011: { currencyId: 1005, expectedPrice: 4800 },
+};
+
+async function getPetShop(): Promise<any> {
+    const farmApi = require('./farm/api');
+    let shopId = PET_SHOP_TYPE;
+    let profiles: any;
+    try { profiles = await farmApi.getShopProfiles(); } catch { /* Older servers may not expose shop profiles. */ }
+    const discoveredId = toNum((profiles?.shop_profiles || []).find((profile: any) => toNum(profile.shop_type) === PET_SHOP_TYPE)?.shop_id);
+    if (discoveredId) shopId = discoveredId;
+    const reply = await farmApi.getShopInfo(shopId);
+    const balances = await currencyBalances([1001, 1002, 1005]);
+    const now = getServerTimeSec();
+    return {
+        shopId,
+        slotType: 0,
+        subSlotType: 0,
+        serverTime: now * 1000,
+        refreshCountdown: 0,
+        currencies: currencyList([1001, 1002, 1005], balances),
+        goods: (reply.goods_list || []).map((goods: any) => {
+            const start = toNum(goods.discount_start_time);
+            const end = toNum(goods.discount_end_time);
+            const promotionActive = start > 0 && end > start && start <= now && now < end;
+            const price = promotionActive ? toNum(goods.discount_price) : toNum(goods.price);
+            const reward = itemDto({ id: goods.item_id, count: goods.item_count });
+            const petPrice = PET_SHOP_PRICES[reward.id];
+            const currencyId = petPrice?.currencyId || 1002;
+            const currency = itemDto({ id: currencyId, count: price });
+            if (currencyId === 1005) currency.name = '金豆';
+            const max = toNum(goods.limit_count);
+            const bought = toNum(goods.bought_num);
+            const limit = max > 0 ? { type: 1, bought, max, remaining: Math.max(0, max - bought) } : null;
+            const valid = Number.isSafeInteger(price) && price >= 0 && reward.id > 0 && Number.isSafeInteger(reward.count) && reward.count > 0;
+            const priceMatches = petPrice?.expectedPrice === undefined || price === petPrice.expectedPrice;
+            const expired = toNum(goods.end_time) > 0 && now >= toNum(goods.end_time);
+            const status = goods.owned ? 'owned' : limit?.remaining === 0 ? 'sold_out'
+                : goods.unlocked !== true || expired || !valid || !petPrice || !priceMatches ? 'unavailable' : 'available';
+            const reason = status === 'owned' ? '已拥有该宠物' : status === 'sold_out' ? '已达到限购上限'
+                : expired ? '商品已下架' : goods.unlocked !== true ? '宠物尚未解锁'
+                    : !petPrice ? '商品不是可购买宠物' : !priceMatches ? '商店价格与游戏内价格不一致，请核对后购买'
+                        : !valid ? '商品价格或内容未确认' : '';
+            return {
+                id: toNum(goods.id), name: reward.name, type: PET_SHOP_TYPE,
+                rewards: [reward],
+                price: { ...currency, balance: balances[currencyId] ?? null },
+                originalPrice: promotionActive ? toNum(goods.price) : null,
+                isFree: valid && price === 0,
+                limit, isLimited: !!limit,
+                discountText: '', isDiscounted: promotionActive, discountEndTime: promotionActive ? end * 1000 : 0,
+                purchaseStatus: status, unavailableReason: reason,
+                available: status === 'available', purchasable: status === 'available',
+            };
+        }),
+    };
+}
+
+async function purchasePetShop(goodsIdInput: unknown, countInput: unknown, expectedOffer: any): Promise<any> {
+    const goodsId = positiveInteger(goodsIdInput, 'INVALID_GOODS_ID', 'goodsId');
+    const count = positiveInteger(countInput, 'INVALID_PURCHASE_COUNT', 'count');
+    if (count > 9999) throw businessError('INVALID_PURCHASE_COUNT', '购买数量超过上限');
+    return serializePurchase(async () => {
+        const before = await getPetShop();
+        const goods = before.goods.find((entry: any) => entry.id === goodsId);
+        if (!goods?.purchasable) throw businessError('GOODS_UNAVAILABLE', goods?.unavailableReason || '宠物已不在当前商店中');
+        if (!expectedOffer || Number(expectedOffer.price?.id) !== goods.price.id || Number(expectedOffer.price?.count) !== goods.price.count
+            || !Array.isArray(expectedOffer.rewards) || expectedOffer.rewards.length !== 1
+            || Number(expectedOffer.rewards[0].id) !== goods.rewards[0].id || Number(expectedOffer.rewards[0].count) !== goods.rewards[0].count) {
+            throw businessError('SHOP_OFFER_CHANGED', '宠物价格或内容已变化，请刷新后重新确认');
+        }
+        if (goods.limit && goods.limit.remaining < count) throw businessError('PURCHASE_LIMIT_EXCEEDED', '购买数量超过剩余限购数量');
+        const amount = goods.price.count * count;
+        const rewardAmount = goods.rewards[0].count * count;
+        if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(rewardAmount)) throw businessError('INVALID_PURCHASE_COUNT', '购买数量无效');
+        if (amount > 0) {
+            const warehouse = require('./warehouse');
+            const bag = await warehouse.getBag();
+            const currency = warehouse.getBagItems(bag).filter((item: any) => toNum(item.id) === goods.price.id);
+            const available = currency.filter((item: any) => !warehouse.isItemLocked(item)).reduce((sum: number, item: any) => sum + toNum(item.count), 0);
+            if (available < amount) throw businessError('INSUFFICIENT_BALANCE', `${goods.price.name}可用余额不足`);
+        }
+        const reply = await require('./farm/api').buyGoods(goodsId, count, goods.price.count);
+        const rewards = (reply.get_items || []).map((item: any) => itemDto(item));
+        const costs = (reply.cost_items || []).map((item: any) => itemDto(item)).filter((item: any) => item.count > 0);
+        if (rewards.length !== 1 || rewards[0].id !== goods.rewards[0].id || rewards[0].count !== rewardAmount
+            || costs.some((item: any) => item.id !== goods.price.id)
+            || costs.reduce((sum: number, item: any) => sum + item.count, 0) !== amount) {
+            throw businessError('SHOP_RESULT_UNCONFIRMED', '购买回包与商品不一致，请刷新确认，勿重复购买');
+        }
+        let catalog = null;
+        try { catalog = await getPetShop(); } catch {}
+        return { purchase: { goodsId, count, rewards }, catalog, refreshRequired: !catalog };
+    });
+}
+
 async function getMysteryShop(): Promise<any> {
     const reply = await mysteryShopService.getActiveNPC();
     const npc = reply?.npc;
     if (!npc || !reply?.is_active) {
-        return { active: false, serverTime: getServerTimeSec() * 1000, npc: null };
+        const idleBalances = await currencyBalances(STANDARD_CURRENCY_IDS);
+        return {
+            active: false,
+            serverTime: getServerTimeSec() * 1000,
+            currencies: currencyList(STANDARD_CURRENCY_IDS, idleBalances),
+            npc: null,
+        };
     }
     const currencyId = Math.max(0, toNum(npc.currency_item_id));
     const rewardCount = Math.max(0, toNum(npc.reward_count));
     const unitPrice = Math.max(0, toNum(npc.price));
     const unitOriginalPrice = Math.max(0, toNum(npc.original_price));
-    const balances = await currencyBalances([currencyId]);
+    const balances = await currencyBalances(currencyIdsOf([currencyId]));
     return {
         active: true,
         serverTime: getServerTimeSec() * 1000,
         activeTime: Math.max(0, toNum(reply.active_time)) * 1000,
         expireTime: Math.max(0, toNum(reply.expire_time)) * 1000,
+        currencies: currencyList(currencyIdsOf([currencyId]), balances),
         npc: {
             id: Math.max(0, toNum(npc.npc_id)),
             reward: itemDto({ id: npc.reward_item_id, count: rewardCount }, '神秘商品'),
@@ -324,25 +451,89 @@ async function getMysteryShop(): Promise<any> {
     };
 }
 
-async function purchaseMysteryOffer(npcIdInput: unknown, source: string = 'manual'): Promise<any> {
+interface MysteryShopExpectedOffer {
+    visitKey: string;
+    reward: { id: number; count: number };
+    price: { id: number; count: number };
+}
+
+async function purchaseMysteryOffer(
+    npcIdInput: unknown,
+    source = 'manual',
+    expectedOffer?: MysteryShopExpectedOffer,
+    canContinue?: () => boolean,
+): Promise<any> {
     const npcId = positiveInteger(npcIdInput, 'INVALID_MYSTERY_NPC_ID', 'npcId');
+    const accountId = process.env.FARM_ACCOUNT_ID || '';
+    const { getWs } = require('../utils/network');
+    const socket = getWs();
+    const sameSession = () => getWs() === socket;
+    const guard = () => {
+        if (!sameSession() || canContinue?.() === false) {
+            throw businessError('MYSTERY_SESSION_CHANGED', '神秘商人购买任务已取消');
+        }
+    };
     return serializePurchase(async () => {
+        guard();
         const before = await getMysteryShop();
+        guard();
         const offer = before.npc;
-        if (!before.active || !offer || offer.id !== npcId) {
-            throw businessError('MYSTERY_OFFER_STALE', 'Mystery shop offer is no longer available');
+        const visitKey = mysteryShopService.mysteryShopVisitKey(before);
+        if (!visitKey || !offer || offer.id !== npcId) {
+            throw businessError('MYSTERY_OFFER_STALE', '神秘商人已离开或来访无法确认');
+        }
+        if ((source === 'auto' && !expectedOffer) || (expectedOffer && (
+            expectedOffer.visitKey !== visitKey || expectedOffer.reward?.id !== offer.reward.id
+            || expectedOffer.reward?.count !== offer.reward.count || expectedOffer.price?.id !== offer.price.id
+            || expectedOffer.price?.count !== offer.price.count
+        ))) {
+            throw businessError('MYSTERY_OFFER_CHANGED', '神秘商人来访、商品或价格已变化');
+        }
+        const alreadySubmitted = () => businessError('MYSTERY_PURCHASE_ALREADY_SUBMITTED', '本次来访已提交过购买，请勿重复下单');
+        if (mysteryShopService.readMysteryShopSubmission(accountId, visitKey)) throw alreadySubmitted();
+        if (!Number.isSafeInteger(offer.reward.id) || offer.reward.id <= 0
+            || !Number.isSafeInteger(offer.reward.count) || offer.reward.count <= 0
+            || !Number.isSafeInteger(offer.price.id) || offer.price.id <= 0
+            || !Number.isSafeInteger(offer.price.count) || offer.price.count < 0) {
+            throw businessError('MYSTERY_OFFER_STALE', '神秘商人商品或价格无效');
+        }
+        if (source === 'auto') {
+            const automation = require('../models/store').getAutomation() || {};
+            const { isCurrencyAllowed, canAffordOffer } = require('./mystery-shop-auto');
+            if (automation.mystery_shop_auto_buy !== true) {
+                throw businessError('MYSTERY_AUTO_BUY_DISABLED', '神秘商人自动购买已关闭');
+            }
+            if (!isCurrencyAllowed(offer.price.id, automation)) {
+                throw businessError('MYSTERY_CURRENCY_NOT_ALLOWED', '未允许使用该币种自动购买');
+            }
+            if (canAffordOffer(offer.price).reason === 'balance_unknown') {
+                throw businessError('MYSTERY_BALANCE_UNAVAILABLE', '无法确认神秘商人商品所需余额');
+            }
         }
         if (offer.price.balance !== null && offer.price.balance < offer.price.count) {
             throw businessError('INSUFFICIENT_BALANCE', 'Insufficient currency balance');
         }
 
-        await mysteryShopService.buy(npcId);
-        const shop = await getMysteryShop();
-        if (shop.active && shop.npc?.id === npcId && shop.npc.reward.count >= offer.reward.count) {
-            throw businessError('MYSTERY_PURCHASE_NOT_CONFIRMED', 'Mystery shop purchase was not confirmed');
+        guard();
+        if (!mysteryShopService.reserveMysteryShopSubmission(accountId, visitKey)) throw alreadySubmitted();
+        // 标记后不做任何可重试的回滚：即使发送或复查失败，也无法排除已经扣款。
+        const unconfirmed = () => businessError('MYSTERY_PURCHASE_NOT_CONFIRMED', '购买结果未确认，请勿重复下单');
+        let shop: any;
+        try {
+            await mysteryShopService.buy(npcId);
+            if (!sameSession()) throw unconfirmed();
+            shop = await getMysteryShop();
+        } catch {
+            throw unconfirmed();
         }
-        // 落盘购买历史（手动/自动）；历史记录失败不影响已确认的购买。
-        try { mysteryShopService.appendMysteryShopHistory('', offer, { reward: offer.reward }, source); } catch { /* ignore history errors */ }
+        const remaining = shop.npc?.reward?.count;
+        if (!sameSession() || mysteryShopService.mysteryShopVisitKey(shop) !== visitKey
+            || shop.npc?.reward?.id !== offer.reward.id || !Number.isSafeInteger(remaining)
+            || remaining < 0 || remaining >= offer.reward.count) {
+            throw unconfirmed();
+        }
+        // 历史记录失败不影响已由库存确认的购买。
+        try { mysteryShopService.appendMysteryShopHistory(accountId, offer, { reward: offer.reward }, source); } catch { /* ignore history errors */ }
         return {
             purchase: {
                 npcId,
@@ -359,6 +550,8 @@ async function purchaseMysteryOffer(npcIdInput: unknown, source: string = 'manua
 module.exports = {
     getPropsShop,
     purchaseProps,
+    getPetShop,
+    purchasePetShop,
     getMallCatalog,
     purchaseMallProduct,
     getMysteryShop,

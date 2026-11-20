@@ -4,6 +4,7 @@ import { computed } from 'vue'
 import ActivityHeader from '@/components/activity/ActivityHeader.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import QixiActivityView from '@/components/activity/gameplays/qixi/QixiActivityView.vue'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore } from '@/stores/activity-center'
 import { useFriendStore } from '@/stores/friend'
@@ -29,6 +30,8 @@ function refreshFriends() {
   if (currentAccountId.value)
     return friendStore.fetchFriends(String(currentAccountId.value), true)
 }
+// 重新上线时按一次刷新键
+useReconnectRefresh(refreshActivity)
 </script>
 
 <template>

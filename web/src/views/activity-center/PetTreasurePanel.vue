@@ -1101,35 +1101,6 @@ defineExpose({ open })
   font-family: inherit;
 }
 
-@media (max-width: 720px) {
-  .escort-dialog {
-    width: calc(100vw - 16px);
-    max-height: calc(100vh - 24px);
-  }
-
-  .escort-body {
-    padding: 14px 14px 18px;
-  }
-
-  .escort-journey {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .escort-scene {
-    height: 230px;
-    min-height: 190px;
-  }
-
-  .escort-tools button {
-    flex: 1 1 auto;
-    justify-content: center;
-  }
-
-  .escort-treasure-card dl {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .escort-dialog * {
     transition-duration: 0.01ms !important;

@@ -1,3 +1,4 @@
+import type { AxiosRequestConfig } from 'axios'
 import type { CareerHarvestSteal } from '@/components/CareerHarvestSteal.vue'
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
@@ -79,7 +80,7 @@ export const useFriendStore = defineStore('friend', () => {
   const loading = ref(false)
   const friendLands = ref<Record<string, any[]>>({})
   const friendLandsLoading = ref<Record<string, boolean>>({})
-  const friendLandsError = ref<Record<string, string>>({})
+  const friendLandsError = ref<Record<string, boolean>>({})
   const friendLandsLoaded = ref<Record<string, boolean>>({})
   const friendCareer = ref<Record<string, CareerHarvestSteal | null>>({})
   const blacklist = ref<BlacklistItem[]>([])
@@ -343,7 +344,8 @@ export const useFriendStore = defineStore('friend', () => {
     try {
       const res = await api.get('/api/interact-records', {
         headers: { 'x-account-id': accountId },
-      })
+        skipErrorToast: true,
+      } as AxiosRequestConfig & { skipErrorToast: boolean })
       if (res.data.ok) {
         interactRecords.value = Array.isArray(res.data.data) ? res.data.data : []
       }
@@ -352,7 +354,10 @@ export const useFriendStore = defineStore('friend', () => {
       }
     }
     catch (error: any) {
-      interactError.value = getApiErrorMessage(error, '加载访客记录失败')
+      const { code, response } = error
+      interactError.value = code === 'ECONNABORTED' || code === 'ETIMEDOUT' || response?.status === 408 || response?.status === 504
+        ? '请求超时'
+        : getApiErrorMessage(error, '加载访客记录失败')
     }
     finally {
       interactLoading.value = false
@@ -384,7 +389,7 @@ export const useFriendStore = defineStore('friend', () => {
     }
   }
 
-  async function deleteFriend(accountId: string, friend: { gid: number; name?: string; avatarUrl?: string }) {
+  async function deleteFriend(accountId: string, friend: { gid: number, name?: string, avatarUrl?: string }) {
     const gid = Number(friend?.gid)
     if (!accountId || !gid)
       return { ok: false, message: '参数无效' }
@@ -449,7 +454,7 @@ export const useFriendStore = defineStore('friend', () => {
     const sequence = ++friendLandRequestSequence
     const key = String(friendId)
     friendLandsLoading.value[key] = true
-    friendLandsError.value[key] = ''
+    friendLandsError.value[key] = false
     friendLandsLoaded.value[key] = false
     try {
       const res = await api.get(`/api/friend/${key}/lands`, {
@@ -468,15 +473,15 @@ export const useFriendStore = defineStore('friend', () => {
       }
       friendLands.value[key] = []
       friendCareer.value = { ...friendCareer.value, [key]: null }
-      friendLandsError.value[key] = getApiErrorMessage(res.data, '无法读取好友土地')
+      friendLandsError.value[key] = true
       return false
     }
-    catch (error: any) {
+    catch {
       if (sequence !== friendLandRequestSequence)
         return false
       friendLands.value[key] = []
       friendCareer.value = { ...friendCareer.value, [key]: null }
-      friendLandsError.value[key] = getApiErrorMessage(error, '无法读取好友土地，请稍后重试')
+      friendLandsError.value[key] = true
       return false
     }
     finally {

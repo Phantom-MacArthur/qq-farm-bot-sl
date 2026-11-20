@@ -2,7 +2,11 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/icon.svg?v=farmhouse-1" />
+    <!-- 图标唯一来源：public/icon.png（页头品牌图标、标签页图标共用同一张图）。
+         不写 type，由浏览器按文件内容嗅探，换图时无需同步维护 svg/ico/icns。
+         覆盖 icon.png 后把这里两处与 PageHeader.vue 一处的 v 值同时 +1，让浏览器缓存失效。 -->
+    <link rel="icon" href="/icon.png?v=3" />
+    <link rel="apple-touch-icon" href="/icon.png?v=3" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />

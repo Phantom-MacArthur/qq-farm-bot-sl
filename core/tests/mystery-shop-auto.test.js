@@ -1,5 +1,8 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
 
 const {
     GOLD_ITEM_ID,
@@ -183,7 +186,93 @@ test('checkMysteryShopTick buys once and returns a merged push', async () => {
         },
         state,
     });
-    assert.equal(bought, 2);
-    assert.equal(second.bought, true);
+    assert.equal(bought, 1);
+    assert.notEqual(second.bought, true);
     assert.equal(second.push, undefined);
+});
+
+test('invalidated session does not buy after an in-flight availability check', async () => {
+    let current = true;
+    let bought = 0;
+    const state = createMysteryShopAutoState();
+    await checkMysteryShopTick({
+        canContinue: () => current,
+        getAutomation: () => automation({ mystery_shop_auto_buy: true }),
+        getShop: async () => {
+            current = false;
+            return shop();
+        },
+        buy: async () => { bought++; },
+        state,
+    });
+    assert.equal(bought, 0);
+});
+
+test('worker unified scheduler checks mystery shop at due time and stops after disabling', async () => {
+    const filename = path.resolve(__dirname, '../dist/core/worker.js');
+    let now = 100000;
+    let auto = automation({ mystery_shop_arrival_notify: true });
+    let checks = 0;
+    let resets = 0;
+    const scheduled = new Map();
+    const noop = () => {};
+    const modules = {
+        'node:worker_threads': {},
+        '../config/config': { CONFIG: { farmCheckIntervalMin: 600000, farmCheckIntervalMax: 600000, friendCheckIntervalMin: 600000, friendCheckIntervalMax: 600000 } },
+        '../models/store': { getAutomation: () => auto, applyConfigSnapshot: snapshot => { if (snapshot.automation) auto = snapshot.automation; return snapshot; } },
+        '../services/status': { setRecordGoldExpHook: noop },
+        '../services/email': { configureEmailClaim: noop },
+        '../services/farm': { refreshFarmCheckLoop: noop },
+        '../services/friend': { refreshFriendCheckLoop: noop },
+        '../services/mystery-shop-auto': {
+            isMysteryShopWatchEnabled: isMysteryShopWatchEnabled,
+            mysteryShopConfigChanged,
+            checkMysteryShopTick: async () => { checks++; },
+            resetMysteryShopPending: () => { resets++; },
+        },
+        '../services/automation-lock': { runExclusiveAutomationTask: (_key, fn) => fn() },
+        '../services/scheduler': { createScheduler: () => ({
+            clear: key => scheduled.delete(key),
+            setTimeoutTask: (key, delay, fn) => scheduled.set(key, { at: now + delay, fn }),
+        }) },
+        '../utils/low-priority-gate': { isGatewayHealthyForBusiness: () => true },
+        '../utils/network': { getGatewayLoad: () => ({}) },
+        '../utils/request-context': { runWithRequestClass: (_kind, fn) => fn() },
+        '../utils/utils': { setLogHook: noop, randomIntervalMs: () => 600000 },
+    };
+    class ClockDate extends Date {
+        static now() { return now; }
+    }
+    const worker = vm.runInNewContext(`${fs.readFileSync(filename, 'utf8')}\n;({
+        start() { loginReady = true; startUnifiedScheduler(); },
+        configure: applyRuntimeConfig,
+        stop: stopUnifiedScheduler,
+    })`, {
+        exports: {}, Date: ClockDate,
+        process: { env: {}, on: noop },
+        require: name => modules[name] || {},
+    }, { filename });
+    const advance = async ms => {
+        now += ms;
+        const timer = scheduled.get('unified_next_tick');
+        if (timer && timer.at <= now) {
+            scheduled.delete('unified_next_tick');
+            await timer.fn();
+            await Promise.resolve();
+        }
+    };
+    worker.start();
+    await advance(999);
+    assert.equal(checks, 0);
+    await advance(1);
+    assert.equal(checks, 1);
+    await advance(5 * 60000 - 1);
+    assert.equal(checks, 1);
+    await advance(1);
+    assert.equal(checks, 2);
+    worker.configure({ automation: automation() });
+    await advance(5 * 60000);
+    assert.equal(checks, 2);
+    assert.equal(resets, 1);
+    worker.stop();
 });

@@ -4,14 +4,14 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const store = require('../models/store');
 const { updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
-const { sendPushooMessage } = require('../services/push');
+const { sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage } = require('../services/push');
 const { createDataProvider } = require('./data-provider');
 const { createReloginReminderService } = require('./relogin-reminder');
 const { createRuntimeState } = require('./runtime-state');
 const { createWorkerManager } = require('./worker-manager');
 const { createAutoCodeRefreshService } = require('./auto-code-refresh');
 
-const OPERATION_KEYS = ['harvest', 'farming', 'fertilize', 'plant', 'steal', 'helpFarming', 'taskClaim', 'sell', 'upgrade'];
+const OPERATION_KEYS = ['harvest', 'fertilize', 'plant', 'steal'];
 
 interface RuntimeEngineOptions {
     processRef?: any;
@@ -58,11 +58,12 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
     const reloginReminder = createReloginReminderService({
         store,
         sendPushooMessage,
+        sendWxPusherMessage,
+        sendWxPusherWechatMessage,
         log,
     });
 
     const {
-        getOfflineAutoDeleteMs,
         triggerOfflineReminder,
         sendConfiguredPush,
     } = reloginReminder;
@@ -93,7 +94,6 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         addAccountLog,
         normalizeStatusForPanel,
         buildConfigSnapshotForAccount,
-        getOfflineAutoDeleteMs,
         triggerOfflineReminder,
         sendConfiguredPush,
         addOrUpdateAccount: store.addOrUpdateAccount,

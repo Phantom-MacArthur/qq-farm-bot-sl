@@ -55,14 +55,20 @@ export interface FriendQuietHoursConfig {
   continueFarm?: boolean
 }
 
+export interface OfflineChannelCredential {
+  token: string
+  wxPusherUid: string
+}
+
 export interface OfflineConfig {
   channel: string
   endpoint: string
   token: string
   secret: string
+  wxPusherUid: string
+  channelCredentials: Record<string, OfflineChannelCredential>
   title: string
   msg: string
-  offlineDeleteSec: number
 }
 
 export interface UIConfig {
@@ -88,7 +94,6 @@ export interface SettingsState {
   ui: UIConfig
   offlineReminder: OfflineConfig
   stealDelaySeconds: number
-  plantOrderRandom: boolean
   plantDelaySeconds: number
   fertilizerBuyOrganicCount: number
   fertilizerBuyOrganicThresholdHours: number
@@ -98,9 +103,6 @@ export interface SettingsState {
   emailClaimHour: number
   autoAcceptFriendMinLevel: number
   autoAcceptRequireOwnLevel: boolean
-  autoAcceptHarvestStealEnabled: boolean
-  autoAcceptHarvestStealHarvest: number
-  autoAcceptHarvestStealSteal: number
 }
 
 type SaveableSettingsKey
@@ -114,7 +116,6 @@ type SaveableSettingsKey
     | 'friendQuietHours'
     | 'automation'
     | 'stealDelaySeconds'
-    | 'plantOrderRandom'
     | 'plantDelaySeconds'
     | 'fertilizerBuyOrganicCount'
     | 'fertilizerBuyOrganicThresholdHours'
@@ -124,9 +125,6 @@ type SaveableSettingsKey
     | 'emailClaimHour'
     | 'autoAcceptFriendMinLevel'
     | 'autoAcceptRequireOwnLevel'
-    | 'autoAcceptHarvestStealEnabled'
-    | 'autoAcceptHarvestStealHarvest'
-    | 'autoAcceptHarvestStealSteal'
 
 export type SettingsSavePayload = Partial<Pick<SettingsState, SaveableSettingsKey>>
 
@@ -141,7 +139,6 @@ const SAVEABLE_SETTINGS_KEYS: SaveableSettingsKey[] = [
   'friendQuietHours',
   'automation',
   'stealDelaySeconds',
-  'plantOrderRandom',
   'plantDelaySeconds',
   'fertilizerBuyOrganicCount',
   'fertilizerBuyOrganicThresholdHours',
@@ -151,9 +148,6 @@ const SAVEABLE_SETTINGS_KEYS: SaveableSettingsKey[] = [
   'emailClaimHour',
   'autoAcceptFriendMinLevel',
   'autoAcceptRequireOwnLevel',
-  'autoAcceptHarvestStealEnabled',
-  'autoAcceptHarvestStealHarvest',
-  'autoAcceptHarvestStealSteal',
 ]
 
 function createDefaultSettings(): SettingsState {
@@ -169,16 +163,21 @@ function createDefaultSettings(): SettingsState {
     automation: {},
     ui: {},
     offlineReminder: {
-      channel: 'webhook',
+      channel: 'wxpusher',
       endpoint: '',
       token: '',
       secret: '',
-      title: '账号下线提醒',
-      msg: '账号下线',
-      offlineDeleteSec: 0,
+      wxPusherUid: '',
+      channelCredentials: {
+        qmsg: { token: '', wxPusherUid: '' },
+        wxpusher: { token: '', wxPusherUid: '' },
+        wxpusher_wechat: { token: '', wxPusherUid: '' },
+        bark: { token: '', wxPusherUid: '' },
+      },
+      title: '',
+      msg: '农场下线',
     },
     stealDelaySeconds: 0,
-    plantOrderRandom: false,
     plantDelaySeconds: 0,
     fertilizerBuyOrganicCount: 10,
     fertilizerBuyOrganicThresholdHours: 10,
@@ -188,9 +187,6 @@ function createDefaultSettings(): SettingsState {
     emailClaimHour: 10,
     autoAcceptFriendMinLevel: 0,
     autoAcceptRequireOwnLevel: false,
-    autoAcceptHarvestStealEnabled: true,
-    autoAcceptHarvestStealHarvest: 8,
-    autoAcceptHarvestStealSteal: 1,
   }
 }
 
@@ -247,9 +243,12 @@ export const useSettingStore = defineStore('setting', () => {
       offlineReminder: {
         ...defaults.offlineReminder,
         ...(cloneValue(data.offlineReminder) || {}),
+        channelCredentials: {
+          ...defaults.offlineReminder.channelCredentials,
+          ...((cloneValue(data.offlineReminder) || {}).channelCredentials || {}),
+        },
       },
       stealDelaySeconds: data.stealDelaySeconds ?? defaults.stealDelaySeconds,
-      plantOrderRandom: data.plantOrderRandom ?? defaults.plantOrderRandom,
       plantDelaySeconds: data.plantDelaySeconds ?? defaults.plantDelaySeconds,
       fertilizerBuyOrganicCount: data.fertilizerBuyOrganicCount ?? defaults.fertilizerBuyOrganicCount,
       fertilizerBuyOrganicThresholdHours: data.fertilizerBuyOrganicThresholdHours ?? defaults.fertilizerBuyOrganicThresholdHours,
@@ -259,9 +258,6 @@ export const useSettingStore = defineStore('setting', () => {
       emailClaimHour: data.emailClaimHour ?? defaults.emailClaimHour,
       autoAcceptFriendMinLevel: data.autoAcceptFriendMinLevel ?? defaults.autoAcceptFriendMinLevel,
       autoAcceptRequireOwnLevel: data.autoAcceptRequireOwnLevel ?? defaults.autoAcceptRequireOwnLevel,
-      autoAcceptHarvestStealEnabled: data.autoAcceptHarvestStealEnabled ?? defaults.autoAcceptHarvestStealEnabled,
-      autoAcceptHarvestStealHarvest: data.autoAcceptHarvestStealHarvest ?? defaults.autoAcceptHarvestStealHarvest,
-      autoAcceptHarvestStealSteal: data.autoAcceptHarvestStealSteal ?? defaults.autoAcceptHarvestStealSteal,
     }
   }
 
@@ -429,6 +425,54 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
+  async function fetchOfflineDefault(): Promise<{ ok: boolean, exists: boolean, config: OfflineConfig | null }> {
+    try {
+      const { data } = await api.get('/api/settings/offline-reminder/default')
+      if (data && data.ok) {
+        return { ok: true, exists: data.data?.exists === true, config: data.data?.config || null }
+      }
+      return { ok: false, exists: false, config: null }
+    }
+    catch {
+      return { ok: false, exists: false, config: null }
+    }
+  }
+
+  async function saveOfflineDefault(config: OfflineConfig) {
+    try {
+      const { data } = await api.put('/api/settings/offline-reminder/default', { config })
+      if (data && data.ok) {
+        const next: OfflineConfig = {
+          ...cloneValue(config),
+          ...(data.data?.config || {}),
+        }
+        settings.value.offlineReminder = next
+        return { ok: true }
+      }
+      return { ok: false, error: getApiErrorMessage(data, '保存失败') }
+    }
+    catch (error: any) {
+      return { ok: false, error: getApiErrorMessage(error, '保存失败') }
+    }
+  }
+
+  async function applyOfflineDefault() {
+    try {
+      const { data } = await api.post('/api/settings/offline-reminder/default/apply', {})
+      if (data && data.ok && data.data) {
+        settings.value.offlineReminder = {
+          ...settings.value.offlineReminder,
+          ...cloneValue(data.data),
+        }
+        return { ok: true, config: data.data as OfflineConfig }
+      }
+      return { ok: false, error: getApiErrorMessage(data, '应用失败') }
+    }
+    catch (error: any) {
+      return { ok: false, error: getApiErrorMessage(error, '应用失败') }
+    }
+  }
+
   return {
     settings,
     loading,
@@ -438,6 +482,9 @@ export const useSettingStore = defineStore('setting', () => {
     fetchSettings,
     saveSettings,
     saveOfflineConfig,
+    fetchOfflineDefault,
+    saveOfflineDefault,
+    applyOfflineDefault,
     fetchAutoCodeRefresh,
     saveAutoCodeRefresh,
     runAutoCodeRefresh,

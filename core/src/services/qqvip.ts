@@ -6,6 +6,7 @@ export {};
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum, getSystemDateKey } = require('../utils/utils');
+const { describeRewardItems } = require('../utils/reward-items');
 
 const DAILY_KEY: string = 'vip_daily_gift';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
@@ -20,6 +21,7 @@ let lastError: string = '';
 let lastIsVip: boolean | null = null;
 let lastHasGift: boolean | null = null;
 let lastCanClaim: boolean | null = null;
+let lastRewards: any[] = [];
 
 function markDoneToday(): void {
     doneDateKey = getSystemDateKey();
@@ -73,6 +75,7 @@ function markNonMember(): void {
     lastIsVip = false;
     lastHasGift = false;
     lastCanClaim = false;
+    lastRewards = [];
     log('会员', '非QQ会员，跳过会员礼包', {
         module: 'task', event: DAILY_KEY, result: 'none', reason: 'not_qq_vip',
     });
@@ -144,6 +147,10 @@ async function performDailyVipGift(force: boolean = false): Promise<boolean> {
     const mallCanClaim = status.mall_free_can_claim === true;
     lastHasGift = rewardStatuses.some((item: any) => item?.is_enable === true) || mallCanClaim;
     lastCanClaim = rewardTypes.length > 0 || mallCanClaim;
+    // 展示用：已启用奖励的物品清单（领取前后都有）
+    lastRewards = describeRewardItems(rewardStatuses
+        .filter((item: any) => item?.is_enable === true)
+        .flatMap((item: any) => (Array.isArray(item.rewards) ? item.rewards : [])));
     const errors: string[] = [];
     let claimed = false;
     let alreadyClaimed = status.claimed_today === true;
@@ -155,6 +162,7 @@ async function performDailyVipGift(force: boolean = false): Promise<boolean> {
             const rep: any = await claimQQVipRewards(rewardTypes);
             const items: any[] = Array.isArray(rep?.items) ? rep.items : [];
             const reward = getRewardSummary(items);
+            if (items.length > 0) lastRewards = describeRewardItems(items);
             claimed = true;
             lastClaimAt = Date.now();
             log('会员', reward ? `会员礼包领取成功 → ${reward}` : '会员礼包领取成功', {
@@ -226,5 +234,6 @@ module.exports = {
         isVip: lastIsVip,
         hasGift: lastHasGift,
         canClaim: lastCanClaim,
+        rewards: lastRewards,
     }),
 };

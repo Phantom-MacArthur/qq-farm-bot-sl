@@ -12,7 +12,7 @@ export {};
  *   仅保留目录比对得出未登记活动 ID；CDN 封面解析失败时优雅降级为无图。
  * - knownActivityIds 来源于 SL 的 activity-gameplay-registry 静态登记 + CDN 卡片规则表，
  *   取代 B 的 `*_ACTIVITY_ID` 常量导出。
- * - 鉴权沿用 SL 全局中间件（/api/* 自动校验 x-admin-token），源码图片路由置于 /api 之外，
+ * - 面板已改为免认证访问，源码图片路由置于 /api 之外，
  *   与抓包证书一致，便于手机直取。
  *
  * 端点：

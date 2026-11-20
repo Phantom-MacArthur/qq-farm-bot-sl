@@ -55,8 +55,18 @@ textarea * {
   --ui-bg-glow: rgba(214, 236, 214, 0.75);
   --ui-bg-glow-2: rgba(222, 236, 240, 0.6);
   --chrome-bg: color-mix(in srgb, var(--ui-bg) 96%, transparent);
+  /* 页面背景（body 渐变）：标题栏圆角缺口补片复用，需与 body 保持一致。 */
+  --app-bg:
+    radial-gradient(1100px 520px at 0% 0%, var(--ui-bg-glow), transparent 70%),
+    radial-gradient(900px 480px at 100% 100%, var(--ui-bg-glow-2), transparent 70%), var(--ui-bg);
   --ui-table-head: #edf2eb;
   --ui-radius-control: 10px;
+  /* 搜索、筛选、排序、刷新共用尺寸：高度固定，宽度由内容适配模板按文案撑开。 */
+  --ui-toolbar-control-height: 35px;
+  --ui-toolbar-control-padding: 12px;
+  --ui-toolbar-control-gap: 4px;
+  --ui-toolbar-control-icon-size: 16px;
+  --ui-toolbar-width-slack: 2px;
   --ui-radius-card: 14px;
   --ui-shadow-sm: 0 1px 2px rgba(45, 66, 52, 0.04), 0 6px 20px rgba(45, 66, 52, 0.05);
   --ui-shadow-md: 0 12px 32px rgba(55, 75, 61, 0.1);
@@ -335,13 +345,12 @@ body {
   height: 100%;
   margin: 0;
   padding: 0;
-  overflow: hidden; /* App handles scrolling */
+  /* 横向滚动统一交给应用外壳，避免根滚动条改变视口尺寸或遮住正文底部。 */
+  overflow: hidden;
   font-family: Inter, 'Microsoft YaHei', 'PingFang SC', ui-sans-serif, system-ui, sans-serif;
   letter-spacing: 0;
   color: var(--ui-ink);
-  background:
-    radial-gradient(1100px 520px at 0% 0%, var(--ui-bg-glow), transparent 70%),
-    radial-gradient(900px 480px at 100% 100%, var(--ui-bg-glow-2), transparent 70%), var(--ui-bg);
+  background: var(--app-bg);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   font-weight: var(--fw-400);
@@ -394,6 +403,12 @@ th {
 }
 
 .app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100dvh;
+  overflow-x: auto;
+  overflow-y: hidden;
   color: var(--ui-ink);
   background: transparent;
 }
@@ -511,6 +526,12 @@ th {
   opacity: 0.5;
 }
 
+/* 弹窗内容区：打开或收起一个开关就可能撑出滚动条，不预留滚动条槽的话
+   内容区会瞬间变窄，右侧留白看起来像跳了一下。 */
+.modal-scroll {
+  scrollbar-gutter: stable;
+}
+
 /* NProgress Customization — 农场绿 */
 #nprogress .bar {
   height: 2px !important;
@@ -537,7 +558,7 @@ th {
     box-shadow 0.16s ease;
 }
 
-.farm-card,
+.page-card-surface,
 .farm-panel {
   border: 1px solid var(--glass-border) !important;
   border-radius: var(--ui-radius-card) !important;
@@ -582,6 +603,16 @@ th {
   --n-border: 1px solid var(--glass-border) !important;
   --n-border-hover: 1px solid color-mix(in srgb, var(--theme-primary) 52%, var(--glass-border)) !important;
   --n-border-focus: 1px solid var(--theme-primary) !important;
+}
+
+/* 下拉选择框控件与菜单圆角统一 6px（仅 select，不影响输入框） */
+.n-base-selection {
+  --n-border-radius: 6px !important;
+}
+
+.n-select-menu {
+  --n-border-radius: 6px !important;
+  border-radius: 6px !important;
 }
 
 .n-data-table,
@@ -678,17 +709,29 @@ th {
   min-width: 0;
 }
 
-/* 页面操作区：标题由顶栏统一显示，页面内只放切换与操作。 */
-.page-toolbar {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px 12px;
-  margin-bottom: 16px;
+/* 农场、背包及账号工具栏共用的多选按钮：紧跟其后的刷新按钮同处右侧。 */
+.panel-multiselect-toggle {
+  margin-left: auto;
+  flex: 0 0 auto;
+  width: auto;
 }
 
+.panel-multiselect-toggle .n-button__content {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.panel-multiselect-toggle__label {
+  white-space: nowrap;
+}
+
+@container (max-width: 700px) {
+  .panel-multiselect-toggle__label {
+    display: none;
+  }
+}
+
+/* 标题栏/工具栏右侧操作区：靠右对齐。 */
 .page-toolbar__actions {
   display: flex;
   min-width: 0;
@@ -698,22 +741,448 @@ th {
   margin-left: auto;
 }
 
-@media (max-width: 640px) {
-  /* 页面分区标签在手机上收紧间距，尽量一屏放下，超出时仍可横向滑动。 */
-  .n-tabs.n-tabs--line-type {
-    --n-tab-gap: 16px !important;
-    --n-tab-font-size: 14px !important;
-  }
+/* —— 列表/容器内相邻元素间的横线分割模板 ——
+   统一使用 border-top + sibling 选择器，避免伪元素定位与滚动条预留区互相干扰。
+   适用场景：<ul>/<ol> 里的 <li>，或任意容器内连续 <div>/<section> 等子元素序列。
+   只设模板本身，具体 padding 由业务组件控制。 */
+.list-divider > li + li,
+.has-divider > * + * {
+  border-top: 1px solid var(--ui-border);
+}
 
-  .page-toolbar__actions {
-    width: 100%;
-    margin-left: 0;
-  }
+/* —— 卡片标题栏统一格式 ——
+   所有页面卡片顶部的标题栏共用：上下 16px 留白、下分隔线、上半圆角、与表头同底色，
+   并默认用 -16px 负 margin 出血贴卡片边缘（配合 page-card-surface 自带的 p-4/16px 内边距）。
+   卡片本身没有内边距的（农场、活动列表）叠加 --flush 免出血；
+   标题栏默认吸顶（top 取 --sticky-top，与上方子菜单保持原间距），无需再手动叠加 .panel-sticky；
+   列方向、gap 等布局差异留在各页 scoped 里。 */
+.panel-titlebar {
+  position: sticky;
+  top: var(--sticky-top, 12px);
+  z-index: 6;
+  container-type: inline-size;
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -16px -16px 0;
+  padding: 16px;
+  border-bottom: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-card) var(--ui-radius-card) 0 0;
+  background: var(--ui-table-head);
+}
 
-  .page-toolbar__actions > * {
-    flex: 1 1 0;
-    min-width: 0;
-  }
+.panel-titlebar--flush {
+  margin: 0;
+}
+
+/* —— 可复用：标题栏固定 + 内容区独立滚动 ——
+   带 .panel-titlebar 的卡片不再让整页滚动：标题栏固定在卡片顶部（取消吸顶，
+   滚动内容便不会经过其上方圆角缺口），下方内容区独自滚动并裁剪溢出，
+   从结构上消除「圆角缺口透出滚过内容」的问题。
+   用法：卡片容器加 .panel-scroll-layout；标题栏下方的内容包裹容器加 .panel-scroll-body。 */
+
+/* 存在已改造滚动卡片（.panel-scroll-layout）的页面：整页停止滚动，改由卡片内容区承接。
+   未改造的卡片页面保持原有整页滚动，避免内容被裁。 */
+.page-scroll:has(.panel-scroll-layout) {
+  overflow-y: hidden;
+  /* 外层横向滚动条已占用的高度算入视口底部留白。 */
+  --page-pad-bottom: max(0px, calc(var(--page-pad, 16px) - var(--page-bottom-inset, 0px)));
+}
+/* 页面包裹层提供可用高度，卡片作为路由根时则直接按内容取高。 */
+.page-scroll > :not(.panel-scroll-layout):has(.panel-scroll-layout) {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 短内容贴合自身高度，长内容收缩至页面底部留白，由正文负责滚动。 */
+.panel-scroll-layout,
+.page-scroll > .panel-scroll-layout {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  flex: 0 1 auto;
+}
+/* 标题栏在滚动卡片内固定，不再吸顶 */
+.panel-scroll-layout > .panel-titlebar {
+  position: relative;
+  top: auto;
+  flex: 0 0 auto;
+}
+/* 内容区模板：独立滚动，保留下方圆角 */
+.panel-scroll-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  border-radius: 0 0 var(--ui-radius-card) var(--ui-radius-card);
+}
+/* —— 可复用：滚动卡片内的行式列表 ——
+   放在 .panel-scroll-body 里的 <ul>/<ol> 上，解决同一类共性问题：列表用负 margin
+   向卡片两侧出血时，因 .panel-scroll-body 的 overflow-y:auto 会让 overflow-x 计算为
+   auto，出血会撑出横向滚动条，且 .list-divider / .has-divider 的行间分隔线也跟着铺到
+   卡片边缘、与内容区不对齐。这里统一把横向外边距归零（min-width:0 防止内容反推宽度），
+   列表与卡片内容区等宽，分割线自然对齐内容区。
+   纵向外边距、内边距、背景等仍由各业务组件的 scoped 样式控制
+   （需底部贴圆角的列表可单独写 margin-bottom 负值，scoped 优先级更高，不会被这里覆盖）。 */
+.panel-list {
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+  list-style: none;
+}
+/* —— 可复用：内容区铺满卡片宽度 ——
+   少数列表/表格按「出血到卡片边缘」设计（如节令日历的奖励按钮列需要完整宽度），
+   子内容一旦越过 .panel-scroll-body 的内容盒就会在 overflow-y:auto 上撑出横向滚动条。
+   此时让内容区自身横向出血到卡片边缘（出血量 = 卡片内边距 --panel-pad，默认 16px），
+   子内容无需越界即可容纳；卡片自身的 overflow: clip 负责圆角裁切，不会产生页面级滚动条。
+   与 .panel-list 二选一：普通行式列表用 .panel-list（内容区等宽），
+   需要整行铺满卡片的用 .panel-scroll-body--bleed。 */
+.panel-scroll-body--bleed {
+  margin-inline: calc(-1 * var(--panel-pad, 16px));
+}
+/* —— 可复用：撕页日历图标 ——
+   结构固定为 .date-leaf > .date-leaf__month（顶部月份条）+ .date-leaf__day（大号日期数字）
+   + .date-leaf__until（「至 X 日」辅助文案）。统一 12px 四周外边距、固定宽度保证多行图标对齐；
+   月份条与辅助文案走苹方（与全局字体栈同源），日期数字走衬线。
+   月份条底色、日期禁用色等业务语义不在模板内，由使用方按自己的状态类覆盖
+   （参考 SolarCalendar.vue 的 .term--* 规则）。 */
+.date-leaf {
+  position: relative;
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  box-sizing: border-box;
+  width: 66px;
+  margin: 12px;
+  overflow: hidden;
+  border: 1px solid var(--ui-border-strong);
+  border-radius: 8px;
+  background: var(--ui-surface-strong);
+  box-shadow: 0 2px 0 var(--ui-border);
+}
+.date-leaf__month {
+  width: 100%;
+  padding: 3px 0;
+  color: #fff;
+  background: var(--ui-primary-fill);
+  font-family: 'PingFang SC', 'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  font-weight: var(--fw-600);
+  text-align: center;
+}
+.date-leaf__day {
+  margin-top: 2px;
+  font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, serif;
+  font-size: 28px;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+.date-leaf__until {
+  padding-bottom: 6px;
+  color: var(--ui-muted);
+  font-family: 'PingFang SC', 'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
+  font-size: 11px;
+  white-space: nowrap;
+}
+/* —— 可复用：悬浮滚动条 ——
+   由 useFloatingScrollbar 给滚动容器加上 .has-floating-scrollbar：隐藏原生滚动条
+   使其不占布局宽度（避免截短行间分隔线 / 挤压内容），并在滚动容器的父级内自绘一条悬浮条，
+   滚动/指针移动/聚焦时显示、空闲约 900ms 后淡出，支持拖拽。
+   track 挂在不滚动的父级上（几何位置由 JS 内联给定），不随内容滚动，故无边缘闪烁。 */
+.has-floating-scrollbar {
+  scrollbar-width: none;
+}
+.has-floating-scrollbar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+.fsb-track {
+  position: absolute;
+  width: 8px;
+  z-index: 5;
+  opacity: 0;
+  transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+.fsb-track.is-visible {
+  opacity: 1;
+}
+/* 隐藏后滑块不再拦截指针，避免右缘出现隐形命中区干扰悬停判定 */
+.fsb-track:not(.is-visible) .fsb-thumb {
+  pointer-events: none;
+}
+.fsb-thumb {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  min-height: 24px;
+  border-radius: 8px;
+  background: rgba(100, 116, 139, 0.4);
+  background-clip: padding-box;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.fsb-thumb:hover {
+  background: rgba(100, 116, 139, 0.62);
+}
+.dark .fsb-thumb {
+  background: rgba(148, 163, 184, 0.42);
+}
+.dark .fsb-thumb:hover {
+  background: rgba(148, 163, 184, 0.68);
+}
+/* page-scroll 与 .panel-scroll-layout 之间的中间容器：fill 剩余高度并转列布局，
+   撑起「页面根 → … → 卡片」的高度链路。套在 panel-scroll-layout 的外层包裹上。 */
+.panel-fill {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 搜索、筛选、排序统一高度：覆盖 Naive UI 的尺寸变量，内部文本与箭头同步居中。
+   普通表单和操作按钮不受影响；新增控件可用 toolbar-control，筛选组可用 toolbar-filters。
+   页面内不再单独写高度，后续只调整 --ui-toolbar-control-height。 */
+:where(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters)
+  :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
+:where(.friends-toolbar .n-button-group, .toolbar-filters) .n-button,
+.toolbar-control:is(.n-input, .n-base-selection, .n-button),
+.toolbar-control :is(.n-input:not(.n-input--textarea), .n-base-selection),
+.catalog-sort {
+  --n-height: var(--ui-toolbar-control-height) !important;
+}
+
+/* 兜底：覆盖 :where() 降权导致无法命中 Naive UI 运行时 inline --n-height 的场景 */
+.panel-titlebar :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
+.book-toolbar :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
+.log-filters :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
+.toolbar-filters :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button) {
+  --n-height: var(--ui-toolbar-control-height) !important;
+}
+
+/* —— 内容适配宽度模板 ——
+   搜索使用 BaseInput type="search"；筛选使用 BaseSelect fit-width；排序使用 CatalogSortButton。
+   隐藏文案参与网格固有宽度计算，不参与交互或读屏；不按字符数估算，也不随输入/选中项伸缩。
+   仅保留正常内边距、图标间距和 2px 字形取整余量，实际控件不参与宽度计算。 */
+.base-field.base-field--fit {
+  flex: 0 0 auto;
+  width: max-content;
+}
+
+.toolbar-fit {
+  --toolbar-font-size: 14px;
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: max-content;
+  width: max-content;
+  height: var(--ui-toolbar-control-height);
+  flex: none;
+  font-size: var(--toolbar-font-size);
+  font-weight: var(--fw-400);
+  line-height: 1.5;
+}
+
+.toolbar-fit[data-control-size='tiny'] {
+  --toolbar-font-size: 12px;
+}
+
+.toolbar-fit[data-control-size='small'] {
+  --toolbar-font-size: 13px;
+}
+
+.toolbar-fit[data-control-size='large'] {
+  --toolbar-font-size: 15px;
+}
+
+.toolbar-fit__measure {
+  display: grid;
+  align-items: center;
+  padding-left: var(--ui-toolbar-control-padding);
+  padding-right: calc(var(--ui-toolbar-control-padding) + var(--ui-toolbar-width-slack));
+  visibility: hidden;
+  pointer-events: none;
+  white-space: pre;
+}
+
+.toolbar-fit__measure > span,
+.toolbar-sort__labels > span {
+  grid-area: 1 / 1;
+}
+
+.toolbar-fit--search .toolbar-fit__measure {
+  padding-left: calc(
+    var(--ui-toolbar-control-padding) + var(--ui-toolbar-control-icon-size) + var(--ui-toolbar-control-gap)
+  );
+}
+
+.toolbar-fit--select .toolbar-fit__measure {
+  padding-right: calc(
+    var(--ui-toolbar-control-padding) + var(--ui-toolbar-control-icon-size) + var(--ui-toolbar-control-gap) +
+      var(--ui-toolbar-width-slack)
+  );
+}
+
+.toolbar-fit > .toolbar-fit__control {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  min-width: 0;
+}
+
+.toolbar-fit .n-input,
+.toolbar-fit .n-base-selection {
+  --n-font-size: var(--toolbar-font-size) !important;
+  --n-height: var(--ui-toolbar-control-height) !important;
+}
+
+.toolbar-fit--search .n-input {
+  --n-padding-left: var(--ui-toolbar-control-padding) !important;
+  --n-padding-right: var(--ui-toolbar-control-padding) !important;
+}
+
+.toolbar-fit--search .n-input__prefix {
+  margin-right: var(--ui-toolbar-control-gap);
+}
+
+/* 空态不为清除键预留宽度；输入后只缩短可见文字区，框宽保持不变。 */
+.toolbar-fit--search .n-input:has(.n-input__input-el:placeholder-shown) .n-input__suffix {
+  display: none;
+}
+
+.toolbar-search__icon,
+.toolbar-sort__arrow {
+  width: var(--ui-toolbar-control-icon-size);
+  height: var(--ui-toolbar-control-icon-size);
+  flex: none;
+}
+
+.toolbar-fit--select .n-base-selection {
+  --n-padding-single-left: var(--ui-toolbar-control-padding) !important;
+  --n-padding-single-right: calc(
+    var(--ui-toolbar-control-padding) + var(--ui-toolbar-control-icon-size) + var(--ui-toolbar-control-gap)
+  ) !important;
+  --n-arrow-size: var(--ui-toolbar-control-icon-size) !important;
+}
+
+.toolbar-fit--select .n-base-suffix {
+  right: var(--ui-toolbar-control-padding);
+}
+
+.toolbar-sort {
+  flex: none;
+  --n-width: max-content !important;
+  --n-padding: 0 var(--ui-toolbar-control-padding) !important;
+}
+
+.toolbar-sort .n-button__content {
+  gap: var(--ui-toolbar-control-gap);
+  font-weight: var(--fw-400);
+  white-space: nowrap;
+}
+
+.toolbar-sort__labels {
+  display: grid;
+  padding-right: var(--ui-toolbar-width-slack);
+  text-align: left;
+}
+
+.toolbar-sort__measure {
+  visibility: hidden;
+  pointer-events: none;
+}
+
+/* —— 刷新按钮统一格式 ——
+   「重新拉取数据」类按钮的唯一样式来源（原「个人 / 农场」工具栏那套）：
+   primary 实色 + renew 图标 + 文案，图标与文案间距 4px（naive 默认更松），文案不换行，
+   宽度随内容、不参与工具栏里的等分拉伸。
+   新页面直接用 components/ui/RefreshButton.vue，不要在 scoped 里重复 gap / white-space / 收起态几何。
+
+   窄容器要收起文案时，页面在自己的容器查询里只写一行：{ --refresh-label: none }
+   （挂在按钮或其祖先上都可以），按钮会自动收成图标左右等距的紧凑键，
+   不需要再写 width / padding / border-radius。
+
+   图标转圈由组件按 loading 控制，只在用户手动刷新时传，自动轮询不要传。 */
+.panel-refresh {
+  /* 宽度交给 naive：圆形键靠 --n-width 才是正圆，这里只负责不被工具栏压缩 */
+  flex: 0 0 auto;
+  --n-height: var(--ui-toolbar-control-height) !important;
+}
+
+/* 纯图标刷新键同步尺寸变量，避免只改高度后变成椭圆。 */
+.panel-refresh--icon-only {
+  --n-width: var(--ui-toolbar-control-height) !important;
+}
+
+/* 文本刷新键只按内容撑开，不继承页面为普通操作按钮设置的固定宽度。 */
+.panel-refresh:not(.panel-refresh--icon-only) {
+  width: max-content !important;
+  min-width: 0 !important;
+  --n-width: max-content !important;
+  --n-padding: 0 var(--ui-toolbar-control-padding) !important;
+}
+
+.panel-refresh .n-button__content {
+  gap: var(--ui-toolbar-control-gap);
+  white-space: nowrap;
+}
+
+/* 图标尺寸对齐 naive 按钮的 --n-icon-size：UnoCSS 图标按 1.2em 绘制，所以字号除以 1.2，
+   否则图标会被 flex 压成非正方形（宽 18、高 21.6）。 */
+.panel-refresh__icon {
+  flex: none;
+  font-size: calc(var(--n-icon-size, 18px) / 1.2);
+}
+
+.panel-refresh__label {
+  display: var(--refresh-label, inline);
+  white-space: nowrap;
+}
+
+/* —— 账号离线提示统一格式 ——
+   账号没运行 / 没连上时，显示断网图标、「账号未运行」和重新加载按钮，不为容器添加边框或背景。
+   新页面直接用 components/ui/OfflineState.vue，不要再用 EmptyState 拼离线提示。 */
+.panel-scroll-layout:has(> .panel-scroll-body .offline-state:not(.offline-state--inline)) {
+  row-gap: 0;
+  padding-block-end: 0;
+}
+
+.offline-state {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-block: 0;
+  padding: 12px 20px;
+  text-align: center;
+}
+
+.offline-state__badge {
+  display: grid;
+  width: 56px;
+  height: 56px;
+  margin-bottom: 8px;
+  place-items: center;
+  border-radius: 18px;
+  color: var(--ui-muted);
+  background: var(--ui-surface-soft);
+}
+
+.offline-state__icon {
+  font-size: 26px;
+}
+
+.offline-state__title {
+  color: var(--ui-ink);
+  font-size: 15px;
+  font-weight: var(--fw-600);
 }
 
 .settings-page > :first-child h1 {
@@ -721,12 +1190,6 @@ th {
   color: var(--ui-ink);
   font-size: 26px;
   line-height: 1.25;
-}
-
-@media (max-width: 640px) {
-  .settings-page > :first-child h1 {
-    font-size: 22px;
-  }
 }
 
 button,
@@ -952,8 +1415,8 @@ select:focus-visible {
 }
 
 /* 所有栏目的分区子菜单共用一套几何：整条左边缘不留边距，每个子菜单至少容纳
-   一个 1.2em 图标 + 8px 间隙 + 四个 14px 汉字（约 81px），相邻子菜单固定 16px 间距。
-   更长名称（好友黑名单、SVIP 专属商城、带计数徽章的黑名单）自行撑开，不裁切；
+   一个 1.2em 图标 + 8px 间隙 + 四个 14px 汉字（约 81px），相邻子菜单固定 16px  间距。
+   更长名称（好友黑名单、带计数徽章的黑名单）自行撑开，不裁切；
    下划线宽度取 Tab 元素本身，因此只跨过图标加文本。 */
 .page-tabs {
   --page-tab-min-width: 84px;
@@ -968,57 +1431,37 @@ select:focus-visible {
   min-width: var(--page-tab-min-width);
 }
 
-@media (min-width: 1024px) {
-  .panel-sticky {
-    position: sticky;
-    top: var(--sticky-top, 0px);
-    z-index: 6;
-    background: var(--panel-sticky-bg, var(--ui-table-head));
-  }
-
-  /* 直接放在页面底色上的工具栏：并入顶部栏，细线移到它的下沿。 */
-  .panel-sticky--page {
-    z-index: 9;
-    padding-block: 10px;
-    background: transparent;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-    isolation: isolate;
-  }
-
-  .panel-sticky--page::before {
-    position: absolute;
-    z-index: -1;
-    inset: 0 calc(-1 * var(--page-pad, 0px));
-    content: '';
-    transition:
-      background-color 0.2s ease,
-      box-shadow 0.2s ease;
-  }
-
-  .is-scrolled .panel-sticky--page::before {
-    background: var(--chrome-bg);
-    box-shadow: 0 1px 0 var(--ui-border);
-  }
-
-  /* 卡片内的工具栏：底色向两侧铺满卡片内边距（--panel-pad），吸顶时不露出下面的列表。 */
-  .panel-sticky--inset {
-    margin-top: -8px;
-    padding-block: 8px;
-    background: transparent;
-    -webkit-backdrop-filter: none;
-    backdrop-filter: none;
-  }
-
-  .panel-sticky--inset::before {
-    position: absolute;
-    z-index: -1;
-    inset: 0 calc(-1 * var(--panel-pad, 20px));
-    background: var(--panel-sticky-bg, var(--ui-table-head));
-    box-shadow: 0 1px 0 var(--ui-border);
-    content: '';
-  }
+/* 节令日历的页签只有纯文字（第二季度…），撑不满外层 84px 格子，
+   文字宽度又随名称长短浮动，看起来每个子菜单宽窄不一。
+   这里把统一宽度下沉到页签元素本身：每个页签至少 84px、文字靠左，
+   下划线随页签铺满整格，与其他页面「图标+四字」的观感对齐。 */
+.page-tabs.solar-tabs .n-tabs-tab-wrapper {
+  min-width: 0;
 }
+
+.page-tabs.solar-tabs .n-tabs-tab {
+  min-width: var(--page-tab-min-width);
+  justify-content: flex-start;
+}
+
+.panel-sticky {
+  position: sticky;
+  top: var(--sticky-top, 12px);
+  z-index: 6;
+  background: var(--panel-sticky-bg, var(--ui-table-head));
+}
+
+/* 吸顶标题栏与子菜单栏之间保留 12px 间距（与 .page-scroll > * 的上外边距一致）。
+   页头透明、透出页面渐变，没有可铺的底色，所以用遮罩把滚动区最上方 12px 里滚过的内容隐藏；
+   未滚动时这 12px 本来就是空白，不受影响。所有 .panel-titlebar 标题栏都吸顶，统一按此处理。 */
+.page-scroll:has(.panel-titlebar) {
+  --sticky-top: 12px;
+  -webkit-mask-image: linear-gradient(to bottom, transparent var(--sticky-top), #000 var(--sticky-top));
+  mask-image: linear-gradient(to bottom, transparent var(--sticky-top), #000 var(--sticky-top));
+}
+
+/* 吸顶后圆角缺口透出内容的问题，由上方 .panel-titlebar::before/::after 补片解决，
+   标题栏始终保留圆角，不再在吸顶时切换为直角。 */
 
 .font-mono {
   font-family: ui-monospace, 'Cascadia Mono', Consolas, 'Microsoft YaHei', 'PingFang SC', monospace;
@@ -1091,19 +1534,6 @@ select:focus-visible {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
-  }
-}
-
-@media (max-width: 767px) {
-  .glass-app-header,
-  .app-sidebar,
-  .n-modal,
-  .n-dialog,
-  .n-drawer,
-  .n-popover:not(.n-popover--raw):not(.n-tooltip),
-  .n-dropdown-menu {
-    -webkit-backdrop-filter: blur(12px) saturate(125%);
-    backdrop-filter: blur(12px) saturate(125%);
   }
 }
 

@@ -71,7 +71,7 @@ test('history only extends the gap after the last scheduled harvest without doub
     assert.equal(predict({ lands: [], historyRate: 0 }).estimatedAt, null);
 });
 
-test('snapshot invalidation rejects in-flight old reads, stale snapshots, another account and changed experience', () => {
+test('snapshot invalidation rejects in-flight old reads, stale snapshots and another account, but survives experience changes', () => {
     let clock = now;
     const box = { exports: {} };
     const filename = path.resolve(__dirname, '../dist/services/level-forecast.js');
@@ -87,10 +87,39 @@ test('snapshot invalidation rejects in-flight old reads, stale snapshots, anothe
     assert.equal(query().source, 'unavailable');
     api.rememberLandForecast([land(1)], user, api.getLandForecastRevision());
     assert.equal(query().source, 'planted');
+    assert.equal(query().snapshotValid, true);
     assert.equal(query({ ...user, gid: 2 }).source, 'unavailable');
-    assert.equal(query({ ...user, exp: 101 }).source, 'unavailable');
+    // 收获只改变经验值，不改变土地快照：经验变化不再让种植经验整栏消失。
+    assert.equal(query({ ...user, exp: 101 }).source, 'planted');
     clock += 181;
     assert.equal(query().source, 'unavailable');
+    // 快照过期时必须告诉前端「数据暂不可用」，而不是「确实没有在田作物」。
+    assert.equal(query().snapshotValid, false);
+});
+
+test('stale land snapshots trigger an extra refresh so the forecast shows up right after login', () => {
+    let clock = now;
+    const box = { exports: {} };
+    const filename = path.resolve(__dirname, '../dist/services/level-forecast.js');
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module: box, exports: box.exports,
+        require: name => name.includes('gameConfig') ? { getPlantById: plant } : { getServerTimeSec: () => clock } });
+    const api = box.exports;
+    const user = { gid: 1, exp: 100 }; const progress = { needed: 600, current: 100 };
+    const stats = { connection: { connected: true }, sessionExpGained: 0, sessionElapsedSeconds: 0 };
+    const query = () => api.getLevelForecast(user, progress, stats, { farm: true }, false);
+    // 刚登录时还没有快照：需要立刻补拉一次。
+    assert.equal(api.isLandForecastStale(user), true);
+    api.rememberLandForecast([land(1)], user, api.getLandForecastRevision());
+    assert.equal(api.isLandForecastStale(user), false);
+    assert.equal(query().source, 'planted');
+    // 自家土地变动后快照作废，需要补拉。
+    api.invalidateLandForecast();
+    assert.equal(api.isLandForecastStale(user), true);
+    api.rememberLandForecast([land(1)], user, api.getLandForecastRevision());
+    assert.equal(api.isLandForecastStale(user), false);
+    // 快照放太久也要补拉。
+    clock += 61;
+    assert.equal(api.isLandForecastStale(user), true);
 });
 
 test('session efficiency starts at login and resets its numerator and denominator together on another login', () => {

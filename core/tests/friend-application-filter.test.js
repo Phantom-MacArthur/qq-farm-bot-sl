@@ -2,10 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-    isHarvestStealFilterEnabled,
     effectiveMinLevel,
     evaluateLevelFilter,
-    evaluateHarvestStealFilter,
 } = require('../dist/services/friend/application-filter');
 
 function config(overrides = {}) {
@@ -13,9 +11,6 @@ function config(overrides = {}) {
         minLevel: 0,
         requireOwnLevel: false,
         ownLevel: 50,
-        harvestStealEnabled: true,
-        harvestPart: 8,
-        stealPart: 1,
         ...overrides,
     };
 }
@@ -51,26 +46,4 @@ test('level 0 disables both manual and own-level checks', () => {
     const cfg = config({ minLevel: 0, requireOwnLevel: false, ownLevel: 0 });
     assert.equal(evaluateLevelFilter(0, cfg).action, 'accept');
     assert.equal(evaluateLevelFilter(1, cfg).action, 'accept');
-});
-
-test('8:1 harvest/steal boundary', () => {
-    const cfg = config();
-    assert.equal(evaluateHarvestStealFilter(8, 1, cfg).action, 'accept');
-    assert.equal(evaluateHarvestStealFilter(7, 1, cfg).action, 'reject');
-    assert.equal(evaluateHarvestStealFilter(16, 2, cfg).action, 'accept');
-    assert.equal(evaluateHarvestStealFilter(15, 2, cfg).action, 'reject');
-    assert.match(evaluateHarvestStealFilter(7, 1, cfg).reason, /7:1/);
-});
-
-test('steal count 0 always passes harvest/steal filter', () => {
-    const cfg = config();
-    assert.equal(evaluateHarvestStealFilter(0, 0, cfg).action, 'accept');
-    assert.equal(evaluateHarvestStealFilter(100, 0, cfg).action, 'accept');
-});
-
-test('harvest/steal filter can be disabled by switch or zero harvest part', () => {
-    assert.equal(isHarvestStealFilterEnabled(config({ harvestStealEnabled: false })), false);
-    assert.equal(isHarvestStealFilterEnabled(config({ harvestPart: 0 })), false);
-    assert.equal(evaluateHarvestStealFilter(1, 100, config({ harvestStealEnabled: false })).action, 'accept');
-    assert.equal(evaluateHarvestStealFilter(1, 100, config({ harvestPart: 0 })).action, 'accept');
 });

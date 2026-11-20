@@ -52,6 +52,8 @@ export interface MysteryShopDto {
   serverTime: number
   activeTime?: number
   expireTime?: number
+  // 信息栏固定展示的四种货币（金币、点券、金豆豆、钻石），与商人收款币种无关。
+  currencies?: Array<CommerceItemDto & { balanceKnown: boolean }>
   npc: null | {
     id: number
     reward: CommerceItemDto
@@ -63,9 +65,26 @@ export interface MysteryShopDto {
   }
 }
 
+export interface MysteryShopHistoryRecord {
+  id: string
+  purchasedAt: number
+  source: 'manual' | 'auto'
+  npcId: number
+  itemId: number
+  itemName: string
+  itemImage: string
+  itemCount: number
+  currencyId: number
+  currencyName: string
+  price: number
+  originalPrice: number
+  discountPercent: number
+}
+
 export const useCommerceStore = defineStore('commerce', () => {
   const mall = ref<MallCatalogDto | null>(null)
   const mystery = ref<MysteryShopDto | null>(null)
+  const mysteryHistory = ref<MysteryShopHistoryRecord[]>([])
   const mallLoading = ref(false)
   const mysteryLoading = ref(false)
   const mysteryPurchasing = ref(false)
@@ -89,6 +108,7 @@ export const useCommerceStore = defineStore('commerce', () => {
     requestVersion++
     mall.value = null
     mystery.value = null
+    mysteryHistory.value = []
     mallAccountId = ''
     mysteryAccountId = ''
     mallLoading.value = false
@@ -248,6 +268,28 @@ export const useCommerceStore = defineStore('commerce', () => {
     }
   }
 
+  async function fetchMysteryHistory(accountId: string) {
+    const id = String(accountId || '').trim()
+    if (!id) {
+      mysteryHistory.value = []
+      return
+    }
+    try {
+      const response = await api.get('/api/mystery-shop/history', {
+        headers: { 'x-account-id': id },
+        skipErrorToast: true,
+      } as any)
+      // 切账号后到达的旧响应要丢掉，不能把上一个账号的购买记录写进当前账号。
+      if (String(localStorage.getItem('current_account_id') || '') !== id)
+        return
+      mysteryHistory.value = response.data?.ok && Array.isArray(response.data.data) ? response.data.data : []
+    }
+    catch {
+      if (String(localStorage.getItem('current_account_id') || '') === id)
+        mysteryHistory.value = []
+    }
+  }
+
   async function purchaseMystery(accountId: string, npcId: number) {
     const id = String(accountId || '').trim()
     if (!id || mysteryPurchasing.value)
@@ -264,6 +306,8 @@ export const useCommerceStore = defineStore('commerce', () => {
       if (String(localStorage.getItem('current_account_id') || '') !== id)
         return false
       mystery.value = response.data.data.shop
+      // 购买成功后历史文件已追加新记录，重新读一次让历史卡立即刷新。
+      void fetchMysteryHistory(id)
       const purchase = response.data.data.purchase as { reward?: CommerceItemDto, price?: CommerceItemDto } | undefined
       const reward = purchase?.reward
       const price = purchase?.price
@@ -288,6 +332,7 @@ export const useCommerceStore = defineStore('commerce', () => {
   return {
     mall,
     mystery,
+    mysteryHistory,
     mallLoading,
     mysteryLoading,
     mysteryPurchasing,
@@ -299,6 +344,7 @@ export const useCommerceStore = defineStore('commerce', () => {
     fetchMall,
     purchaseMall,
     fetchMystery,
+    fetchMysteryHistory,
     purchaseMystery,
   }
 })

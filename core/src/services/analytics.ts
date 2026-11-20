@@ -4,8 +4,9 @@ export {};
  */
 
 const { getAllPlants, getFruitPrice, getSeedPrice, getItemImageById, getItemById } = require('../config/gameConfig');
-
-const EXCLUDED_RADISH_SEED_ID = 29999;
+const { getCalibratedSeedPrice } = require('./seed-price-cache');
+// 无效作物黑名单（成熟仅 2 秒的白萝卜等调试条目）
+const { isInvalidSeedId } = require('../config/invalid-plants');
 
 function parseGrowTime(growPhases: string): number {
     if (!growPhases) return 0;
@@ -43,8 +44,10 @@ interface PlantRankingResult {
     name: any;
     seasons: number;
     level: number | null;
+    baseGrowTime: number;
     growTime: number;
     growTimeStr: string;
+    exp: number;
     reduceSec: number;
     reduceSecApplied: number;
     expPerHour: number;
@@ -53,6 +56,7 @@ interface PlantRankingResult {
     profitPerHour: number;
     normalFertilizerProfitPerHour: number;
     income: number;
+    incomePerSeason: number;
     netProfit: number;
     fruitId: number;
     fruitCount: number;
@@ -64,9 +68,9 @@ interface PlantRankingResult {
 function getPlantRankings(sortBy: string = 'exp'): PlantRankingResult[] {
     const plants: any[] = getAllPlants();
 
-    // 筛选普通作物，排除 id 为 29999 的白萝卜种子。
+    // 筛选普通作物，排除无效作物（如成熟仅 2 秒的白萝卜）。
     const normalPlants: any[] = plants.filter((p: any) => {
-        return Number(p.seed_id) !== EXCLUDED_RADISH_SEED_ID
+        return !isInvalidSeedId(p.seed_id)
             && p.seed_id > 0
             && p.grow_phases;
     });
@@ -92,10 +96,12 @@ function getPlantRankings(sortBy: string = 'exp'): PlantRankingResult[] {
         const fruitId: number = Number(plant.fruit && plant.fruit.id) || 0;
         const fruitCount: number = Number(plant.fruit && plant.fruit.count) || 0;
         const fruitPrice: number = getFruitPrice(fruitId);
-        const seedPrice: number = getSeedPrice(Number(plant.seed_id) || 0);
+        const seedPrice: number = getSeedPrice(Number(plant.seed_id) || 0, getCalibratedSeedPrice(Number(plant.seed_id) || 0));
 
         // 单次收获总金币（毛收益）与净收益
         const income: number = (fruitCount * fruitPrice) * (isTwoSeason ? 2 : 1);
+        // 单季收入：果实售价×季产，不乘季数（双季作物整周期收入是它的 2 倍）
+        const incomePerSeason: number = fruitCount * fruitPrice;
         const netProfit: number = income - seedPrice;
         const goldPerHour: number = (income / growTime) * 3600;
         const profitPerHour: number = (netProfit / growTime) * 3600;
@@ -111,8 +117,10 @@ function getPlantRankings(sortBy: string = 'exp'): PlantRankingResult[] {
             name: plant.name,
             seasons,
             level: requiredLevel,
+            baseGrowTime,
             growTime,
             growTimeStr: formatTime(growTime),
+            exp: harvestExpBase,
             reduceSec: reduceSecBase,
             reduceSecApplied,
             expPerHour: Number.parseFloat(expPerHour.toFixed(2)),
@@ -121,6 +129,7 @@ function getPlantRankings(sortBy: string = 'exp'): PlantRankingResult[] {
             profitPerHour: Number.parseFloat(profitPerHour.toFixed(2)), // 净收益/时
             normalFertilizerProfitPerHour: Number.parseFloat(normalFertilizerProfitPerHour.toFixed(2)), // 普通肥净收益/时
             income,
+            incomePerSeason,
             netProfit,
             fruitId,
             fruitCount,

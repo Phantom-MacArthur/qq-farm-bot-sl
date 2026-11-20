@@ -38,8 +38,8 @@ watch(currentTab, (tab) => {
       </NTab>
     </PageTabs>
 
-    <div class="min-w-0">
-      <div v-for="tab in visitedTabs" v-show="tab === currentTab" :key="tab">
+    <div class="min-w-0 panel-fill">
+      <div v-for="tab in visitedTabs" v-show="tab === currentTab" :key="tab" class="panel-fill">
         <component :is="tabPanels[tab]" />
       </div>
     </div>
@@ -52,6 +52,8 @@ watch(currentTab, (tab) => {
 :deep(.personal-panel) {
   display: flex;
   min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 16px;
 }
@@ -60,15 +62,5 @@ watch(currentTab, (tab) => {
   min-width: 0;
   display: flex;
   flex-direction: column;
-}
-
-:deep(.personal-panel__scroll) {
-  min-width: 0;
-}
-
-@media (max-width: 640px) {
-  :deep(.personal-panel) {
-    gap: 12px;
-  }
 }
 </style>

@@ -1,27 +1,33 @@
 <script setup lang="ts">
+import type { MallCatalogDto, MallGoodsDto } from '@/stores/commerce'
 import type { DogFoodInfo, PetInfo } from '@/stores/pet'
-import { useStorage } from '@vueuse/core'
 import { NButton } from 'naive-ui/es/button'
 import { NInputNumber } from 'naive-ui/es/input-number'
 import { NModal } from 'naive-ui/es/modal'
 import { NTab } from 'naive-ui/es/tabs'
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import api, { getApiErrorMessage } from '@/api'
+import PurchaseDialog from '@/components/commerce/PurchaseDialog.vue'
 import PageTabs from '@/components/PageTabs.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import OfflineState from '@/components/ui/OfflineState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
 import { usePetStore } from '@/stores/pet'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { formatCompactAmount, formatNumber } from '@/utils/format-number'
 
 const accountStore = useAccountStore()
 const bagStore = useBagStore()
 const petStore = usePetStore()
 const statusStore = useStatusStore()
 const toastStore = useToastStore()
-const { currentAccountId, currentAccount } = storeToRefs(accountStore)
-const { status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
+const { currentAccountId } = storeToRefs(accountStore)
+const { loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 const {
   snapshot,
   dogs,
@@ -38,19 +44,29 @@ const {
   error,
 } = storeToRefs(petStore)
 
-const useCounts = reactive<Record<number, number>>({})
-const tokenRef = useStorage('admin_token', '')
+const selectedFoodCounts = reactive<Record<number, number>>({})
 const activePetTab = ref<'details' | 'protectLogs'>('details')
 const showFeedingModal = ref(false)
 /** 只有用户点击刷新才让图标转圈；页面/标签切换引起的自动加载不碰按钮，避免刷新图标闪烁。 */
 const manualRefreshing = ref(false)
+const petOffers = ref<Array<{ goods: MallGoodsDto, slotType: number, shop: 'pet' | 'props' | 'mall', membership?: MallCatalogDto['membership'] }>>([])
+const petOfferError = ref('')
+const selectedOffer = ref<(typeof petOffers.value)[number] | null>(null)
+const buyingPetId = ref<number | null>(null)
+let offerRequestVersion = 0
 
-const isConnected = computed(() => !!status.value?.connection?.connected)
+const presence = useAccountPresence()
+const isOffline = computed(() => presence.value === 'offline')
+const isConnected = computed(() => presence.value === 'online')
+/** 宠物总数与 core/src/services/pets.ts 的 PET_IDS 一致；离线或尚未读到快照时用它撑起标题计数。 */
+const PET_TOTAL = 6
 const maxDuration = computed(() => Number(snapshot.value?.maxProtectDuration || 30 * 86400))
 const protectDuration = computed(() => Math.max(0, Number(snapshot.value?.protectDuration || 0)))
 const durationPercent = computed(() => Math.min(100, Math.round((protectDuration.value / maxDuration.value) * 100)))
 const pendingGiftCount = computed(() => Math.max(0, Number(snapshot.value?.pendingGiftCount || 0)))
 const ownedCount = computed(() => dogs.value.filter(dog => dog.owned).length)
+// 离线时读不到宠物信息，已获得数不沿用旧快照
+const rosterCount = computed(() => `${isConnected.value ? ownedCount.value : 0}/${dogs.value.length || PET_TOTAL}`)
 const orderedDogs = computed(() => [
   ...dogs.value.filter(dog => dog.active),
   ...dogs.value.filter(dog => !dog.active),
@@ -102,7 +118,7 @@ function maxUsableCount(food: DogFoodInfo) {
 
 function selectedCount(food: DogFoodInfo) {
   const max = maxUsableCount(food)
-  const current = Math.trunc(Number(useCounts[food.id] || 1))
+  const current = Math.trunc(Number(selectedFoodCounts[food.id] || 1))
   return Math.max(1, Math.min(max || 1, current))
 }
 
@@ -120,21 +136,62 @@ function feedTitle(food: DogFoodInfo) {
   return '从狗盆喂食'
 }
 
+const currencyIcons: Record<number, string> = {
+  1001: '/game-config/resource-icons/gold.png',
+  1002: '/game-config/resource-icons/coupon.png',
+  1005: '/game-config/resource-icons/gold-bean.png',
+}
+const knownPetPrices: Record<number, { id: number, count: number, name: string, icon: string }> = {
+  90003: { id: 1001, count: 1000000, name: '金币', icon: '/game-config/resource-icons/gold.png' },
+  90011: { id: 1005, count: 4800, name: '金豆', icon: '/game-config/resource-icons/gold-bean.png' },
+}
+function purchasableOffer(pet: PetInfo) {
+  if (pet.owned || pet.activatable)
+    return null
+  return petOffers.value.find((offer) => {
+    const expectedPrice = knownPetPrices[pet.id]
+    return offer.goods.rewards.some(reward => reward.id === pet.id)
+      && offer.goods.purchasable && offer.goods.purchaseStatus === 'available'
+      && (!expectedPrice || (offer.goods.price.id === expectedPrice.id && offer.goods.price.count === expectedPrice.count))
+  }) || null
+}
+
+const shopPetIds = new Set([90002, 90003, 90011])
+function hasPurchaseEntry(pet: PetInfo) {
+  return !pet.owned && !pet.activatable && (shopPetIds.has(pet.id) || !!purchasableOffer(pet))
+}
+
+function petDisplayPrice(pet: PetInfo) {
+  if (pet.owned || pet.activatable)
+    return null
+  const offerPrice = purchasableOffer(pet)?.goods.price
+  if (offerPrice)
+    return { ...offerPrice, image: currencyIcons[offerPrice.id] || offerPrice.image }
+  const known = knownPetPrices[pet.id]
+  if (known)
+    return { name: known.name, count: known.count, image: known.icon }
+  if (pet.id === 90002)
+    return { name: '点券', count: 100, image: '/game-config/resource-icons/coupon.png' }
+  return null
+}
+
 function operationTitle(pet: PetInfo) {
   if (pet.owned)
     return pet.active ? '收回当前宠物' : '将该宠物上场'
-  return pet.activatable ? '消耗背包中的宠物卡激活该宠物' : '没有宠物卡，无法激活'
+  if (pet.activatable)
+    return '消耗背包中的宠物卡激活该宠物'
+  return hasPurchaseEntry(pet) ? `查询并购买 ${pet.name} 的宠物卡` : '当前没有可购买的宠物卡'
 }
 
 function dogActionLabel(pet: PetInfo) {
   if (pet.owned)
     return pet.active ? '收回' : '上场'
-  return pet.activatable ? '激活' : '未获得'
+  return pet.activatable ? '激活' : hasPurchaseEntry(pet) ? '购买' : '未获得'
 }
 
 function dogActionType(pet: PetInfo): 'default' | 'info' | 'success' | 'warning' {
   if (!pet.owned)
-    return pet.activatable ? 'info' : 'default'
+    return pet.activatable || hasPurchaseEntry(pet) ? 'info' : 'default'
   return pet.active ? 'warning' : 'success'
 }
 
@@ -143,16 +200,104 @@ function dogStatusLabel(pet: PetInfo) {
     return '上场中'
   if (pet.owned)
     return '已获得'
-  return pet.activatable ? '待激活' : '未获得'
+  return pet.activatable ? '待激活' : purchasableOffer(pet) ? '可购买' : hasPurchaseEntry(pet) ? '待查询商品' : '未获得'
 }
 
 function isPetLocked(pet: PetInfo) {
-  return !pet.owned && !pet.activatable
+  return !pet.owned && !pet.activatable && !hasPurchaseEntry(pet)
+}
+
+async function loadPetOffers(accountId: string) {
+  const version = ++offerRequestVersion
+  petOffers.value = []
+  petOfferError.value = ''
+  if (!accountId || !isConnected.value)
+    return
+  const shops = [
+    { url: '/api/pet-shop', params: undefined, slotType: 0, shop: 'pet' as const },
+    { url: '/api/game-mall', params: { slotType: 1, subSlotType: 1 }, slotType: 1, shop: 'mall' as const },
+    { url: '/api/props-shop', params: undefined, slotType: 0, shop: 'props' as const },
+  ]
+  const results = await Promise.allSettled(shops.map(async (shop) => {
+    const response = await api.get(shop.url, { headers: { 'x-account-id': accountId }, params: shop.params, skipErrorToast: true } as any)
+    if (!response.data?.ok)
+      throw new Error(getApiErrorMessage(response.data, '商城加载失败'))
+    const catalog = response.data.data as MallCatalogDto
+    return catalog.goods.map(goods => ({ goods, slotType: shop.slotType, shop: shop.shop, membership: catalog.membership }))
+  }))
+  if (version !== offerRequestVersion || accountId !== currentAccountId.value || !isConnected.value)
+    return
+  petOffers.value = results.flatMap(result => result.status === 'fulfilled' ? result.value : [])
+  const failed = results[0]
+  if (failed?.status === 'rejected') {
+    petOfferError.value = failed.reason instanceof Error ? failed.reason.message : '宠物商店加载失败'
+  }
+  else if (!petOffers.value.some(offer => [90002, 90003, 90011].some(id => offer.goods.rewards.some(reward => reward.id === id)))) {
+    petOfferError.value = '当前商店未返回牧羊犬、斑点狗或柯基的商品，请核对当前账号的商店目录'
+  }
+}
+
+async function purchasePet(count: number) {
+  const offer = selectedOffer.value
+  const accountId = String(currentAccountId.value || '')
+  if (!offer || !accountId || buyingPetId.value !== null || !isConnected.value)
+    return
+  buyingPetId.value = offer.goods.id
+  try {
+    const response = await api.post(offer.shop === 'pet' ? '/api/pet-shop/purchase'
+      : offer.shop === 'props' ? '/api/props-shop/purchase' : '/api/game-mall/purchase', {
+      goodsId: offer.goods.id,
+      count,
+      ...(offer.shop !== 'mall'
+        ? { expectedOffer: { price: { id: offer.goods.price.id, count: offer.goods.price.count }, rewards: offer.goods.rewards.map(reward => ({ id: reward.id, count: reward.count })) } }
+        : { slotType: offer.slotType, expectedPrice: { id: offer.goods.price.id, count: offer.goods.price.count, rewards: offer.goods.rewards.map(reward => ({ id: reward.id, count: reward.count })) } }),
+    }, { headers: { 'x-account-id': accountId }, skipErrorToast: true } as any)
+    if (!response.data?.ok)
+      throw new Error(getApiErrorMessage(response.data, '购买失败'))
+    if (accountId !== currentAccountId.value || !isConnected.value)
+      return
+    selectedOffer.value = null
+    toastStore.success(`购买成功：${offer.goods.name} x${count}`)
+    await Promise.all([petStore.fetchPetInfo(accountId), bagStore.fetchBag(accountId), loadPetOffers(accountId)])
+  }
+  catch (cause) {
+    if (accountId === currentAccountId.value && isConnected.value)
+      toastStore.error(getApiErrorMessage(cause, '购买失败'))
+  }
+  finally {
+    buyingPetId.value = null
+  }
 }
 
 async function handlePetOperation(pet: PetInfo) {
-  if (operatingDogId.value || isPetLocked(pet))
+  if (operatingDogId.value || buyingPetId.value !== null || isPetLocked(pet))
     return
+  if (!pet.owned && !pet.activatable) {
+    const accountId = currentAccountId.value
+    let offer = purchasableOffer(pet)
+    if (!offer) {
+      buyingPetId.value = pet.id
+      try {
+        await loadPetOffers(accountId)
+        if (accountId !== currentAccountId.value || !isConnected.value)
+          return
+        offer = purchasableOffer(pet)
+      }
+      finally {
+        buyingPetId.value = null
+      }
+    }
+    if (offer)
+      selectedOffer.value = {
+        ...offer,
+        goods: { ...offer.goods, price: { ...offer.goods.price, image: currencyIcons[offer.goods.price.id] || offer.goods.price.image } },
+      }
+    else
+      toastStore.warning(knownPetPrices[pet.id] && petOffers.value.some(item => item.goods.rewards.some(reward => reward.id === pet.id))
+        ? `${pet.name}的商店报价与游戏内价格不一致，未发起购买`
+        : petOfferError.value || `当前商店没有可购买的 ${pet.name}，未发起购买`)
+    return
+  }
   if (!pet.owned) {
     const activated = await petStore.activateDog(currentAccountId.value, pet.id)
     if (activated)
@@ -170,15 +315,10 @@ async function handlePetOperation(pet: PetInfo) {
     toastStore.error(error.value || (pet.active ? '收回宠物失败' : '上场宠物失败'))
 }
 
-async function loadPetInfo() {
-  const id = String(currentAccountId.value || '')
-  const account = currentAccount.value
-  if (!id || !account)
-    return
-  if (!realtimeConnected.value)
-    await statusStore.fetchStatus(id)
-  if (account.running && isConnected.value)
-    await petStore.fetchPetInfo(id)
+function loadStatusIfNeeded() {
+  const id = currentAccountId.value
+  if (id && !realtimeConnected.value)
+    void statusStore.fetchStatus(id)
 }
 
 async function refreshPetInfo() {
@@ -186,16 +326,17 @@ async function refreshPetInfo() {
     return
 
   const id = String(currentAccountId.value || '')
-  if (!id)
+  if (!id || !isConnected.value)
     return
 
   manualRefreshing.value = true
   try {
-    if (activePetTab.value === 'protectLogs') {
+    // 守护记录依赖宠物快照；还没快照时先读宠物，拿到快照后由 watch 补读记录
+    if (activePetTab.value === 'protectLogs' && snapshot.value) {
       await loadProtectLogs()
       return
     }
-    await petStore.fetchPetInfo(id)
+    await Promise.all([petStore.fetchPetInfo(id), loadPetOffers(id)])
   }
   finally {
     manualRefreshing.value = false
@@ -237,18 +378,18 @@ async function handleUseFood(food: DogFoodInfo) {
 
 async function loadProtectLogs() {
   const id = String(currentAccountId.value || '')
-  if (!id || !snapshot.value?.guardianRecordsSupported || protectLogsLoading.value)
+  if (!id || !isConnected.value || !snapshot.value?.guardianRecordsSupported || protectLogsLoading.value)
     return
   const ok = await petStore.fetchProtectLogs(id)
-  if (!ok)
+  if (!ok && id === currentAccountId.value && !isOffline.value)
     toastStore.error(error.value || '获取守护记录失败')
 }
 
 function setUseCount(food: DogFoodInfo, value: number | null) {
-  useCounts[food.id] = Math.max(1, Math.trunc(Number(value) || 1))
+  selectedFoodCounts[food.id] = Math.max(1, Math.trunc(Number(value) || 1))
 }
 
-onMounted(loadPetInfo)
+onMounted(loadStatusIfNeeded)
 watch([activePetTab, snapshot], ([tab, petSnapshot]) => {
   if (tab === 'protectLogs' && petSnapshot?.guardianRecordsSupported)
     void loadProtectLogs()
@@ -256,14 +397,30 @@ watch([activePetTab, snapshot], ([tab, petSnapshot]) => {
 watch(currentAccountId, () => {
   activePetTab.value = 'details'
   showFeedingModal.value = false
+  selectedOffer.value = null
+  petOffers.value = []
+  ++offerRequestVersion
   petStore.clear()
-  void loadPetInfo()
+  loadStatusIfNeeded()
 })
+
+watch([currentAccountId, presence], ([id, next]) => {
+  if (next === 'offline') {
+    selectedOffer.value = null
+    petOffers.value = []
+    ++offerRequestVersion
+    petStore.clear()
+  }
+  else if (next === 'online') {
+    void petStore.fetchPetInfo(id)
+    void loadPetOffers(id)
+  }
+}, { immediate: true })
 </script>
 
 <template>
   <div
-    class="personal-panel pet-page pet-panel-card farm-card rounded-2xl"
+    class="personal-panel pet-page pet-panel-card page-card-surface rounded-2xl panel-scroll-layout"
     :class="{ 'pet-page--protect-logs': activePetTab === 'protectLogs' }"
   >
     <PageTabs v-model:value="activePetTab">
@@ -275,93 +432,98 @@ watch(currentAccountId, () => {
       </NTab>
     </PageTabs>
 
-    <div class="pet-toolbar panel-sticky shrink-0">
-      <NButton
-        type="primary"
-        title="刷新宠物信息" aria-label="刷新宠物信息"
-        :disabled="!currentAccountId || !isConnected || !tokenRef" @click="refreshPetInfo"
-      >
-        <template #icon>
-          <span class="i-carbon-renew" :class="{ 'animate-spin': manualRefreshing }" />
-        </template>
-        <span class="pet-toolbar__refresh-label">刷新</span>
-      </NButton>
-      <NButton
-        v-if="activePetTab === 'details'"
-        secondary
-        title="喂食"
-        aria-label="喂食"
-        :disabled="!activeDog || usingFood"
-        @click="showFeedingModal = true"
-      >
-        <template #icon>
-          <span class="i-carbon-restaurant" />
-        </template>
-        喂食
-      </NButton>
+    <div class="pet-toolbar panel-titlebar shrink-0">
+      <h3 v-if="activePetTab === 'details'" id="pet-roster-title" class="pet-roster__title">
+        全部宠物<small>({{ rosterCount }})</small>
+      </h3>
+      <p v-else class="protect-log-summary protect-log-summary--toolbar">
+        共 {{ protectLogsTotal }} 条记录
+      </p>
+      <div class="pet-toolbar__actions">
+        <NButton
+          v-if="activePetTab === 'details'"
+          secondary
+          title="喂食"
+          aria-label="喂食"
+          :disabled="!isConnected || !activeDog || usingFood"
+          @click="showFeedingModal = true"
+        >
+          <template #icon>
+            <span class="i-carbon-restaurant" />
+          </template>
+          喂食
+        </NButton>
+        <RefreshButton
+          title="刷新宠物信息"
+          :loading="manualRefreshing"
+          :disabled="!isConnected"
+          @click="refreshPetInfo"
+        />
+      </div>
     </div>
 
-    <template v-if="activePetTab === 'details'">
-      <section
-        v-show="!loading && !statusLoading"
-        id="pet-roster"
-        class="pet-roster"
-        aria-labelledby="pet-roster-title"
-      >
-        <h3 id="pet-roster-title" class="pet-roster__title">
-          全部宠物<small>({{ ownedCount }}/{{ dogs.length }})</small>
-        </h3>
-        <EmptyState v-if="!dogs.length" bare title="暂无宠物" icon="i-carbon-dog-walker" />
-        <ul v-else class="pet-list">
-          <li
-            v-for="pet in orderedDogs" :key="pet.id" class="pet-row"
-            :class="{ 'is-active': pet.active, 'is-locked': !pet.owned && !pet.activatable }"
-          >
-            <div class="pet-row__avatar">
-              <img :src="pet.image" :alt="pet.name" loading="lazy">
-              <span v-if="!pet.owned && !pet.activatable" class="pet-row__lock i-carbon-locked" aria-hidden="true" />
-            </div>
-            <div class="pet-row__name">
-              <strong>{{ pet.name }}</strong>
-              <span class="pet-rarity" :class="rarityTone(pet)">{{ pet.rarityLabel }}</span>
-              <span class="pet-row__status" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }">
-                <span class="pet-dot" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }" aria-hidden="true" />{{ dogStatusLabel(pet) }}
-              </span>
-            </div>
-            <ul class="pet-skills pet-row__skills">
-              <li v-for="skill in pet.skills" :key="skill.name">
-                <strong>{{ skill.name }}</strong>
-                <span v-if="skill.remainingCount !== undefined && skill.dailyLimit" class="pet-usage">今日剩余 {{ skill.remainingCount }}/{{ skill.dailyLimit }}</span>
-                <p>{{ skill.description }}</p>
-              </li>
-            </ul>
-            <div class="pet-row__obtain">
-              <small>获得条件</small>
-              <p>{{ pet.obtainCondition || '—' }}</p>
-            </div>
-            <NButton
-              class="pet-row__action" size="small"
-              :type="dogActionType(pet)"
-              secondary
-              :loading="operatingDogId === pet.id" :disabled="(!pet.owned && !pet.activatable) || !!operatingDogId"
-              :title="operationTitle(pet)" @click="handlePetOperation(pet)"
-            >
-              {{ dogActionLabel(pet) }}
-            </NButton>
-          </li>
-        </ul>
-      </section>
-
-      <EmptyState v-if="loading || statusLoading" title="正在读取宠物信息" icon="i-svg-spinners-90-ring-with-bg" />
-      <EmptyState v-else-if="!currentAccountId" title="请先选择账号" description="选择账号后查看宠物与狗粮" icon="i-carbon-dog-walker" />
-      <EmptyState v-else-if="!isConnected" title="账号未运行" description="请先启动账号；启动后会读取宠物信息" icon="i-carbon-connection-signal-off" />
+    <div class="panel-scroll-body panel-scroll-body--bleed">
+      <template v-if="activePetTab === 'details'">
+      <EmptyState v-if="!currentAccountId" title="请先选择账号" description="选择账号后查看宠物与狗粮" icon="i-carbon-dog-walker" />
+      <OfflineState v-else-if="isOffline" />
+      <EmptyState v-else-if="loading || statusLoading || presence === 'unknown'" title="正在读取宠物信息" icon="i-svg-spinners-90-ring-with-bg" />
       <EmptyState v-else-if="error && !snapshot" title="获取宠物数据失败" :description="error" icon="i-carbon-warning-alt">
         <NButton secondary @click="refreshPetInfo">
           重新加载
         </NButton>
       </EmptyState>
 
+      <!-- 宠物名册只在拿到快照后展示；离线时拿不到宠物信息，不能显示“暂无宠物” -->
       <template v-else-if="snapshot">
+        <section id="pet-roster" class="pet-roster" aria-labelledby="pet-roster-title">
+          <div v-if="petOfferError" class="pet-offer-error">宠物商店：{{ petOfferError }}</div>
+          <EmptyState v-if="!dogs.length" bare title="暂无宠物" icon="i-carbon-dog-walker" />
+          <ul v-else class="pet-list panel-list list-divider">
+            <li
+              v-for="pet in orderedDogs" :key="pet.id" class="pet-row"
+              :class="{ 'is-active': pet.active, 'is-locked': isPetLocked(pet) }"
+            >
+              <div class="pet-row__identity">
+                <div class="pet-row__avatar">
+                  <img :src="pet.image" :alt="pet.name" loading="lazy">
+                  <span v-if="isPetLocked(pet)" class="pet-row__lock i-carbon-locked" aria-hidden="true" />
+                </div>
+                <strong class="pet-row__name">{{ pet.name }}</strong>
+                <div class="pet-row__meta">
+                  <span class="pet-rarity" :class="rarityTone(pet)">{{ pet.rarityLabel }}</span>
+                  <span class="pet-row__status" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }">
+                    <span class="pet-dot" :class="{ 'is-active': pet.active, 'is-owned': pet.owned || pet.activatable }" aria-hidden="true" />{{ dogStatusLabel(pet) }}
+                  </span>
+                </div>
+              </div>
+              <ul class="pet-skills pet-row__skills">
+                <li v-for="skill in pet.skills" :key="skill.name">
+                  <strong>{{ skill.name }}</strong>
+                  <span v-if="skill.remainingCount !== undefined && skill.dailyLimit" class="pet-usage">今日剩余 {{ skill.remainingCount }}/{{ skill.dailyLimit }}</span>
+                  <p>{{ skill.description }}</p>
+                </li>
+              </ul>
+              <div class="pet-row__obtain">
+                <small>获得条件</small>
+                <p v-if="petDisplayPrice(pet)" class="pet-row__price" :title="`${petDisplayPrice(pet)!.name} ${formatNumber(petDisplayPrice(pet)!.count)}`">
+                  <img :src="petDisplayPrice(pet)!.image" :alt="petDisplayPrice(pet)!.name" loading="lazy">
+                  <span>{{ formatCompactAmount(petDisplayPrice(pet)!.count) }}</span>
+                </p>
+                <p v-else>{{ pet.obtainCondition || '—' }}</p>
+              </div>
+              <NButton
+                class="pet-row__action" size="small"
+                :type="dogActionType(pet)"
+                secondary
+                :loading="operatingDogId === pet.id || buyingPetId === pet.id" :disabled="!!isPetLocked(pet) || !!operatingDogId || buyingPetId !== null"
+                :title="operationTitle(pet)" @click="handlePetOperation(pet)"
+              >
+                {{ dogActionLabel(pet) }}
+              </NButton>
+            </li>
+          </ul>
+        </section>
+
         <!-- 看家状态：谁在看家 + 狗粮与喂食 -->
         <section v-if="!activeDog" class="pet-home is-idle" aria-label="看家状态">
           <div class="pet-idle">
@@ -396,10 +558,14 @@ watch(currentAccountId, () => {
     </template>
 
     <section v-else class="protect-log-panel">
-      <EmptyState v-if="loading || statusLoading" title="正在读取宠物信息" icon="i-svg-spinners-90-ring-with-bg" />
-      <EmptyState v-else-if="!currentAccountId" title="请先选择账号" description="选择账号后查看守护记录" icon="i-carbon-security" />
-      <EmptyState v-else-if="!isConnected" title="账号未运行" description="请先启动账号后查看守护记录" icon="i-carbon-connection-signal-off" />
-      <EmptyState v-else-if="error && !snapshot" title="获取宠物数据失败" :description="error" icon="i-carbon-warning-alt" />
+      <EmptyState v-if="!currentAccountId" title="请先选择账号" description="选择账号后查看守护记录" icon="i-carbon-security" />
+      <OfflineState v-else-if="isOffline" />
+      <EmptyState v-else-if="loading || statusLoading || presence === 'unknown'" title="正在读取宠物信息" icon="i-svg-spinners-90-ring-with-bg" />
+      <EmptyState v-else-if="error && !snapshot" title="获取宠物数据失败" :description="error" icon="i-carbon-warning-alt">
+        <NButton secondary @click="refreshPetInfo">
+          重新加载
+        </NButton>
+      </EmptyState>
       <EmptyState v-else-if="!snapshot?.guardianRecordsSupported" title="暂不支持守护记录" icon="i-carbon-security" />
       <EmptyState v-else-if="protectLogsLoading" title="正在读取守护记录" icon="i-svg-spinners-90-ring-with-bg" />
       <EmptyState v-else-if="error" tone="error" title="获取守护记录失败" :description="error" icon="i-carbon-warning-alt">
@@ -409,10 +575,7 @@ watch(currentAccountId, () => {
       </EmptyState>
       <EmptyState v-else-if="!protectLogs.length" bare title="暂无守护记录" :description="`共 ${protectLogsTotal} 条记录`" icon="i-carbon-security" />
       <template v-else>
-        <p class="protect-log-summary">
-          共 {{ protectLogsTotal }} 条记录
-        </p>
-        <ul class="protect-log-list custom-scrollbar">
+        <ul class="protect-log-list panel-list list-divider">
           <li v-for="logItem in protectLogs" :key="logItem.id" class="protect-log-row">
             <img v-if="logItem.friendAvatar" :src="logItem.friendAvatar" :alt="logItem.friendName" class="protect-log-avatar">
             <span v-else class="protect-log-avatar protect-log-avatar--empty"><span class="i-carbon-user" aria-hidden="true" /></span>
@@ -425,6 +588,17 @@ watch(currentAccountId, () => {
         </ul>
       </template>
     </section>
+    </div>
+
+    <PurchaseDialog
+      :open="isConnected && !!selectedOffer"
+      :goods="selectedOffer?.goods || null"
+      :show-currency-name="true"
+      :hide-rewards="true"
+      :pending="buyingPetId !== null"
+      @close="selectedOffer = null"
+      @confirm="purchasePet"
+    />
 
     <NModal
       v-model:show="showFeedingModal"
@@ -484,22 +658,14 @@ watch(currentAccountId, () => {
 }
 
 .pet-panel-card {
-  --pet-panel-pad: 16px;
+  --panel-pad: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: var(--pet-panel-pad);
-}
-
-.pet-page--protect-logs {
-  height: calc(100% - 16px);
-  min-height: 0;
+  padding: var(--panel-pad);
 }
 
 .protect-log-panel {
   display: flex;
-  min-height: 0;
-  flex: 1 1 auto;
   flex-direction: column;
 }
 
@@ -508,17 +674,13 @@ p {
   margin: 0;
 }
 
-/* —— 工具栏 —— */
-.pet-toolbar {
-  container-type: inline-size;
+/* —— 工具栏 —— 格式走全局 .panel-titlebar，这里只把按钮组推到最右。 */
+.pet-toolbar__actions {
   display: flex;
+  flex: none;
   align-items: center;
   gap: 8px;
-  margin: calc(-1 * var(--pet-panel-pad)) calc(-1 * var(--pet-panel-pad)) 0;
-  padding: 16px var(--pet-panel-pad);
-  border-radius: var(--ui-radius-card) var(--ui-radius-card) 0 0;
-  border-bottom: 1px solid var(--ui-border);
-  background: var(--ui-table-head);
+  margin-left: auto;
 }
 
 .pet-toolbar :deep(.n-button) {
@@ -528,10 +690,6 @@ p {
 
 .pet-toolbar :deep(.n-button__content) {
   gap: 4px;
-  white-space: nowrap;
-}
-
-.pet-toolbar__refresh-label {
   white-space: nowrap;
 }
 
@@ -546,9 +704,6 @@ p {
   font-weight: var(--fw-600);
   line-height: 18px;
   white-space: nowrap;
-  .pet-toolbar__refresh-label {
-    display: none;
-  }
 }
 
 .pet-rarity.is-gold {
@@ -909,12 +1064,20 @@ p {
   container: pet-roster / inline-size;
 }
 
+.pet-offer-error {
+  color: var(--error-color, #c24135);
+  font-size: 12px;
+}
+
 .pet-roster__title {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  min-width: 0;
+  margin: 0;
   font-size: 14px;
   font-weight: var(--fw-650);
+  white-space: nowrap;
 }
 
 .pet-roster__title small {
@@ -924,36 +1087,36 @@ p {
 }
 
 .pet-list {
-  margin: 0;
-  padding: 0;
   overflow: hidden;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-card);
   background: var(--ui-surface);
-  list-style: none;
 }
 
-/* 窄屏：头像 + 名称 + 按钮一行，技能与获得条件在下方通栏 */
+.pet-home,
+.pet-gift,
+.pet-roster > :not(.panel-list),
+.protect-log-panel > :not(.panel-list),
+.panel-scroll-body > :is(.empty-state, .offline-state) {
+  margin-inline: var(--panel-pad);
+}
+
+/* 窄屏：身份块（头像 + 名称 + 稀有度/状态）与按钮一行，技能与获得条件在下方通栏 */
 .pet-row {
   display: grid;
   grid-template-areas:
-    'avatar name action'
-    'skills skills skills'
-    'obtain obtain obtain';
-  grid-template-columns: 52px minmax(0, 1fr) auto;
+    'identity action'
+    'skills   skills'
+    'obtain   obtain';
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px 14px;
   padding: 16px 18px;
 }
 
-.pet-row + .pet-row {
-  border-top: 1px solid var(--ui-border);
+.pet-row:first-child {
+  padding-block-start: 12px;
 }
 
-.pet-row.is-active {
-  background: var(--ui-primary-soft);
-}
-
+/* 已上场的宠物不做背景区分，与其它行保持一致 */
 .pet-row__avatar {
   position: relative;
   display: grid;
@@ -963,10 +1126,6 @@ p {
   grid-area: avatar;
   border-radius: 16px;
   background: var(--ui-surface-soft);
-}
-
-.pet-row.is-active .pet-row__avatar {
-  background: var(--ui-surface-solid);
 }
 
 .pet-row__avatar img {
@@ -993,23 +1152,45 @@ p {
   box-shadow: 0 0 0 2px var(--ui-surface-solid);
 }
 
-.pet-row__name {
-  display: flex;
+/* 身份块：头像与名称同列（名称居中落在图标下方），稀有度与获得状态只占图标所在行，
+   因此整块与头像垂直居中平齐，不会被下方名称行拉低。
+   使用网格而非 wrap flex，max-content 为各列相加的确定值，不会虚增列宽。 */
+.pet-row__identity {
+  display: grid;
   min-width: 0;
-  flex-wrap: wrap;
+  grid-template-columns: minmax(52px, max-content) minmax(0, max-content);
+  grid-template-areas:
+    'avatar meta'
+    'name   .';
+  column-gap: 8px;
+  row-gap: 4px;
   align-items: center;
-  gap: 4px 8px;
-  grid-area: name;
+  grid-area: identity;
 }
 
-.pet-row__name strong {
+.pet-row__name {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  grid-area: name;
+  color: var(--ui-ink);
   font-size: 15px;
   font-weight: var(--fw-650);
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pet-row__meta {
+  display: grid;
+  min-width: 0;
+  justify-items: start;
+  gap: 4px;
+  grid-area: meta;
 }
 
 .pet-row__status {
   display: inline-flex;
-  flex-basis: 100%;
   align-items: center;
   gap: 6px;
   color: var(--ui-subtle);
@@ -1048,23 +1229,40 @@ p {
   line-height: 1.6;
 }
 
+.pet-row__obtain .pet-row__price {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+.pet-row__price img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
 .pet-row__action {
   min-width: 72px;
   grid-area: action;
 }
 
-.pet-row.is-locked .pet-row__name strong,
+.pet-row.is-locked .pet-row__name,
 .pet-row.is-locked .pet-skills strong {
   color: var(--ui-muted);
 }
 
-/* 宽屏：五列对齐的表格式行 */
-@container pet-roster (min-width: 900px) {
+/* 宽屏：四列对齐的表格式行（身份块 / 技能 / 获得条件 / 按钮）。
+   阈值 780px：左侧导航栏展开时内容区最窄约 818px，阈值必须低于它，
+   否则拖着窗口变窄时会在「侧栏仍在」「侧栏已隐藏」之间反复横跳（多列 ⇄ 单列）。 */
+@container pet-roster (min-width: 780px) {
   .pet-row {
-    grid-template-areas: 'avatar name skills obtain action';
-    grid-template-columns: 52px minmax(140px, 180px) minmax(0, 1fr) minmax(180px, 260px) 80px;
+    grid-template-areas: 'identity skills obtain action';
+    /* 名称并入头像列、稀有度与状态另占一窄列：
+       左侧占地从「52 + 被虚算撑宽的名称列」收缩为确定值，多出的宽度让给技能（1fr）。 */
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(200px, 280px) 80px;
     gap: 20px;
-    padding: 16px 22px;
+    padding-inline: 22px;
   }
 
   .pet-row__skills,
@@ -1079,24 +1277,16 @@ p {
   font-size: 12px;
 }
 
-.protect-log-list {
-  min-height: 0;
-  flex: 1 1 auto;
-  margin: 10px 0 0;
-  padding: 0;
-  overflow-y: auto;
-  list-style: none;
+/* 标题栏里的版本：同样式，左对齐即可。 */
+.protect-log-summary--toolbar {
+  margin: 0;
 }
 
 .protect-log-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px 2px;
-}
-
-.protect-log-row + .protect-log-row {
-  border-top: 1px solid var(--ui-border);
+  padding: 12px var(--panel-pad);
 }
 
 .protect-log-avatar {
@@ -1144,39 +1334,6 @@ p {
 @container pet-page (max-width: 860px) {
   .pet-home {
     grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 520px) {
-  .pet-bowl {
-    padding: 16px;
-  }
-
-  .pet-gift {
-    padding: 12px 16px;
-  }
-
-  .pet-row {
-    padding: 14px 16px;
-  }
-
-  .protect-log-row {
-    flex-wrap: wrap;
-  }
-
-  .protect-log-copy {
-    flex-basis: calc(100% - 52px);
-  }
-
-  .protect-log-row time {
-    flex-basis: calc(100% - 52px);
-    margin-left: 52px;
-  }
-}
-
-@media (max-width: 1023px) {
-  .pet-page--protect-logs {
-    height: calc(100% - 14px);
   }
 }
 

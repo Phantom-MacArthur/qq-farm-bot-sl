@@ -8,7 +8,7 @@ const { CONFIG, updateRuntimeConfig } = require('../config/config');
 const { getLevelExpProgress, loadConfigs } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot } = require('../models/store');
 const { checkAndClaimEmails, configureEmailClaim, getEmailDailyState } = require('../services/email');
-const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand } = require('../services/farm');
+const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand, getAllLands } = require('../services/farm');
 const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, getFriendsList, getFriendsListCacheOnly, getFriendLandsDetail, doFriendOperation, deleteFriend } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
@@ -16,11 +16,12 @@ const { autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftD
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { runExclusiveAutomationTask } = require('../services/automation-lock');
-const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
+const { isMysteryShopWatchEnabled, mysteryShopConfigChanged, checkMysteryShopTick, resetMysteryShopPending } = require('../services/mystery-shop-auto');
+const { createScheduler } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
 const { refreshActivityWindows } = require('../services/activity-windows');
-const { resetSessionGains, recordOperation, initStatsWithPersistence, saveStats } = require('../services/stats');
-const { initStatusBar, setStatusPlatform, statusData } = require('../services/status');
+const { resetSessionGains, initStatsWithPersistence, saveStats } = require('../services/stats');
+const { initStatusBar, setStatusPlatform, statusData, updateStatusGold } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
 const {
@@ -111,11 +112,14 @@ let farmTaskRunning: boolean = false;
 let nextFarmRunAt: number = 0;
 let friendTaskRunning: boolean = false;
 let nextFriendRunAt: number = 0;
+let nextMysteryShopRunAt: number | null = null;
+let mysteryShopTaskRunning = false;
+let mysteryShopConfigGeneration = 0;
+const MYSTERY_SHOP_CHECK_INTERVAL_MS = 5 * 60 * 1000;
 // 网关卡住时两条定时任务各自的退避时长（毫秒），0 表示按正常间隔跑
 const businessBackoffMs: Record<string, number> = { farm: 0, friend: 0 };
 let lastStatusHash: string = '';
 let lastStatusSentAt: number = 0;
-let onSellGain: ((deltaGold: any) => void) | null = null;
 let onFarmHarvested: (() => Promise<void>) | null = null;
 let onDogSkillGiftPending: ((count: any) => void) | null = null;
 let harvestSellRunning: boolean = false;
@@ -123,14 +127,39 @@ let onWsError: ((payload: any) => void) | null = null;
 let onDisconnected: ((payload: any) => void) | null = null;
 let wsErrorHandledAt: number = 0;
 let shutdownStarted: boolean = false;
+let shutdownOfflineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLINE' = 'ACCOUNT_OFFLINE';
 let runtimeGeneration: number = 0;
 let lastDailyRunDate: string = '';
 const workerScheduler = createScheduler('worker');
+// 土地快照保鲜：巡田循环只在「农场自动化」开关打开时才会带出快照，
+// 这里单独兜底一个补拉周期，账号上线后种植经验能尽快出现。
+const LAND_FORECAST_REFRESH_INTERVAL_MS = 20000;
 
-async function runDailyRoutines(force: boolean = false): Promise<void> {
+/**
+ * 土地快照补拉。
+ *
+ * 种植经验展示依赖 AllLands 快照，而快照只在巡田循环里才会被刷新；
+ * 农场自动化关闭时根本不会有快照。这里定时检查快照是否陈旧，
+ * 陈旧就补拉一次，避免「账号已经在线，种植经验却迟迟不出现」。
+ */
+function startLandForecastRefreshTimer(): void {
+    workerScheduler.setIntervalTask('land_forecast_refresh', LAND_FORECAST_REFRESH_INTERVAL_MS, async () => {
+        if (!loginReady) return;
+        const forecast = require('../services/level-forecast');
+        if (!forecast.isLandForecastStale(getUserState())) return;
+        try {
+            await getAllLands();
+        } catch {
+            // 网关繁忙或连接已断时留到下一轮再试。
+        }
+    }, { preventOverlap: true });
+}
+
+async function runDailyRoutines(force: boolean = false, options: { forceEmail?: boolean } = {}): Promise<void> {
     if (!loginReady) return;
     try {
-        await checkAndClaimEmails();
+        // 邮箱是周期检查任务：登录/刷新 code 上线（forceEmail）立即查，跨日重跑仍受服务层冷却限制。
+        await checkAndClaimEmails(options.forceEmail === true);
         await openCharitySettlementGiftPacksSilently();
         await checkDailyShareStatus(force);
         await performDailyMonthCardGift(force);
@@ -148,20 +177,14 @@ function stopDailyRoutineTimer(): void {
 function startDailyRoutineTimer(runImmediately: boolean = true): void {
     stopDailyRoutineTimer();
     lastDailyRunDate = getSystemDateKey();
-    // 登录时检查日常任务，邮箱仍遵守配置的领取时间。
-    if (runImmediately) runExclusiveAutomationTask('daily_routines', () => runDailyRoutines(true)).catch(() => null);
+    // 登录时立即检查日常任务和邮箱（邮箱领取为默认任务，上线/刷新 code 重登时强制检查）。
+    if (runImmediately) runExclusiveAutomationTask('daily_routines', () => runDailyRoutines(true, { forceEmail: true })).catch(() => null);
+    // 不再单独轮询邮箱：微信账号的自动刷新 Code（默认几分钟）会重启 worker 重新上线，
+    // 每次上线都已在启动序列里领一轮邮箱。这里只保留跨日检测，重跑当日日常任务。
     workerScheduler.setIntervalTask('daily_routine_interval', 30 * 1000, () => {
         if (!loginReady) return;
         const today = getSystemDateKey();
-        if (today === lastDailyRunDate) {
-            const email = getEmailDailyState();
-            if (!email.doneToday && email.result !== 'running' && Date.now() >= email.nextCheckAt) {
-                runExclusiveAutomationTask('email_claim', async () => {
-                    if (loginReady) await checkAndClaimEmails();
-                }).catch(() => null);
-            }
-            return;
-        }
+        if (today === lastDailyRunDate) return;
         lastDailyRunDate = today;
         runExclusiveAutomationTask('daily_routines', () => runDailyRoutines(true)).catch(() => null);
     });
@@ -337,6 +360,9 @@ async function runUnifiedTick(): Promise<void> {
     const now = Date.now();
     const dueFarm = now >= nextFarmRunAt;
     const dueFriend = now >= nextFriendRunAt;
+    if (nextMysteryShopRunAt !== null && now >= nextMysteryShopRunAt && !mysteryShopTaskRunning) {
+        void runMysteryShopTick();
+    }
     if (!dueFarm && !dueFriend) return;
 
     const auto = getAutomation();
@@ -354,16 +380,19 @@ function scheduleUnifiedNextTick(): void {
     const now = Date.now();
     const nextAt = Math.min(
         farmTaskRunning ? Number.POSITIVE_INFINITY : (Number(nextFarmRunAt) || (now + 1000)),
-        friendTaskRunning ? Number.POSITIVE_INFINITY : (Number(nextFriendRunAt) || (now + 1000))
+        friendTaskRunning ? Number.POSITIVE_INFINITY : (Number(nextFriendRunAt) || (now + 1000)),
+        mysteryShopTaskRunning ? Number.POSITIVE_INFINITY : (nextMysteryShopRunAt ?? Number.POSITIVE_INFINITY)
     );
     if (!Number.isFinite(nextAt)) return;
     const delayMs = Math.max(1000, nextAt - now); // 最低 1 秒
+    const generation = runtimeGeneration;
 
     workerScheduler.setTimeoutTask('unified_next_tick', delayMs, async () => {
+        if (generation !== runtimeGeneration) return;
         try {
             await runUnifiedTick();
         } finally {
-            scheduleUnifiedNextTick();
+            if (generation === runtimeGeneration) scheduleUnifiedNextTick();
         }
     });
 }
@@ -372,6 +401,7 @@ function startUnifiedScheduler(): void {
     if (unifiedSchedulerRunning) return;
     unifiedSchedulerRunning = true;
     resetUnifiedSchedule();
+    nextMysteryShopRunAt = isMysteryShopWatchEnabled(getAutomation()) ? Date.now() : null;
     scheduleUnifiedNextTick();
 }
 
@@ -379,15 +409,41 @@ function stopUnifiedScheduler(): void {
     unifiedSchedulerRunning = false;
     farmTaskRunning = false;
     friendTaskRunning = false;
+    nextMysteryShopRunAt = null;
+    mysteryShopTaskRunning = false;
     workerScheduler.clear('unified_next_tick');
+    resetMysteryShopPending();
 }
 
-function stopMysteryShopTimer(): void {
-    workerScheduler.clear('mystery_shop_initial');
-    workerScheduler.clear('mystery_shop_interval');
-    workerScheduler.clear('mystery_shop_after_save');
-}
+async function runMysteryShopTick(): Promise<void> {
+    const generation = runtimeGeneration;
+    const configGeneration = mysteryShopConfigGeneration;
+    const canContinue = (): boolean => loginReady && unifiedSchedulerRunning
+        && generation === runtimeGeneration && configGeneration === mysteryShopConfigGeneration
+        && isMysteryShopWatchEnabled(getAutomation());
 
+    // 入队前消费本次到期项。配置变更可以在任务排队或执行时写入新的到期项。
+    nextMysteryShopRunAt = null;
+    if (!canContinue()) return;
+    mysteryShopTaskRunning = true;
+    try {
+        await runExclusiveAutomationTask('mystery_shop', async () => {
+            if (!canContinue()) return;
+            const result = await checkMysteryShopTick(canContinue);
+            if (canContinue() && result?.push?.title && result?.push?.content) {
+                sendToMaster({ type: 'push_notify', title: result.push.title, content: result.push.content });
+            }
+        });
+    } catch {
+        // 检查失败留待下一轮，不影响其他自动化任务。
+    } finally {
+        if (generation === runtimeGeneration) {
+            mysteryShopTaskRunning = false;
+            if (canContinue()) nextMysteryShopRunAt = Date.now() + MYSTERY_SHOP_CHECK_INTERVAL_MS;
+            scheduleUnifiedNextTick();
+        }
+    }
+}
 
 /**
  * 登录完成后的启动序列。
@@ -401,12 +457,12 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
     if (!loginReady || !canContinue()) return;
 
     // 这个序列跑在登录初始化的 await 链上（心跳和 ACE 此时已经启动），
-    // 抛出去会被 network.ts 当成「登录初始化失败」直接掐掉连接，所以整段自己兜住异常。
+    // 抛出去会被 network.ts 当成「登录初始化失败」直接捾掉连接，所以整段自己兜住异常。
     try {
         // 登录期要领的东西按 farm 班次串行跑完：邮件 / 每日分享 / 月卡 / 免费礼包 / VIP → 任务。
         await runWithRequestClass('farm', async () => {
             if (!loginReady || !canContinue()) return;
-            await runExclusiveAutomationTask('daily_routines', () => runDailyRoutines(true));
+            await runExclusiveAutomationTask('daily_routines', () => runDailyRoutines(true, { forceEmail: true }));
 
             if (!loginReady || !canContinue()) return;
             try {
@@ -422,37 +478,10 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
         startFriendCheckLoop({ externalScheduler: true });
         startUnifiedScheduler();
         startDailyRoutineTimer(false);
-        startMysteryShopTimer();
         startCouponGiftTimer();
     } catch (e: any) {
         log('系统', `登录启动序列执行失败: ${e.message}`, { module: 'system', event: '启动序列', result: 'error' });
     }
-}
-
-function runMysteryShopTick(): Promise<void> {
-    if (!loginReady) return Promise.resolve();
-    const {
-        isMysteryShopWatchEnabled,
-        checkMysteryShopTick,
-    } = require('../services/mystery-shop-auto');
-    if (!isMysteryShopWatchEnabled(getAutomation())) return Promise.resolve();
-    return checkMysteryShopTick().then((result: any) => {
-        if (result?.push?.title && result?.push?.content) {
-            sendToMaster({ type: 'push_notify', title: result.push.title, content: result.push.content });
-        }
-    });
-}
-
-function startMysteryShopTimer(): void {
-    const {
-        isMysteryShopWatchEnabled,
-        AUTO_BUY_CHECK_INTERVAL_MS,
-    } = require('../services/mystery-shop-auto');
-    stopMysteryShopTimer();
-    if (!loginReady || !isMysteryShopWatchEnabled(getAutomation())) return;
-    workerScheduler.setIntervalTask('mystery_shop_interval', AUTO_BUY_CHECK_INTERVAL_MS, () => {
-        runExclusiveAutomationTask('mystery_shop', runMysteryShopTick).catch(() => null);
-    });
 }
 function stopCouponGiftTimer(): void {
     workerScheduler.clear('coupon_gift_initial');
@@ -501,7 +530,7 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
         updateRuntimeConfig({ clientVersion: String(snapshot.systemClientVersion || '') });
     }
     const appliedSnapshot = applyConfigSnapshot(snapshot || {}, { persist: false, accountId });
-    configureEmailClaim({ hour: appliedSnapshot.emailClaimHour, accountId });
+    configureEmailClaim({ accountId });
     if (rev > appliedConfigRevision) appliedConfigRevision = rev;
 
     // 优先使用本次下发的间隔，避免 worker 内部 store 漂移导致回退默认值
@@ -516,7 +545,6 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
         refreshFarmCheckLoop(200);
         refreshFriendCheckLoop(200);
         resetUnifiedSchedule();
-        scheduleUnifiedNextTick();
 
         const hasAutomationPayload = !!(snapshot && snapshot.automation && typeof snapshot.automation === 'object');
         if (hasAutomationPayload) {
@@ -540,9 +568,17 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
                 });
             }
 
-            startMysteryShopTimer();
+            if (mysteryShopConfigChanged(prevAuto, nextAuto)) {
+                mysteryShopConfigGeneration += 1;
+                const watchEnabled = isMysteryShopWatchEnabled(nextAuto);
+                nextMysteryShopRunAt = watchEnabled ? Date.now() : null;
+                if (!watchEnabled || (prevAuto.mystery_shop_auto_buy === true && nextAuto.mystery_shop_auto_buy !== true)) {
+                    resetMysteryShopPending();
+                }
+            }
             startCouponGiftTimer();
         }
+        scheduleUnifiedNextTick();
     }
 
     if (syncNow) syncStatus();
@@ -642,16 +678,6 @@ async function startBot(config: any): Promise<void> {
     const onLoginSuccess = async (): Promise<void> => {
         if (!canContinueLogin() || loginReady) return;
         loginReady = true;
-        if (onSellGain) {
-            networkEvents.off('sell', onSellGain);
-        }
-        onSellGain = (deltaGold: any) => {
-            const delta = Number(deltaGold || 0);
-            if (!Number.isFinite(delta) || delta <= 0) return;
-            recordOperation('sell', 1);
-        };
-        networkEvents.on('sell', onSellGain);
-
         if (onFarmHarvested) {
             networkEvents.off('farmHarvested', onFarmHarvested);
         }
@@ -686,30 +712,70 @@ async function startBot(config: any): Promise<void> {
         }
         if (!canContinueLogin()) return;
 
-        // 登录后只拉一次背包，同时初始化点券（1002）和金豆豆（1005）
+        // 登录后只拉一次背包，同时初始化金币（1/1001）、点券（1002）、金豆豆（1005）和种植经验（1101）
+        // bagConfirmed 标记哪些余额项确实从背包快照里读到过：读到过即为权威值，
+        // 即使是 0 也是“余额确实为 0”，不再与“还没同步”混淆
+        const bagConfirmed = { gold: false, exp: false, coupon: false, goldBean: false };
         try {
             const bagReply = await runExclusiveAutomationTask('login_bag_init', getBag);
             const items = getBagItems(bagReply);
-            let coupon = 0;
-            let goldBean = 0;
+            let bagGold = 0;
+            let bagCoupon = 0;
+            let bagGoldBean = 0;
+            let bagExp = 0;
+            let hasGold = false;
+            let hasCoupon = false;
+            let hasGoldBean = false;
+            let hasExp = false;
             for (const it of (items || [])) {
                 const id = toNum(it && it.id);
-                if (id === 1002) {
-                    coupon = toNum(it.count);
+                const count = toNum(it && it.count);
+                if (id === 1 || id === 1001) {
+                    hasGold = true;
+                    if (count > bagGold) bagGold = count;
+                } else if (id === 1002) {
+                    hasCoupon = true;
+                    bagCoupon = count;
                 } else if (id === 1005) {
-                    goldBean = toNum(it.count);
+                    hasGoldBean = true;
+                    bagGoldBean = count;
+                } else if (id === 1101) {
+                    hasExp = true;
+                    bagExp = count;
                 }
             }
             const state = getUserState();
-            state.coupon = Math.max(0, coupon);
-            state.goldBean = Math.max(0, goldBean);
+            const replyGold = toNum(state.gold);
+            const replyExp = toNum(state.exp);
+            // 登录回包不一定带金币余额，以背包中的金币为准，
+            // 否则统计基线会取到 0，今日累计会把全部余额算成今日收入
+            const loginGold = bagGold > 0 ? bagGold : replyGold;
+            if (loginGold > 0) {
+                state.gold = loginGold;
+                updateStatusGold(loginGold);
+            }
+            state.coupon = Math.max(0, bagCoupon);
+            state.goldBean = Math.max(0, bagGoldBean);
+            // 背包与回包一致（或背包明确给出该余额项）时才确认，
+            // 避免把尚未同步的 0 当成 0 点基线
+            bagConfirmed.gold = hasGold && loginGold === bagGold;
+            bagConfirmed.coupon = hasCoupon;
+            bagConfirmed.goldBean = hasGoldBean;
+            bagConfirmed.exp = hasExp && replyExp === bagExp;
         } catch {
-            // ignore
+            // 背包读取失败时不做任何确认，余额按“尚未同步”处理
         }
-        // 登录成功后，以当前金币/经验/点券作为统计基线，并清空会话增量
+        // 登录成功后，以当前金币/经验/点券/金豆作为统计基线，并清空会话增量
         const latest = getUserState();
         const accountId = process.env.FARM_ACCOUNT_ID || '';
-        initStatsWithPersistence(accountId, Number(latest.gold || 0), Number(latest.exp || 0), Number(latest.coupon || 0));
+        initStatsWithPersistence(
+            accountId,
+            Number(latest.gold || 0),
+            Number(latest.exp || 0),
+            Number(latest.coupon || 0),
+            Number(latest.goldBean || 0),
+            bagConfirmed,
+        );
         resetSessionGains();
 
         // 登录成功后启动各模块
@@ -720,6 +786,15 @@ async function startBot(config: any): Promise<void> {
             if (!canContinueLogin()) return;
         }
 
+        if (!canContinueLogin()) return;
+        // 登录成功后立刻拉一次土地快照：种植经验展示依赖这份快照，
+        // 之前只能等巡田循环跑起来才可能拿到数据，账号看起来「在线了但经验迟迟不出现」。
+        try {
+            await runExclusiveAutomationTask('login_land_snapshot', () => getAllLands());
+        } catch (e: any) {
+            logWarn('农场', `登录后拉取土地快照失败: ${e?.message || e}`);
+        }
+        startLandForecastRefreshTimer();
         if (!canContinueLogin()) return;
         // 立即发送一次状态，再串行跑启动序列（不阻塞状态上报）
         syncStatus();
@@ -742,10 +817,6 @@ function detachRuntimeListeners(): void {
         networkEvents.off('ws_error', onWsError);
         onWsError = null;
     }
-    if (onSellGain) {
-        networkEvents.off('sell', onSellGain);
-        onSellGain = null;
-    }
     if (onFarmHarvested) {
         networkEvents.off('farmHarvested', onFarmHarvested);
         onFarmHarvested = null;
@@ -756,8 +827,9 @@ function detachRuntimeListeners(): void {
     }
 }
 
-function quiesceBot(reason: string): void {
+function quiesceBot(reason: string, offlineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLINE' = 'ACCOUNT_OFFLINE'): void {
     shutdownStarted = true;
+    shutdownOfflineCode = offlineCode;
     runtimeGeneration += 1;
     isRunning = false;
     loginReady = false;
@@ -790,7 +862,7 @@ function handleTerminalDisconnect(payload: any): void {
         source, disconnectCode: code, reason, phase, diagnostics: payload?.diagnostics || null,
     });
     saveStats();
-    quiesceBot(`连接断开: ${source}`);
+    quiesceBot(`连接断开: ${source}`, 'GAME_OFFLINE');
     sendToMaster({
         type: 'account_disconnected',
         source,
@@ -811,7 +883,7 @@ function onKickout(payload: any): void {
     const diagnostics = payload?.diagnostics || null;
     log('系统', `检测到踢下线，准备自动停止账号。原因: ${reason} (${reasonCode})`, { reasonCode, diagnostics });
     saveStats();
-    quiesceBot(`踢下线: ${reason}`);
+    quiesceBot(`踢下线: ${reason}`, 'GAME_OFFLINE');
     sendToMaster({ type: 'account_kicked', reason, reasonCode, diagnostics });
     setTimeout(exitWorker, 300, 0);
 }
@@ -827,8 +899,14 @@ async function handleApiCall(msg: any): Promise<void> {
             const appliedRevision = applyRuntimeConfig((args && args[0]) || {}, true);
             result = { appliedRevision };
         } else {
-            if (!isRunning || shutdownStarted || !loginReady) {
-                throw new Error('账号未连接');
+            if (!isRunning || shutdownStarted) {
+                throw Object.assign(new Error('账号未连接'), { code: shutdownStarted ? shutdownOfflineCode : 'ACCOUNT_OFFLINE' });
+            }
+            if (!loginReady) {
+                throw Object.assign(new Error('账号未连接'), { code: 'GAME_OFFLINE' });
+            }
+            if (getWs()?.readyState !== 1) {
+                throw Object.assign(new Error('账号连接已断开'), { code: 'GAME_OFFLINE' });
             }
             switch (method) {
             case 'getLands':
@@ -1138,6 +1216,12 @@ async function handleApiCall(msg: any): Promise<void> {
             case 'purchaseProps':
                 result = await require('../services/commerce').purchaseProps(args[0], args[1], args[2]);
                 break;
+            case 'getPetShop':
+                result = await require('../services/commerce').getPetShop();
+                break;
+            case 'purchasePetShop':
+                result = await require('../services/commerce').purchasePetShop(args[0], args[1], args[2]);
+                break;
             case 'getMallCatalog':
                 result = await require('../services/commerce').getMallCatalog(args[0], args[1]);
                 break;
@@ -1149,9 +1233,6 @@ async function handleApiCall(msg: any): Promise<void> {
                 break;
             case 'purchaseMysteryOffer':
                 result = await require('../services/commerce').purchaseMysteryOffer(args[0]);
-                break;
-            case 'getSchedulers':
-                result = getSchedulerRegistrySnapshot();
                 break;
             default:
                 error = 'Unknown method';
@@ -1204,6 +1285,9 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 lastAt: Number(task.lastClaimAt || 0),
                 completedCount: Number(task.completedCount || 0),
                 totalCount: Number(task.totalCount || 3),
+                claimedCount: Number(task.claimedCount || 0),
+                claimableCount: Number(task.claimableCount || 0),
+                rewards: Array.isArray(task.rewards) ? task.rewards : [],
             },
             // 以下功能默认启用，enabled 固定为 true
             {
@@ -1213,11 +1297,11 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 doneToday: email.doneToday,
                 lastAt: email.lastCheckAt,
                 nextAt: email.nextCheckAt,
-                scheduledHour: email.scheduledHour,
+                checkIntervalMs: email.checkIntervalMs,
                 result: email.result,
                 lastError: email.lastError,
             },
-            { key: 'mall_free_gifts', label: '商城免费礼包', enabled: true, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0) },
+            { key: 'mall_free_gifts', label: '商城免费礼包', enabled: true, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0), rewards: Array.isArray(free.rewards) ? free.rewards : [] },
             {
                 key: 'daily_share',
                 label: '分享礼包',
@@ -1228,6 +1312,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 checkStatus: String(share.checkStatus || 'unchecked'),
                 canShare: typeof share.canShare === 'boolean' ? share.canShare : null,
                 lastAt: Number(share.lastClaimAt || share.lastCheckAt || 0),
+                rewards: Array.isArray(share.rewards) ? share.rewards : [],
             },
             {
                 key: 'vip_daily_gift',
@@ -1240,6 +1325,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 canClaim: typeof vip.canClaim === 'boolean' ? vip.canClaim : null,
                 result: vip.result || '',
                 lastError: vip.lastError || '',
+                rewards: Array.isArray(vip.rewards) ? vip.rewards : [],
             },
             {
                 key: 'month_card_gift',
@@ -1247,9 +1333,11 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 enabled: true,
                 doneToday: !!month.doneToday,
                 lastAt: Number(month.lastClaimAt || month.lastCheckAt || 0),
-                hasCard: Object.hasOwn(month, 'hasCard') ? !!month.hasCard : undefined,
-                hasClaimable: Object.hasOwn(month, 'hasClaimable') ? !!month.hasClaimable : undefined,
+                // null 表示服务器返回了月卡条目但无法确认是否开通，不能当成 false
+                hasCard: typeof month.hasCard === 'boolean' ? month.hasCard : null,
+                hasClaimable: typeof month.hasClaimable === 'boolean' ? month.hasClaimable : null,
                 result: month.result || '',
+                rewards: Array.isArray(month.rewards) ? month.rewards : [],
             },
         ],
     };

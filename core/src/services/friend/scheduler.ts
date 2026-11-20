@@ -17,12 +17,8 @@ const {
     getStealDelaySeconds,
     getAutoAcceptFriendMinLevel,
     getAutoAcceptRequireOwnLevel,
-    getAutoAcceptHarvestStealEnabled,
-    getAutoAcceptHarvestStealHarvest,
-    getAutoAcceptHarvestStealSteal,
 } = require('../../models/store');
 const { sellAllFruits } = require('../warehouse');
-const { getCareerInfo } = require('../career');
 const {
     getAllFriends,
     acceptFriends,
@@ -30,9 +26,7 @@ const {
     getApplications,
 } = require('./api');
 const {
-    isHarvestStealFilterEnabled,
     evaluateLevelFilter,
-    evaluateHarvestStealFilter,
 } = require('./application-filter');
 const {
     extractReplyFriends,
@@ -542,9 +536,6 @@ function getApplicationFilterConfig(): any {
         minLevel: getAutoAcceptFriendMinLevel(),
         requireOwnLevel: getAutoAcceptRequireOwnLevel(),
         ownLevel: toNum((getUserState() || {}).level),
-        harvestStealEnabled: getAutoAcceptHarvestStealEnabled(),
-        harvestPart: getAutoAcceptHarvestStealHarvest(),
-        stealPart: getAutoAcceptHarvestStealSteal(),
     };
 }
 
@@ -590,14 +581,12 @@ async function processFriendApplications(applications: any[]): Promise<void> {
     if (list.length === 0) return;
 
     const config = getApplicationFilterConfig();
-    const checkRatio = isHarvestStealFilterEnabled(config);
     const accountId: string = process.env.FARM_ACCOUNT_ID || '';
     const blacklist: Set<number> = new Set(getFriendBlacklist(accountId));
     const toAccept: number[] = [];
     const toReject: Array<{ gid: number; name: string; reason: string }> = [];
 
-    for (let i = 0; i < list.length; i++) {
-        const app: any = list[i];
+    for (const app of list) {
         const gid: number = toNum(app && app.gid);
         const name: string = (app && app.name) || `GID:${gid}`;
         const level: number = toNum(app && app.level);
@@ -614,26 +603,7 @@ async function processFriendApplications(applications: any[]): Promise<void> {
             continue;
         }
 
-        if (!checkRatio) {
-            toAccept.push(gid);
-            continue;
-        }
-
-        try {
-            const career = await getCareerInfo(gid);
-            const ratioDecision = evaluateHarvestStealFilter(career.harvest, career.steal, config);
-            if (ratioDecision.action === 'reject') {
-                toReject.push({ gid, name, reason: ratioDecision.reason || '收偷比不足' });
-            } else {
-                toAccept.push(gid);
-            }
-        } catch (e: any) {
-            logWarn('申请', `${name} 生涯查询失败，暂不处理: ${e && e.message ? e.message : e}`);
-        }
-
-        if (i < list.length - 1 && checkRatio) {
-            await randomDelay(150, 300);
-        }
+        toAccept.push(gid);
     }
 
     for (const item of toReject) {

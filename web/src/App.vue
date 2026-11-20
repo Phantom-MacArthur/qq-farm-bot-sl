@@ -25,7 +25,8 @@ const themeOverrides = computed(() => createNaiveThemeOverrides(false))
     <NMessageProvider placement="top-right" :max="4" keep-alive-on-hover>
       <NDialogProvider>
         <NNotificationProvider placement="top-right" :max="4">
-          <div class="app-shell h-screen w-screen overflow-hidden">
+          <!-- 外壳保持视口宽度；布局小于最小宽度时，侧栏、页头与正文统一横向滚动。 -->
+          <div class="app-shell">
             <RouterView />
             <ToastContainer />
           </div>

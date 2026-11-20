@@ -25,11 +25,17 @@ const MYSTERY_SHOP_AUTOMATION_KEYS = [
     'mystery_shop_purchase_notify',
 ] as const;
 
-const AUTO_BUY_CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
+interface MysteryShopPending {
+    visitKey: string;
+    buying: boolean;
+}
 
 interface MysteryShopAutoState {
     lastArrivalKey: string;
     lastPurchaseKey: string;
+    lastSubmittedKey?: string;
+    pending?: MysteryShopPending;
+    generation?: number;
 }
 
 interface MysteryShopDecision {
@@ -51,7 +57,12 @@ const defaultState: MysteryShopAutoState = {
 };
 
 function createMysteryShopAutoState(): MysteryShopAutoState {
-    return { lastArrivalKey: '', lastPurchaseKey: '' };
+    return { lastArrivalKey: '', lastPurchaseKey: '', lastSubmittedKey: '', pending: undefined, generation: 0 };
+}
+
+function resetMysteryShopPending(state: MysteryShopAutoState = defaultState): void {
+    state.pending = undefined;
+    state.generation = (state.generation || 0) + 1;
 }
 
 function isMysteryShopWatchEnabled(automation: any = {}): boolean {
@@ -68,7 +79,7 @@ function isCurrencyAllowed(currencyId: number, automation: any = {}): boolean {
 }
 
 function canAffordOffer(price: any): { ok: boolean; reason?: 'balance_unknown' | 'insufficient' } {
-    if (price?.balance === null || price?.balance === undefined) {
+    if (!Number.isFinite(price?.balance) || !Number.isSafeInteger(price?.count) || price.count < 0) {
         return { ok: false, reason: 'balance_unknown' };
     }
     if (Number(price.balance) < Number(price.count)) {
@@ -78,18 +89,15 @@ function canAffordOffer(price: any): { ok: boolean; reason?: 'balance_unknown' |
 }
 
 function mysteryShopVisitKey(shop: any): string {
-    const npcId = Math.max(0, Number(shop?.npc?.id) || 0);
-    const activeTime = Math.max(0, Number(shop?.activeTime) || 0);
-    return `${npcId}:${activeTime}`;
+    return require('./mystery-shop').mysteryShopVisitKey(shop);
 }
 
 function decideMysteryShopTick(shop: any, automation: any = {}, state: MysteryShopAutoState = defaultState): MysteryShopDecision {
     const npc = shop?.npc;
-    if (!shop?.active || !npc?.id || Number(npc?.reward?.count) <= 0) {
+    const visitKey = mysteryShopVisitKey(shop);
+    if (!visitKey || !(Number(npc?.reward?.count) > 0)) {
         return { notifyArrival: false, shouldBuy: false, skipReason: 'inactive' };
     }
-
-    const visitKey = mysteryShopVisitKey(shop);
     const notifyArrival = automation.mystery_shop_arrival_notify === true && state.lastArrivalKey !== visitKey;
 
     if (automation.mystery_shop_auto_buy !== true) {
@@ -172,42 +180,76 @@ function skipBuyLog(decision: MysteryShopDecision, shop: any): string {
     return '';
 }
 
-async function checkMysteryShopTick(options: {
+interface MysteryShopTickOptions {
     getAutomation?: () => any;
     getShop?: () => Promise<any>;
-    buy?: (npcId: number) => Promise<any>;
+    buy?: (npcId: number, source: string, expectedOffer: any, canContinue: () => boolean) => Promise<any>;
     state?: MysteryShopAutoState;
-} = {}): Promise<{ skipped?: boolean; reason?: string; bought?: boolean; push?: { title: string; content: string } | null }> {
-    const automation = (options.getAutomation || getAutomation)() || {};
+    canContinue?: () => boolean;
+}
+
+async function checkMysteryShopTick(input: MysteryShopTickOptions | (() => boolean) = {}): Promise<{
+    skipped?: boolean; reason?: string; bought?: boolean; push?: { title: string; content: string } | null;
+}> {
+    const options = typeof input === 'function' ? { canContinue: input } : input;
     const state = options.state || defaultState;
-    if (!isMysteryShopWatchEnabled(automation)) {
-        return { skipped: true, reason: 'disabled' };
-    }
+    const generation = state.generation;
+    const canContinue = () => state.generation === generation && options.canContinue?.() !== false;
+    const readAutomation = () => (options.getAutomation || getAutomation)() || {};
+    const cancelled = { skipped: true, reason: 'cancelled' };
+    if (!canContinue()) return cancelled;
+    const initialAutomation = readAutomation();
+    if (initialAutomation.mystery_shop_auto_buy !== true) state.pending = undefined;
+    if (!isMysteryShopWatchEnabled(initialAutomation)) return { skipped: true, reason: 'disabled' };
 
-    const commerce = require('./commerce');
-    const getShop = options.getShop || commerce.getMysteryShop;
-    const buy = options.buy || ((npcId: number) => commerce.purchaseMysteryOffer(npcId, 'auto'));
-
+    const getShop = options.getShop || require('./commerce').getMysteryShop;
     let shop: any;
     try {
         shop = await getShop();
     } catch (err: any) {
+        if (!canContinue()) return cancelled;
         logWarn('商城', `神秘商人检查失败: ${err.message}`, {
             module: 'shop', event: '神秘商人自动购买', result: 'error', error: err.message,
         });
         return { skipped: true, reason: 'error' };
     }
 
+    if (!canContinue()) return cancelled;
+    const automation = readAutomation();
+    if (!isMysteryShopWatchEnabled(automation)) {
+        state.pending = undefined;
+        return { skipped: true, reason: 'disabled' };
+    }
     const decision = decideMysteryShopTick(shop, automation, state);
-    if (decision.skipReason === 'inactive' || decision.skipReason === 'disabled') {
+    const visitKey = decision.visitKey;
+    if (!visitKey) {
+        state.pending = undefined;
         return { skipped: true, reason: decision.skipReason };
     }
 
+    if (automation.mystery_shop_auto_buy !== true || state.lastSubmittedKey === visitKey) {
+        state.pending = undefined;
+    } else if (state.pending?.visitKey !== visitKey) {
+        state.pending = { visitKey, buying: false };
+    }
+
     let bought = false;
-    if (decision.shouldBuy) {
+    let reason: string | undefined;
+    const pending = state.pending;
+    if (decision.shouldBuy && pending && !pending.buying) {
+        const buy = options.buy || require('./commerce').purchaseMysteryOffer;
+        const expectedOffer = {
+            visitKey,
+            reward: { id: shop.npc.reward.id, count: shop.npc.reward.count },
+            price: { id: shop.npc.price.id, count: shop.npc.price.count },
+        };
+        const canBuy = () => canContinue() && state.pending === pending;
+        if (!canBuy()) return cancelled;
+        pending.buying = true;
         try {
-            await buy(shop.npc.id);
+            await buy(shop.npc.id, 'auto', expectedOffer, canBuy);
             bought = true;
+            state.lastSubmittedKey = visitKey;
             log('商城', `神秘商人自动购买成功：${shop.npc.reward.name} x${shop.npc.reward.count}，花费 ${shop.npc.price.count} ${shop.npc.price.name}`, {
                 module: 'shop',
                 event: '神秘商人自动购买',
@@ -218,11 +260,23 @@ async function checkMysteryShopTick(options: {
                 price: shop.npc.price.count,
             });
         } catch (err: any) {
-            logWarn('商城', `神秘商人自动购买失败: ${err.message}`, {
-                module: 'shop', event: '神秘商人自动购买', result: 'error', error: err.message,
-            });
+            reason = err?.code || 'error';
+            if (reason === 'MYSTERY_PURCHASE_ALREADY_SUBMITTED' || reason === 'MYSTERY_PURCHASE_NOT_CONFIRMED') {
+                state.lastSubmittedKey = visitKey;
+            }
+            if (reason !== 'MYSTERY_PURCHASE_ALREADY_SUBMITTED' && reason !== 'MYSTERY_SESSION_CHANGED') {
+                logWarn('商城', `神秘商人自动购买失败: ${err.message}`, {
+                    module: 'shop', event: '神秘商人自动购买', result: 'error', error: err.message,
+                });
+            }
+        } finally {
+            if (state.pending === pending) {
+                if (state.lastSubmittedKey === visitKey || reason === 'MYSTERY_AUTO_BUY_DISABLED'
+                    || reason === 'MYSTERY_OFFER_STALE' || !canContinue()) state.pending = undefined;
+                else pending.buying = false;
+            }
         }
-    } else {
+    } else if (!decision.shouldBuy) {
         const message = skipBuyLog(decision, shop);
         if (message) {
             log('商城', message, {
@@ -235,12 +289,17 @@ async function checkMysteryShopTick(options: {
         }
     }
 
-    const flags = resolveMysteryShopPushFlags(decision, bought, automation, state);
-    if (!flags.arrival && !flags.purchase) {
-        return { bought };
-    }
-    commitMysteryShopNotify(state, String(decision.visitKey), flags);
-    return { bought, push: buildMysteryShopPush(shop, flags) };
+    if (!canContinue()) return cancelled;
+    const notificationAutomation = readAutomation();
+    if (notificationAutomation.mystery_shop_auto_buy !== true) state.pending = undefined;
+    const flags = resolveMysteryShopPushFlags({
+        ...decision,
+        notifyArrival: notificationAutomation.mystery_shop_arrival_notify === true && state.lastArrivalKey !== visitKey,
+    }, bought, notificationAutomation, state);
+    const result = reason ? { bought, reason } : { bought };
+    if (!flags.arrival && !flags.purchase) return result;
+    commitMysteryShopNotify(state, visitKey, flags);
+    return { ...result, push: buildMysteryShopPush(shop, flags) };
 }
 
 module.exports = {
@@ -249,7 +308,6 @@ module.exports = {
     DIAMOND_ITEM_ID,
     GOLD_BEAN_ITEM_ID,
     MYSTERY_SHOP_AUTOMATION_KEYS,
-    AUTO_BUY_CHECK_INTERVAL_MS,
     createMysteryShopAutoState,
     isMysteryShopWatchEnabled,
     mysteryShopConfigChanged,
@@ -261,4 +319,5 @@ module.exports = {
     commitMysteryShopNotify,
     buildMysteryShopPush,
     checkMysteryShopTick,
+    resetMysteryShopPending,
 };

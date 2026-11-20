@@ -8,6 +8,8 @@ import { computed, onUnmounted, ref, watch } from 'vue'
 import api from '@/api'
 import BookOverview from '@/components/illustrated/BookOverview.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useToastStore } from '@/stores/toast'
 
@@ -154,6 +156,8 @@ watch([currentAccountId, () => props.activityId], () => {
   rewardDetails.value = {}
   void request()
 }, { immediate: true })
+// 重新上线时按一次刷新键
+useReconnectRefresh(() => request())
 onUnmounted(() => sequence++)
 </script>
 
@@ -173,11 +177,13 @@ onUnmounted(() => sequence++)
           <span v-else-if="!state.active" class="share-head__badge is-ended">已结束</span>
         </p>
       </div>
-      <NButton secondary circle :loading="busy" title="刷新活动数据" aria-label="刷新活动数据" @click="request()">
-        <template #icon>
-          <span class="i-carbon-renew" />
-        </template>
-      </NButton>
+      <RefreshButton
+        icon-only
+        title="刷新活动数据"
+        :loading="busy"
+        :disabled="busy"
+        @click="request()"
+      />
     </header>
 
     <main>
@@ -664,59 +670,5 @@ onUnmounted(() => sequence++)
   color: var(--ui-muted);
   font-size: 13px;
   text-align: center;
-}
-
-@media (max-width: 720px) {
-  .share-tasks {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 520px) {
-  .tier-row {
-    grid-template-columns: 56px minmax(0, 1fr);
-    align-items: start;
-    gap: 12px;
-    padding: 16px;
-  }
-
-  .tier-row__threshold {
-    padding-top: 6px;
-  }
-
-  .tier-row__rewards {
-    gap: 8px;
-  }
-
-  .tier-row__state {
-    grid-column: 2;
-    justify-content: flex-start;
-    padding-top: 10px;
-    border-top: 1px solid var(--ui-border);
-    line-height: 18px;
-  }
-
-  .share-task {
-    grid-template-columns: 36px minmax(0, 1fr);
-    padding: 16px;
-  }
-
-  .share-logs {
-    padding: 14px 16px;
-  }
-
-  .share-task > :deep(.n-button) {
-    grid-column: 1 / -1;
-  }
-
-  .share-records li {
-    grid-template-columns: minmax(0, 1fr) 48px;
-  }
-
-  .share-records time {
-    grid-column: 1;
-    grid-row: 2;
-    margin-top: -6px;
-  }
 }
 </style>

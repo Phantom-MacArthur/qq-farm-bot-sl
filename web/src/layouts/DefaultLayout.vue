@@ -3,14 +3,13 @@ import { useResizeObserver } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import MobileBottomNav from '@/components/MobileBottomNav.vue'
 import PageHeader from '@/components/PageHeader.vue'
 import Sidebar from '@/components/Sidebar.vue'
+import { usePanelFloatingScrollbars } from '@/composables/useFloatingScrollbar'
 import { useAppStore } from '@/stores/app'
 
-const appStore = useAppStore()
 const route = useRoute()
-const { sidebarOpen, activityDetailOpen } = storeToRefs(appStore)
+const { activityDetailOpen, layoutMinWidth } = storeToRefs(useAppStore())
 // 页头固定在滚动区之外；活动详情自带标题栏，打开时隐藏通用页头。
 const activityDetail = computed(() => route.name === 'activity-center' && activityDetailOpen.value)
 const showPageHeader = computed(() => !route.meta.fullBleed && !activityDetail.value)
@@ -23,12 +22,14 @@ function measureScrollbar() {
   const el = scrollEl.value
   if (!el)
     return
-  // 页头右边缘与滚动区对齐：经典滚动条占位时让出它的宽度，悬浮滚动条（手机）为 0。
+  // 页头右边缘与滚动区对齐：经典滚动条占位时让出它的宽度。
   el.parentElement?.style.setProperty('--scrollbar-w', `${Math.max(0, el.offsetWidth - el.clientWidth)}px`)
+  el.style.setProperty('--page-bottom-inset', `${Math.max(0, document.documentElement.clientHeight - el.getBoundingClientRect().bottom)}px`)
 }
 
 function onPageScroll(event: Event) {
-  scrolled.value = (event.target as HTMLElement).scrollTop > 2
+  const el = event.target as HTMLElement
+  scrolled.value = el.scrollTop > 2
 }
 
 watch(() => route.fullPath, async () => {
@@ -38,16 +39,11 @@ watch(() => route.fullPath, async () => {
   measureScrollbar()
 }, { immediate: true })
 useResizeObserver(scrollEl, measureScrollbar)
+usePanelFloatingScrollbars(scrollEl)
 </script>
 
 <template>
-  <div class="liquid-layout w-screen flex overflow-hidden">
-    <div
-      v-if="sidebarOpen"
-      class="navigation-overlay fixed inset-0 z-40 lg:hidden"
-      @click="appStore.closeSidebar"
-    />
-
+  <div class="liquid-layout w-full flex overflow-hidden" :style="{ '--app-min-width': `${layoutMinWidth}px` }">
     <Sidebar />
 
     <main class="app-main relative h-full min-h-0 min-w-0 flex flex-1 flex-col overflow-hidden">
@@ -78,26 +74,31 @@ useResizeObserver(scrollEl, measureScrollbar)
         </div>
       </div>
     </main>
-
-    <MobileBottomNav v-if="!route.meta.fullBleed" />
   </div>
 </template>
 
 <style scoped>
 .liquid-layout {
-  height: 100dvh;
+  flex: 1 1 0%;
+  min-height: 0;
+  /* 最小宽度包含侧栏；外层统一横向滚动，页头、侧栏与正文一起移动。 */
+  min-width: var(--app-min-width);
 }
 
-.navigation-overlay {
-  background: rgba(30, 39, 32, 0.32);
-  -webkit-backdrop-filter: blur(3px);
-  backdrop-filter: blur(3px);
+/* 滚动条补偿直接生效，不能被全局动效规则变成 padding/margin 过渡。 */
+.app-content,
+.page-header-bar,
+.page-scroll {
+  transition-property: none;
 }
 
 /* 页头和内容共用左右留白，顶栏透出页面原有的渐变背景。 */
 .app-content {
-  --page-pad: 12px;
-  --sticky-top: 0px;
+  --page-pad: 16px;
+  /* 滚动条占位包含在右侧留白内，避免出现 16px + 滚动条宽度的额外间隙。 */
+  --page-pad-end: max(0px, calc(var(--page-pad) - var(--scrollbar-w, 0px)));
+  /* 吸顶偏移与 .page-scroll > * 的 margin-block-start 一致：吸顶后工具栏与子菜单保持原间距。 */
+  --sticky-top: 12px;
 }
 
 .page-header-bar {
@@ -105,7 +106,10 @@ useResizeObserver(scrollEl, measureScrollbar)
   z-index: 20;
   flex-shrink: 0;
   margin-right: var(--scrollbar-w, 0px);
-  padding: 16px var(--page-pad) 12px;
+  /* 视觉上的「上边距」＝ padding + 账号胶囊比标题高出的居中补偿（约 10.5px）+ 行盒半 leading（约 3.5px），
+     所以 padding 取 10px，字形上缘落在 ≈24px 处（getBoundingClientRect 的 title.top 含 leading，为 20.5），观感即 24px；
+     底部从 12px 压到 6px，减少标题栏与下方卡片的间距。 */
+  padding: 10px var(--page-pad-end) 6px var(--page-pad);
   background: transparent;
 }
 
@@ -126,15 +130,22 @@ useResizeObserver(scrollEl, measureScrollbar)
   position: relative;
   z-index: 0;
   min-height: 0;
-  padding: 0 var(--page-pad) var(--page-pad);
+  padding: 0 var(--page-pad-end) var(--page-pad-bottom, var(--page-pad)) var(--page-pad);
   isolation: isolate;
   scrollbar-gutter: stable;
 }
 
-.page-scroll > :deep(*) {
+.page-scroll > :deep(:where(:not(.panel-scroll-layout):not(:has(.panel-scroll-layout)))) {
   flex: 0 0 auto;
+}
+
+.page-scroll > :deep(*) {
   width: 100%;
-  margin-block-start: 16px;
+  min-width: 0;
+  max-width: none;
+  /* 首张卡片上缘对齐侧栏「概览」项的文字上缘（88px）：
+     标题栏 1 + 49 + 6 = 56，再加 12px 间距落在 68，与按钮行（top 80）视觉齐平。 */
+  margin-block-start: 12px;
   margin-inline: auto;
 }
 
@@ -169,31 +180,5 @@ useResizeObserver(scrollEl, measureScrollbar)
 
 .page-fade-leave-to {
   opacity: 0;
-}
-
-@media (max-width: 1023px) {
-  .app-content {
-    --page-pad: 12px;
-    padding-bottom: calc(66px + max(12px, env(safe-area-inset-bottom)) + var(--page-pad));
-  }
-
-  .page-header-bar {
-    padding-top: 12px;
-  }
-
-  .page-scroll {
-    padding: 0 var(--page-pad) 0;
-    scroll-padding-bottom: 0;
-  }
-
-  .page-scroll:not(.page-scroll--fill) > :deep(*) {
-    margin-block-start: 14px;
-  }
-}
-
-@media (max-width: 480px) {
-  .app-content {
-    --page-pad: 8px;
-  }
 }
 </style>

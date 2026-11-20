@@ -7,7 +7,6 @@ const { CONFIG } = require('../config/config');
 const { getClientVersion, getLoginDeviceInfo, isWechatPlatform } = require('./client-profile');
 const { createScheduler } = require('../services/scheduler');
 const { updateStatusFromLogin, updateStatusGold, updateStatusLevel } = require('../services/status');
-const { recordOperation } = require('../services/stats');
 const { invalidateLandForecast } = require('../services/level-forecast');
 const { types } = require('./proto');
 const { toLong, toNum, syncServerTime, log, logWarn, sleep } = require('./utils');
@@ -30,6 +29,14 @@ const {
 } = require('./request-priority');
 const { getAmbientRequestClass } = require('./request-context');
 const { startAceRuntime, stopAceRuntime, getAceDiagnostics } = require('../services/ace');
+
+// ============ WebSocket 协议级保活与死连接检测 ============
+/** WebSocket 协议级 ping 帧发送间隔（15s）。远快于应用层 25s 心跳，不占用业务班次。 */
+const WS_PING_INTERVAL_MS = 15000;
+/** 超过这个时间没有任何入站数据（业务回包、pong、推送通知等一律算）就判定连接死亡。 */
+const INBOUND_SILENCE_FATAL_MS = 45000;
+/** farm / friend 班次在队列里的等待上限，超过就让路而不是熬满 20s 请求超时刷故障日志。 */
+const BUSINESS_QUEUE_WAIT_MS = 12000;
 
 // ============ 事件发射器 (用于推送通知) ============
 const networkEvents = new EventEmitter();
@@ -70,6 +77,8 @@ interface PendingRequest {
     expectedErrorCodes: Set<number>;
     serviceName?: string;
     methodName?: string;
+    /** 这个请求是否会改变自家土地（决定回包要不要作废土地快照）。 */
+    affectsOwnFarm?: boolean;
     startedMono?: number;
     requestClass: RequestClass;
     criticalLane?: CriticalLane;
@@ -87,6 +96,8 @@ interface QueuedRequest {
     queueWaitKey: string;
     seq: number | null;
     settled: boolean;
+    /** 这个请求是否会改变自家土地（决定回包要不要作废土地快照）。 */
+    affectsOwnFarm: boolean;
     requestClass: RequestClass;
     criticalLane?: CriticalLane;
     enqueuedAt: number;
@@ -140,6 +151,7 @@ const networkScheduler = createScheduler('network');
 const gatewayTokens = new GatewayTokenProvider();
 let lastHeartbeatMono = performance.now();
 let lastInboundMono = performance.now();
+let lastPongMono = 0;
 let heartbeatMissCount = 0;
 
 function settleQueuedRequest(request: QueuedRequest, error?: Error, value?: { body: Buffer; meta: any }): void {
@@ -242,7 +254,7 @@ function drainRequestQueue(): void {
         if (!request) break;
 
         if (!isCurrentConnection(request.context) || request.context.phase !== 'online') {
-            settleQueuedRequest(request, new Error(`连接未打开: ${request.methodName}`));
+            settleQueuedRequest(request, Object.assign(new Error(`连接未打开: ${request.methodName}`), { code: 'GAME_OFFLINE' }));
             continue;
         }
 
@@ -251,6 +263,7 @@ function drainRequestQueue(): void {
         const pending: PendingRequest | undefined = request.expectReply ? {
             serviceName: request.serviceName,
             methodName: request.methodName,
+            affectsOwnFarm: request.affectsOwnFarm,
             startedMono: performance.now(),
             requestClass: request.requestClass,
             criticalLane: request.criticalLane,
@@ -270,7 +283,11 @@ function drainRequestQueue(): void {
                 return;
             }
             pendingCallbacks.delete(seq);
-            settleQueuedRequest(request, new Error(`发送失败: ${request.methodName}`));
+            const socketClosed = !isCurrentConnection(request.context) || request.context.socket.readyState !== WebSocket.OPEN;
+            const error = socketClosed
+                ? Object.assign(new Error(`连接未打开: ${request.methodName}`), { code: 'GAME_OFFLINE' })
+                : new Error(`发送失败: ${request.methodName}`);
+            settleQueuedRequest(request, error);
             drainRequestQueue();
         }).catch((error: any) => {
             pendingCallbacks.delete(seq);
@@ -280,18 +297,18 @@ function drainRequestQueue(): void {
     }
 }
 
-function rejectAllQueuedRequests(reason: string): number {
+function rejectAllQueuedRequests(error: Error): number {
     const entries = requestQueue.splice(0);
-    for (const request of entries) settleQueuedRequest(request, new Error(reason));
+    for (const request of entries) settleQueuedRequest(request, error);
     return entries.length;
 }
 
-function rejectAllPendingRequests(reason = '请求被中断'): number {
+function rejectAllPendingRequests(error: Error): number {
     const entries = Array.from(pendingCallbacks.entries());
     pendingCallbacks.clear();
     for (const [, pending] of entries) {
         try {
-            pending.callback(new Error(reason));
+            pending.callback(error);
         } catch {
             // ignore callback failure
         }
@@ -341,6 +358,77 @@ const userState = {
 };
 
 function getUserState() { return userState; }
+
+// ============ 土地快照影响范围判定 ============
+/**
+ * 好友农场的操作（浇水/务农/偷菜/放虫放草/放社交道具）和自家操作共用同一批 service，
+ * 之前这里对任何回包都作废土地快照，好友任务每轮都会把在途的自家 AllLands 快照打掉，
+ * 结果是自家快照长期写不进去、种植经验迟迟不出现。
+ * 这里在请求发出前先解析 host_gid，只有作用在自家农场（host_gid 为 0 或等于自己 GID）时才作废。
+ */
+const PLANT_HOST_GID_REQUEST_TYPES: Record<string, string> = {
+    Harvest: 'HarvestRequest',
+    WaterLand: 'WaterLandRequest',
+    Farming: 'FarmingRequest',
+    WeedOut: 'WeedOutRequest',
+    Insecticide: 'InsecticideRequest',
+    PutInsects: 'PutInsectsRequest',
+    PutWeeds: 'PutWeedsRequest',
+    PutSocialItem: 'PutSocialItemRequest',
+};
+
+function toGidNumber(raw: any): number {
+    if (raw === undefined || raw === null) return 0;
+    if (typeof raw === 'number') return raw;
+    const text = typeof raw.toString === 'function' ? raw.toString() : String(raw);
+    const value = Number(text);
+    return Number.isFinite(value) ? value : 0;
+}
+
+function decodeRequestHostGid(typeName: string, bodyBytes: Buffer): number | null {
+    const type = (types as any)[typeName];
+    if (!type || !bodyBytes || bodyBytes.length === 0) return null;
+    try {
+        const decoded = type.decode(bodyBytes);
+        const raw = decoded ? decoded.host_gid : null;
+        if (raw === undefined || raw === null) return null;
+        return toGidNumber(raw);
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * 这个请求会不会改变自家土地。判断不出来时按「会」处理：
+ * 宁可多作废一次快照，也不要把过期的土地数据当成有效数据展示。
+ */
+function requestAffectsOwnFarm(serviceName: string, methodName: string, bodyBytes: Buffer): boolean {
+    if (serviceName === 'gamepb.plantpb.PlantService') {
+        // AllLands 是纯读取，绝不能作废快照，否则快照刚写入就会被自己打掉。
+        if (methodName === 'AllLands') return false;
+        const typeName = PLANT_HOST_GID_REQUEST_TYPES[methodName];
+        // 播种/施肥/铲除/升级等自家专属操作没有 host_gid，一定影响自家。
+        if (!typeName) return true;
+        const gid = decodeRequestHostGid(typeName, bodyBytes);
+        if (gid === null) return true;
+        return gid === 0 || gid === toGidNumber(userState.gid);
+    }
+    if (serviceName === 'gamepb.itempb.ItemService' && methodName === 'Use') {
+        const type = (types as any).UseRequest;
+        if (!type) return true;
+        try {
+            const decoded = type.decode(bodyBytes);
+            const target = decoded ? decoded.target : null;
+            // 没有 target = 道具用在自己身上。
+            if (!target) return true;
+            const gid = toGidNumber(target.host_gid);
+            return gid === 0 || gid === toGidNumber(userState.gid);
+        } catch {
+            return true;
+        }
+    }
+    return false;
+}
 function getWsErrorState() { return { ...wsErrorState }; }
 function setWsErrorState(code: number, message: string): void {
     wsErrorState = { code: Number(code) || 0, at: Date.now(), message: message || '' };
@@ -405,7 +493,7 @@ async function sendMsg(context: ConnectionContext, serviceName: string, methodNa
     if (!isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
         if (pending) {
             pendingCallbacks.delete(seq);
-            pending.callback(new Error(`连接未打开: ${methodName}`));
+            pending.callback(Object.assign(new Error(`连接未打开: ${methodName}`), { code: 'GAME_OFFLINE' }));
         }
         return false;
     }
@@ -440,11 +528,11 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
     return new Promise((resolve, reject) => {
         const context = currentConnection;
         if (!context || !isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
-            reject(new Error(`连接未打开: ${methodName}`));
+            reject(Object.assign(new Error(`连接未打开: ${methodName}`), { code: 'GAME_OFFLINE' }));
             return;
         }
         if (context.phase !== 'online') {
-            reject(new Error(`账号尚未登录: ${methodName}`));
+            reject(Object.assign(new Error(`账号尚未登录: ${methodName}`), { code: 'GAME_OFFLINE' }));
             return;
         }
 
@@ -470,6 +558,7 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
             queueWaitKey: `request_queue_wait_${requestId}`,
             seq: null,
             settled: false,
+            affectsOwnFarm: requestAffectsOwnFarm(serviceName, methodName, bodyBytes),
             requestClass,
             criticalLane,
             enqueuedAt: performance.now(),
@@ -484,16 +573,23 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
             settleQueuedRequest(request, new Error(`请求超时: ${methodName} (stage=${stage}, pending=${pendingCallbacks.size}, queued=${requestQueue.length}, active=${describePendingRequests()})`));
             drainRequestQueue();
         });
-        if (requestClass === 'background') {
-            // background 是「后台补数据」：拿不到空闲槽位就早点让路，而不是一路熬到请求超时——
-            // 熬着既拖长队列，也会给调用方刷一堆看着像故障的超时日志。
-            const queueWaitMs = Math.min(timeoutMs, LOW_PRIORITY_QUEUE_WAIT_MS);
+        // 后台班次都有队列等待上限：拿到排队资格后等不到槽位就让路，而不是一路熬满 20s 请求超时。
+        // background 是补数据，最激进（8s）；farm/friend 是定时任务，给的宽容度大一些（12s）；
+        // foreground / critical 是实时流量，不设让路上限，必须等到有槽位或请求超时。
+        let queueWaitMs = 0;
+        if (requestClass === 'background') queueWaitMs = Math.min(timeoutMs, LOW_PRIORITY_QUEUE_WAIT_MS);
+        else if (requestClass === 'farm' || requestClass === 'friend') queueWaitMs = Math.min(timeoutMs, BUSINESS_QUEUE_WAIT_MS);
+        if (queueWaitMs > 0) {
             networkScheduler.setTimeoutTask(request.queueWaitKey, queueWaitMs, () => {
                 if (request.settled || request.seq !== null) return;
                 const index = requestQueue.indexOf(request);
                 if (index >= 0) requestQueue.splice(index, 1);
+                const classLabel = requestClass === 'background' ? '后台请求'
+                    : requestClass === 'farm' ? '农场定时请求'
+                    : requestClass === 'friend' ? '好友定时请求'
+                    : '请求';
                 settleQueuedRequest(request, new GatewayBusyError(
-                    `网关繁忙，后台请求已让路: ${methodName} (waited=${queueWaitMs}ms, `
+                    `网关繁忙，${classLabel}已让路: ${methodName} (class=${requestClass}, waited=${queueWaitMs}ms, `
                     + `pending=${pendingCallbacks.size}, queued=${requestQueue.length}, active=${describePendingRequests()})`,
                 ));
             });
@@ -547,10 +643,8 @@ function handleMessage(data: Buffer): void {
                 if (errorCode !== 0) {
                     pending.callback(new GatewayError(meta));
                 } else {
-                    if ((meta.service_name === 'gamepb.plantpb.PlantService' && meta.method_name !== 'AllLands')
-                        || (meta.service_name === 'gamepb.itempb.ItemService' && meta.method_name === 'Use')) {
-                        invalidateLandForecast();
-                    }
+                    // 只有影响自家土地的回包才作废土地快照：好友农场的操作动的是别人家的地。
+                    if (pending.affectsOwnFarm) invalidateLandForecast();
                     pending.callback(null, msg.body, meta);
                 }
                 
@@ -687,7 +781,6 @@ function handleNotify(msg: any): void {
             try {
                 const notify = types.BasicNotify.decode(eventBody);
                 if (notify.basic) {
-                    const oldLevel = userState.level;
                     if (hasOwn(notify.basic, 'level')) {
                         const nextLevel = toNum(notify.basic.level);
                         if (Number.isFinite(nextLevel) && nextLevel > 0) userState.level = nextLevel;
@@ -709,9 +802,6 @@ function handleNotify(msg: any): void {
                     }
                     if (shouldUpdateGoldView) {
                         updateStatusGold(userState.gold);
-                    }
-                    if (userState.level !== oldLevel) {
-                        recordOperation('levelUp', 1);
                     }
                 }
             } catch {}
@@ -957,6 +1047,7 @@ async function sendLogin(context: ConnectionContext, onLoginSuccess?: () => void
                 sendMsgAsync(service, method, body, { timeoutMs, priority: 'high', criticalLane: 'ace' })
             ));
             startHeartbeat(context);
+            startWebSocketPing(context);
             // 登录引导阶段串行完成普通请求，避免和后续活动、背包初始化同时挤入 Gateway。
             await fetchUserSettings();
             if (!isCurrentConnection(context)) return;
@@ -1046,6 +1137,55 @@ function startHeartbeat(context: ConnectionContext): void {
     }, { preventOverlap: true });
 }
 
+/**
+ * WebSocket 协议级保活 + 入站静默快速检测。
+ *
+ * 应用层心跳（25s × 3 次 + 30s 静默 ≈ 105s）才判死太慢了。这个函数加两道保险：
+ * 1. 每 15s 发一个 WebSocket ping 控制帧——不占业务班次、不产生请求超时，服务器必须在 10s 内回 pong；
+ * 2. 每 15s 检查一次入站静默：超过 45s 没有任何入站数据（业务回包、pong、推送通知一律算）就主动 terminate。
+ *
+ * 判定逻辑非常保守：只有"完全没有任何入站"才触发，避免误伤。pong 帧到达
+ * 时和业务回包一样会把 lastInboundMono 推到最新。
+ */
+function startWebSocketPing(context: ConnectionContext): void {
+    networkScheduler.clear('ws_ping_interval');
+    // 记录本次连接是否见过至少一个 pong，用来区分「服务器不支持 ws ping」和「服务器静默」。
+    let everSawPong = false;
+
+    networkScheduler.setIntervalTask('ws_ping_interval', WS_PING_INTERVAL_MS, () => {
+        if (!isCurrentConnection(context) || context.phase !== 'online') return;
+        if (context.intentionalClose || context.finalized) return;
+        const socket = context.socket as any;
+        if (!socket || socket.readyState !== WebSocket.OPEN) return;
+
+        // 1) 发 WebSocket ping。try/catch 防御 socket 正在关闭时抛错。
+        try {
+            socket.ping();
+        } catch {}
+
+        // 2) 服务器曾回过 pong，说明 ping/pong 通道工作正常。
+        if (lastPongMono > 0) everSawPong = true;
+
+        // 3) 入站静默检查：所有入站（业务回包、推送、pong）都算。
+        const now = performance.now();
+        const inboundSilenceMs = Math.max(0, now - lastInboundMono);
+        if (inboundSilenceMs >= INBOUND_SILENCE_FATAL_MS) {
+            const pongSilenceMs = lastPongMono > 0 ? Math.round(inboundSilenceMs) : -1;
+            const kind = everSawPong
+                ? `pong 和业务回包均中断 ${Math.round(inboundSilenceMs / 1000)}s`
+                : everSawPong === false
+                    ? `从未收到过 pong，业务回包也中断 ${Math.round(inboundSilenceMs / 1000)}s`
+                    : `无任何入站 ${Math.round(inboundSilenceMs / 1000)}s`;
+            logWarn('系统', `[WS] 连接静默判定死亡: ${kind}，将主动关闭重连`);
+            finalizeConnection(context, {
+                source: 'ws_silent',
+                reason: `${Math.round(inboundSilenceMs / 1000)}s 无入站数据 (pongSilenceMs=${pongSilenceMs})`,
+            });
+            try { socket.terminate(); } catch {}
+        }
+    }, { preventOverlap: true });
+}
+
 interface DisconnectDetails {
     source: string;
     code?: number;
@@ -1053,8 +1193,9 @@ interface DisconnectDetails {
 }
 
 function clearNetworkRuntime(reason: string): void {
-    rejectAllQueuedRequests(`请求已中断: ${reason}`);
-    rejectAllPendingRequests(`请求已中断: ${reason}`);
+    const error = Object.assign(new Error(`请求已中断: ${reason}`), { code: 'GAME_OFFLINE' });
+    rejectAllQueuedRequests(error);
+    rejectAllPendingRequests(error);
     networkScheduler.clearAll();
     stopAceRuntime(true);
     gatewayTokens.clear();
@@ -1142,6 +1283,11 @@ function connect(code: string | null, onLoginSuccess?: () => void): void {
             'Origin': 'https://gate-obt.nqf.qq.com',
         },
     });
+    // TCP 层 keepalive：空闲 30s 后开始发探测包，能让操作系统在 NAT 清表后尽快发现连接死亡。
+    // 这层是 ws ping/pong 的补充——TCP 探测不依赖 WebSocket 协议。
+    try { (socket as any).setKeepAlive(true, 30000); } catch {}
+    // 每次新连接重置 pong 追踪，避免旧连接的脏数据污染新连接。
+    lastPongMono = 0;
     const context: ConnectionContext = {
         id: nextConnectionId++,
         socket,
@@ -1196,6 +1342,13 @@ function connect(code: string | null, onLoginSuccess?: () => void): void {
                 networkEvents.emit('ws_error', { code: errorCode, message });
             }
         }
+    });
+
+    // WebSocket 协议级 pong：服务器必须在收到 ping 后 10s 内回 pong。
+    // pong 和业务回包一样算入站数据，都能把 lastInboundMono 推到最新。
+    (socket as any).on('pong', () => {
+        lastPongMono = performance.now();
+        lastInboundMono = lastPongMono;
     });
 }
 

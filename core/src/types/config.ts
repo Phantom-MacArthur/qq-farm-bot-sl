@@ -77,16 +77,14 @@ export interface AccountConfig {
   knownFriendGidSyncCooldownSec: number;
   friendsListCacheTtlSec: number;
   friendBlacklist: number[];
-  plantBlacklist: number[];
   stealDelaySeconds: number;
-  plantOrderRandom: boolean;
   plantDelaySeconds: number;
   fertilizerBuyOrganicCount: number;
   fertilizerBuyOrganicThresholdHours: number;
   fertilizerBuyNormalCount: number;
   fertilizerBuyNormalThresholdHours: number;
   fertilizerBuyCheckIntervalMinutes: number;
-  /** 每天检查邮箱奖励的时间（0-23 点，默认 10 点）；到点后每天只触发一次。 */
+  /** 已废弃：邮箱改为默认周期检查（登录/刷新 code 立即 + 冷却轮询），仅为兼容旧配置保留。 */
   emailClaimHour: number;
   bagSeedPriority: number[];
   /** 是否为明确排在前面的多格背包种子保留尚未连成布局的空地。 */
@@ -96,19 +94,24 @@ export interface AccountConfig {
   bagSeedFallbackStrategy: BagSeedFallbackStrategy;
   autoAcceptFriendMinLevel: number;
   autoAcceptRequireOwnLevel: boolean;
-  autoAcceptHarvestStealEnabled: boolean;
-  autoAcceptHarvestStealHarvest: number;
-  autoAcceptHarvestStealSteal: number;
+}
+
+export interface OfflineChannelCredential {
+  token: string;
+  wxPusherUid: string;
 }
 
 export interface OfflineReminder {
   channel: string;
+  // 旧版全局单凭据字段（webhook/dingtalk 等渠道仍在使用），保留以兼容既有数据。
   endpoint: string;
   token: string;
   secret: string;
+  wxPusherUid: string;
+  // 分渠道凭据：qmsg / wxpusher / wxpusher_wechat / bark 各自保存 token + wxPusherUid。
+  channelCredentials: Record<string, OfflineChannelCredential>;
   title: string;
   msg: string;
-  offlineDeleteSec: number;
 }
 
 export interface UIConfig {
@@ -166,6 +169,16 @@ export interface AutoCodeRefreshConfig {
   maxRetries: number;
 }
 
+/**
+ * 单用户「默认方案」：一份可跨账号复用的策略/自动化模板，落在 store.json。
+ * config 只保存方案相关的字段，应用时按字段合并，不会覆盖账号特有的好友列表等。
+ */
+export interface UserDefaultPlan {
+  enabled: boolean;
+  config: Record<string, any>;
+  updatedAt: number;
+}
+
 export interface GlobalConfig {
   accountConfigs: Record<string, AccountConfig>;
   defaultAccountConfig: AccountConfig;
@@ -173,6 +186,9 @@ export interface GlobalConfig {
   ui: UIConfig;
   loginSettings: LoginSettings;
   captureSettings: CaptureSettings;
-  offlineReminder: OfflineReminder;
+  // 下线提醒按账号分别保存（origin 同款：accountOfflineReminders[accountId]）。
+  accountOfflineReminders: Record<string, OfflineReminder>;
+  offlineReminderDefault: OfflineReminder | null;
   systemConfig: SystemConfig | null;
+  userDefaultPlan: UserDefaultPlan | null;
 }

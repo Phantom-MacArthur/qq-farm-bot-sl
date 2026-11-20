@@ -6,6 +6,7 @@ import api from '@/api'
 import ActivityHeader from '@/components/activity/ActivityHeader.vue'
 import ActivityShell from '@/components/activity/ActivityShell.vue'
 import CommerceItemImage from '@/components/commerce/CommerceItemImage.vue'
+import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useToastStore } from '@/stores/toast'
 
@@ -178,6 +179,8 @@ watch([currentAccountId, () => props.kind], () => {
   group.value = 0
   void request()
 }, { immediate: true })
+// 重新上线时按一次刷新键
+useReconnectRefresh(() => request())
 onUnmounted(() => {
   sequence++
   window.clearInterval(clock)
@@ -455,7 +458,7 @@ onUnmounted(() => {
 }
 .autumn-scroll {
   position: absolute;
-  inset: calc(86px + env(safe-area-inset-top)) 0 0;
+  inset: 86px 0 0;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -1156,142 +1159,5 @@ summary:focus-visible {
   margin-top: 16px;
   color: var(--accent);
   font-weight: var(--fw-700);
-}
-
-@media (max-width: 900px) {
-  .autumn-scroll {
-    top: calc(72px + env(safe-area-inset-top));
-  }
-  .hero {
-    flex-wrap: wrap;
-  }
-  .hero__stats {
-    width: 100%;
-  }
-  .hero__stats > div {
-    flex: 1;
-  }
-  .days {
-    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
-  }
-  .ladder {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    row-gap: 18px;
-  }
-  .ladder__track {
-    display: none;
-  }
-}
-@media (max-width: 640px) {
-  .autumn-body {
-    padding: 16px 12px 36px;
-  }
-  .hero {
-    gap: 14px;
-    margin-bottom: 16px;
-  }
-  .hero__art {
-    width: 72px;
-    height: 72px;
-  }
-  .hero__art img {
-    width: 58px;
-    height: 58px;
-  }
-  .hero__copy {
-    flex-basis: calc(100% - 86px);
-  }
-  .hero__copy h2 {
-    font-size: 22px;
-  }
-  .hero__copy p {
-    font-size: 13px;
-  }
-  .panel {
-    padding: 18px 16px;
-    border-radius: 14px;
-  }
-  .panel__head {
-    flex-wrap: wrap;
-  }
-  .sticks {
-    gap: 8px;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .stick {
-    min-height: 150px;
-    padding: 16px 4px 12px;
-    border-radius: 60px 60px 12px 12px;
-  }
-  .stick strong {
-    font-size: 20px;
-  }
-  .action-row .btn {
-    flex: 1;
-    padding: 0 12px;
-  }
-  .slip__text {
-    font-size: 20px;
-  }
-  .ladder {
-    grid-template-columns: 1fr;
-    row-gap: 8px;
-    padding-top: 0;
-  }
-  .rung {
-    display: grid;
-    grid-template-areas:
-      'dot value tag'
-      'dot list list';
-    grid-template-columns: 34px minmax(0, 1fr) auto;
-    align-items: center;
-    gap: 6px 12px;
-    padding: 12px;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: #fff;
-    text-align: left;
-  }
-  .rung--ready {
-    border-color: #e0a42b;
-    background: #fff9ea;
-  }
-  .rung--claimed {
-    opacity: 0.6;
-  }
-  .rung__dot {
-    grid-area: dot;
-    align-self: start;
-  }
-  .rung__value {
-    grid-area: value;
-  }
-  .rung .tag {
-    grid-area: tag;
-  }
-  .rung ul,
-  .rung--ready ul,
-  .rung--claimed ul {
-    grid-area: list;
-    flex-flow: row wrap;
-    gap: 6px 14px;
-    padding: 0;
-    border: 0;
-    background: transparent;
-    opacity: 1;
-  }
-  .rung li {
-    flex-direction: row;
-    gap: 6px;
-  }
-  .tasks {
-    grid-template-columns: 1fr;
-  }
-  .fold summary {
-    padding: 14px 16px;
-  }
-  .fold__body {
-    padding: 4px 16px 16px;
-  }
 }
 </style>

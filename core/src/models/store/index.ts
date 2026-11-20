@@ -3,6 +3,7 @@ const sharedState = require('./shared-state');
 const globalConfig = require('./global-config');
 const accountConfig = require('./account-config');
 const accounts = require('./accounts');
+const userDefaultPlan = require('./user-default-plan');
 
 module.exports = {
     // Account config
@@ -29,7 +30,6 @@ module.exports = {
     setFriendBlacklist: accountConfig.setFriendBlacklist,
     addFriendToBlacklist: accountConfig.addFriendToBlacklist,
     getStealDelaySeconds: accountConfig.getStealDelaySeconds,
-    getPlantOrderRandom: accountConfig.getPlantOrderRandom,
     getPlantDelaySeconds: accountConfig.getPlantDelaySeconds,
     getFertilizerBuyOrganicCount: accountConfig.getFertilizerBuyOrganicCount,
     getFertilizerBuyOrganicThresholdHours: accountConfig.getFertilizerBuyOrganicThresholdHours,
@@ -38,11 +38,6 @@ module.exports = {
     getFertilizerBuyCheckIntervalMinutes: accountConfig.getFertilizerBuyCheckIntervalMinutes,
     getAutoAcceptFriendMinLevel: accountConfig.getAutoAcceptFriendMinLevel,
     getAutoAcceptRequireOwnLevel: accountConfig.getAutoAcceptRequireOwnLevel,
-    getAutoAcceptHarvestStealEnabled: accountConfig.getAutoAcceptHarvestStealEnabled,
-    getAutoAcceptHarvestStealHarvest: accountConfig.getAutoAcceptHarvestStealHarvest,
-    getAutoAcceptHarvestStealSteal: accountConfig.getAutoAcceptHarvestStealSteal,
-    getPlantBlacklist: accountConfig.getPlantBlacklist,
-    setPlantBlacklist: accountConfig.setPlantBlacklist,
     getDefaultAccountConfig: accountConfig.getDefaultAccountConfig,
 
     // Global config
@@ -56,6 +51,9 @@ module.exports = {
     setAutoCodeRefresh: globalConfig.setAutoCodeRefresh,
     getOfflineReminder: globalConfig.getOfflineReminder,
     setOfflineReminder: globalConfig.setOfflineReminder,
+    getOfflineReminderDefault: globalConfig.getOfflineReminderDefault,
+    setOfflineReminderDefault: globalConfig.setOfflineReminderDefault,
+    applyOfflineReminderDefault: globalConfig.applyOfflineReminderDefault,
 
     // Accounts
     getAccounts: accounts.getAccounts,
@@ -67,4 +65,11 @@ module.exports = {
     // System config
     getSystemConfig: globalConfig.getSystemConfig,
     setSystemConfig: globalConfig.setSystemConfig,
+
+    // 默认方案（单用户全局一份，跨账号复用策略/自动化）
+    getDefaultPlan: userDefaultPlan.getDefaultPlan,
+    setDefaultPlan: userDefaultPlan.setDefaultPlan,
+    importDefaultPlanFromAccount: userDefaultPlan.importDefaultPlanFromAccount,
+    resetDefaultPlan: userDefaultPlan.resetDefaultPlan,
+    applyDefaultPlan: userDefaultPlan.applyDefaultPlan,
 };

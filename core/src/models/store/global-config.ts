@@ -7,6 +7,8 @@ const sharedState = require('./shared-state');
 
 const {
     PUSHOO_CHANNELS,
+    OFFLINE_PUSH_CHANNELS,
+    defaultChannelCredentials,
     DEFAULT_OFFLINE_REMINDER,
     DEFAULT_LOGIN_SETTINGS,
     DEFAULT_CAPTURE_SETTINGS,
@@ -19,13 +21,10 @@ const {
 
 function normalizeOfflineReminder(input: unknown): OfflineReminder {
     const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
-    let offlineDeleteSec = Number.parseInt(src.offlineDeleteSec, 10);
-    if (!Number.isFinite(offlineDeleteSec) || offlineDeleteSec < 0) {
-        offlineDeleteSec = DEFAULT_OFFLINE_REMINDER.offlineDeleteSec;
-    }
     const rawChannel = (src.channel !== undefined && src.channel !== null)
         ? String(src.channel).trim().toLowerCase()
         : '';
+    const channelSet = new Set(OFFLINE_PUSH_CHANNELS);
     const endpoint = (src.endpoint !== undefined && src.endpoint !== null)
         ? String(src.endpoint).trim()
         : DEFAULT_OFFLINE_REMINDER.endpoint;
@@ -33,7 +32,7 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
         || (PUSHOO_CHANNELS.has(String(endpoint || '').trim().toLowerCase())
             ? String(endpoint || '').trim().toLowerCase()
             : DEFAULT_OFFLINE_REMINDER.channel);
-    const channel = PUSHOO_CHANNELS.has(migratedChannel)
+    const channel = channelSet.has(migratedChannel)
         ? migratedChannel
         : DEFAULT_OFFLINE_REMINDER.channel;
     const token = (src.token !== undefined && src.token !== null)
@@ -48,14 +47,39 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
     const msg = (src.msg !== undefined && src.msg !== null)
         ? String(src.msg).trim()
         : DEFAULT_OFFLINE_REMINDER.msg;
+    const wxPusherUid = (src.wxPusherUid !== undefined && src.wxPusherUid !== null)
+        ? String(src.wxPusherUid).trim()
+        : DEFAULT_OFFLINE_REMINDER.wxPusherUid;
+    // 分渠道凭据：以 4 个支持的渠道为固定键，叠加已有数据；
+    // 旧版若已配置 token/wxPusherUid 且对应渠道尚未填写，则作为该渠道凭据迁移。
+    const credentialsInput = (src.channelCredentials && typeof src.channelCredentials === 'object')
+        ? src.channelCredentials as Record<string, any>
+        : {};
+    const channelCredentials = defaultChannelCredentials();
+    for (const key of OFFLINE_PUSH_CHANNELS) {
+        const entry = credentialsInput[key];
+        if (entry && typeof entry === 'object') {
+            channelCredentials[key] = {
+                token: String(entry.token ?? '').trim(),
+                wxPusherUid: String(entry.wxPusherUid ?? '').trim(),
+            };
+        }
+        if (!channelCredentials[key]!.token && key === channel) {
+            channelCredentials[key]!.token = token;
+        }
+        if (!channelCredentials[key]!.wxPusherUid && key === channel) {
+            channelCredentials[key]!.wxPusherUid = wxPusherUid;
+        }
+    }
     return {
         channel,
         endpoint,
         token,
         secret,
+        wxPusherUid,
+        channelCredentials,
         title,
         msg,
-        offlineDeleteSec,
     };
 }
 
@@ -81,8 +105,14 @@ function setUITheme(theme: unknown): UIConfig {
     return getUI();
 }
 
-function getOfflineReminder(): OfflineReminder {
-    return normalizeOfflineReminder(globalConfig.offlineReminder);
+function getOfflineReminder(accountId: string): OfflineReminder {
+    const id = String(accountId || '').trim();
+    if (!id)
+        return normalizeOfflineReminder({});
+    const stored = globalConfig.accountOfflineReminders
+        ? globalConfig.accountOfflineReminders[id]
+        : undefined;
+    return normalizeOfflineReminder(stored || {});
 }
 
 function normalizeLoginSettings(input: unknown): LoginSettings {
@@ -153,11 +183,40 @@ function setCaptureSettings(cfg: Partial<CaptureSettings> | undefined): CaptureS
     return getCaptureSettings();
 }
 
-function setOfflineReminder(cfg: Partial<OfflineReminder> | undefined): OfflineReminder {
-    const current = normalizeOfflineReminder(globalConfig.offlineReminder);
+function setOfflineReminder(cfg: Partial<OfflineReminder> | undefined, accountId: string): OfflineReminder {
+    const id = String(accountId || '').trim();
+    if (!id)
+        throw new Error('下线提醒必须关联当前账号');
+    if (!globalConfig.accountOfflineReminders)
+        globalConfig.accountOfflineReminders = {};
+    const current = normalizeOfflineReminder(globalConfig.accountOfflineReminders[id] || {});
     const next = normalizeOfflineReminder({ ...current, ...(cfg || {}) });
-    saveGlobalConfig({ offlineReminder: next });
-    return getOfflineReminder();
+    saveGlobalConfig({
+        accountOfflineReminders: {
+            ...globalConfig.accountOfflineReminders,
+            [id]: next,
+        },
+    });
+    return getOfflineReminder(id);
+}
+
+function getOfflineReminderDefault(): OfflineReminder | null {
+    return globalConfig.offlineReminderDefault
+        ? normalizeOfflineReminder(globalConfig.offlineReminderDefault)
+        : null;
+}
+
+function setOfflineReminderDefault(cfg: Partial<OfflineReminder> | undefined): OfflineReminder {
+    const next = normalizeOfflineReminder(cfg || {});
+    saveGlobalConfig({ offlineReminderDefault: next });
+    return getOfflineReminderDefault()!;
+}
+
+function applyOfflineReminderDefault(accountId: string): OfflineReminder | null {
+    const def = getOfflineReminderDefault();
+    if (!def)
+        return null;
+    return setOfflineReminder(def, accountId);
 }
 
 function getSystemConfig(): SystemConfig | null {
@@ -228,7 +287,23 @@ function setSystemConfig(config: Partial<SystemConfig> | undefined): SystemConfi
 const { loadGlobalConfig } = sharedState;
 loadGlobalConfig();
 // Apply offlineReminder normalization after load
-globalConfig.offlineReminder = normalizeOfflineReminder(globalConfig.offlineReminder);
+{
+    const raw = (globalConfig as any).accountOfflineReminders;
+    const normalized: Record<string, OfflineReminder> = {};
+    if (raw && typeof raw === 'object') {
+        for (const key of Object.keys(raw)) {
+            normalized[key] = normalizeOfflineReminder(raw[key]);
+        }
+    }
+    // 迁移旧版全局 offlineReminder（若已有数据）到 _default 但仍保留为模板字段。
+    const legacy = (globalConfig as any).offlineReminder;
+    if (legacy && typeof legacy === 'object') {
+        if (!globalConfig.offlineReminderDefault)
+            globalConfig.offlineReminderDefault = normalizeOfflineReminder(legacy);
+        delete (globalConfig as any).offlineReminder;
+    }
+    globalConfig.accountOfflineReminders = normalized;
+}
 globalConfig.loginSettings = normalizeLoginSettings(globalConfig.loginSettings);
 globalConfig.captureSettings = normalizeCaptureSettings(globalConfig.captureSettings);
 globalConfig.autoCodeRefresh = normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh);
@@ -251,6 +326,9 @@ module.exports = {
     normalizeAutoCodeRefresh,
     getOfflineReminder,
     setOfflineReminder,
+    getOfflineReminderDefault,
+    setOfflineReminderDefault,
+    applyOfflineReminderDefault,
     getSystemConfig,
     setSystemConfig,
 };

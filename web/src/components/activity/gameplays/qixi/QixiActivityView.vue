@@ -753,47 +753,4 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 .qixi-empty > span {
   font-size: 34px;
 }
-@media (max-width: 900px) {
-  .resource-band {
-    gap: 12px;
-    padding: 16px;
-  }
-  .resource-list {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .resource-item {
-    min-height: 64px;
-  }
-  .qixi-section {
-    padding: 20px 16px;
-  }
-  .dew-hint {
-    padding: 12px 16px;
-  }
-  .stage-grid,
-  .gift-workspace {
-    grid-template-columns: 1fr;
-  }
-  .friend-list {
-    grid-template-columns: 1fr;
-  }
-  .gift-composer {
-    padding: 14px;
-  }
-  .rules-section {
-    padding: 16px;
-  }
-}
-@media (max-width: 380px) {
-  .section-heading {
-    align-items: stretch;
-    flex-direction: column;
-  }
-  .primary-command {
-    width: 100%;
-  }
-  .resource-list {
-    grid-template-columns: 1fr;
-  }
-}
 </style>

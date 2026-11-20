@@ -51,12 +51,11 @@ const FARM_LAND_OVERLAY_TTL_MS = 60 * 1000
 export const useFarmStore = defineStore('farm', () => {
   const lands = ref<Land[]>([])
   const seeds = ref<any[]>([])
-  const summary = ref<any>({})
   const socialEvents = ref<any[]>([])
   const career = ref<CareerHarvestSteal | null>(null)
   const loading = ref(false)
   const loaded = ref(false)
-  const error = ref('')
+  const error = ref(false)
   const interactionItems = ref<FriendInteractionItemDto[]>([])
   const interactionItemsLoading = ref(false)
   const interactionItemsError = ref('')
@@ -150,7 +149,7 @@ export const useFarmStore = defineStore('farm', () => {
     const sequence = ++landRequestSequence
     loading.value = true
     loaded.value = false
-    error.value = ''
+    error.value = false
     try {
       const { data } = await api.get('/api/lands', {
         headers: { 'x-account-id': accountId },
@@ -160,22 +159,21 @@ export const useFarmStore = defineStore('farm', () => {
         return false
       if (data && data.ok) {
         lands.value = applyLandOverlay(data.data.lands || [])
-        summary.value = data.data.summary || {}
         socialEvents.value = Array.isArray(data.data.socialEvents) ? data.data.socialEvents : []
         career.value = data.data.career || null
         return true
       }
       career.value = null
       socialEvents.value = []
-      error.value = getApiErrorMessage(data, '无法读取土地数据')
+      error.value = true
       return false
     }
-    catch (cause: any) {
+    catch {
       if (sequence !== landRequestSequence)
         return false
       career.value = null
       socialEvents.value = []
-      error.value = getApiErrorMessage(cause, '无法读取土地数据，请稍后重试')
+      error.value = true
       return false
     }
     finally {
@@ -190,12 +188,11 @@ export const useFarmStore = defineStore('farm', () => {
     landRequestSequence++
     fertilizeRequestSequence++
     lands.value = []
-    summary.value = {}
     socialEvents.value = []
     career.value = null
     loading.value = false
     loaded.value = false
-    error.value = ''
+    error.value = false
     landOverlay = null
     fertilizePending.value = false
     fertilizeError.value = ''
@@ -409,7 +406,6 @@ export const useFarmStore = defineStore('farm', () => {
 
   return {
     lands,
-    summary,
     socialEvents,
     career,
     seeds,

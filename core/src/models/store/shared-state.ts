@@ -30,14 +30,26 @@ const DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC: number = 60;
 let systemConfigMigrated: boolean = false;
 let accountFallbackConfig: AccountConfig;
 
+const OFFLINE_PUSH_CHANNELS = ['qmsg', 'wxpusher', 'wxpusher_wechat', 'bark'];
+
+function defaultChannelCredentials(): Record<string, { token: string, wxPusherUid: string }> {
+    const map: Record<string, { token: string, wxPusherUid: string }> = {};
+    for (const channel of OFFLINE_PUSH_CHANNELS) {
+        map[channel] = { token: '', wxPusherUid: '' };
+    }
+    return map;
+}
+
 const DEFAULT_OFFLINE_REMINDER: OfflineReminder = {
-    channel: 'webhook',
+    channel: 'wxpusher',
     endpoint: '',
     token: '',
     secret: '',
-    title: '账号下线提醒',
-    msg: '账号下线',
-    offlineDeleteSec: 0,
+    wxPusherUid: '',
+    channelCredentials: defaultChannelCredentials(),
+    // 标题留空，发送时用当前账号备注兜底。
+    title: '',
+    msg: '农场下线',
 };
 
 const DEFAULT_LOGIN_SETTINGS: LoginSettings = {
@@ -116,18 +128,8 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     knownFriendGidSyncCooldownSec: DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC,
     friendsListCacheTtlSec: DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC,
     friendBlacklist: [],
-    plantBlacklist: [
-        20002,
-        20003,
-        20059,
-        20065,
-        20064,
-        20060,
-        20061,
-    ],
     stealDelaySeconds: 1,
-    plantOrderRandom: true,
-    plantDelaySeconds: 2,
+    plantDelaySeconds: 0,
     fertilizerBuyOrganicCount: 1,
     fertilizerBuyOrganicThresholdHours: 10,
     fertilizerBuyNormalCount: 1,
@@ -140,9 +142,6 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     bagSeedFallbackStrategy: 'level',
     autoAcceptFriendMinLevel: 0,
     autoAcceptRequireOwnLevel: false,
-    autoAcceptHarvestStealEnabled: true,
-    autoAcceptHarvestStealHarvest: 8,
-    autoAcceptHarvestStealSteal: 1,
 };
 
 const ALLOWED_AUTOMATION_KEYS: Set<string> = new Set(Object.keys(DEFAULT_ACCOUNT_CONFIG.automation));
@@ -181,18 +180,6 @@ function normalizeAutoAcceptFriendMinLevel(input: unknown, fallback: number = 0)
     const value = Number.parseInt(input as string, 10);
     const base = Number.isFinite(value) ? value : fallback;
     return Math.max(0, Math.min(200, base));
-}
-
-function normalizeAutoAcceptHarvestStealHarvest(input: unknown, fallback: number = 8): number {
-    const value = Number.parseInt(input as string, 10);
-    const base = Number.isFinite(value) ? value : fallback;
-    return Math.max(0, Math.min(9999, base));
-}
-
-function normalizeAutoAcceptHarvestStealSteal(input: unknown, fallback: number = 1): number {
-    const value = Number.parseInt(input as string, 10);
-    const base = Number.isFinite(value) ? value : fallback;
-    return Math.max(1, Math.min(9999, base));
 }
 
 function normalizeBagSeedPriority(input: unknown): number[] {
@@ -312,8 +299,6 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
     const knownFriendGidSyncCooldownSec = normalizeKnownFriendGidSyncCooldownSec(base.knownFriendGidSyncCooldownSec);
     const friendsListCacheTtlSec = normalizeFriendsListCacheTtlSec(base.friendsListCacheTtlSec);
 
-    const rawPlantBlacklist: number[] = Array.isArray(base.plantBlacklist) ? base.plantBlacklist : [];
-
     return {
         ...DEFAULT_ACCOUNT_CONFIG,
         ...base,
@@ -328,9 +313,7 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
             ? String(base.plantingStrategy) as PlantingStrategy
             : DEFAULT_ACCOUNT_CONFIG.plantingStrategy,
         preferredSeedId: Math.max(0, Number.parseInt(String(base.preferredSeedId), 10) || 0),
-        plantBlacklist: rawPlantBlacklist.map(Number).filter(n => Number.isFinite(n) && n > 0),
         stealDelaySeconds: Math.max(0, Math.min(300, Number(base.stealDelaySeconds) || 0)),
-        plantOrderRandom: !!(base.plantOrderRandom),
         plantDelaySeconds: Math.max(0, Math.min(60, Number(base.plantDelaySeconds) || 0)),
         fertilizerBuyOrganicCount: Math.max(0, Math.min(10000, Number(base.fertilizerBuyOrganicCount) || 0)),
         fertilizerBuyOrganicThresholdHours: Math.max(0, Math.min(990, Number(base.fertilizerBuyOrganicThresholdHours) || 0)),
@@ -346,11 +329,6 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         bagSeedFallbackStrategy: normalizeBagSeedFallbackStrategy(base.bagSeedFallbackStrategy),
         autoAcceptFriendMinLevel: normalizeAutoAcceptFriendMinLevel(base.autoAcceptFriendMinLevel, DEFAULT_ACCOUNT_CONFIG.autoAcceptFriendMinLevel),
         autoAcceptRequireOwnLevel: !!base.autoAcceptRequireOwnLevel,
-        autoAcceptHarvestStealEnabled: base.autoAcceptHarvestStealEnabled !== undefined
-            ? !!base.autoAcceptHarvestStealEnabled
-            : DEFAULT_ACCOUNT_CONFIG.autoAcceptHarvestStealEnabled,
-        autoAcceptHarvestStealHarvest: normalizeAutoAcceptHarvestStealHarvest(base.autoAcceptHarvestStealHarvest, DEFAULT_ACCOUNT_CONFIG.autoAcceptHarvestStealHarvest),
-        autoAcceptHarvestStealSteal: normalizeAutoAcceptHarvestStealSteal(base.autoAcceptHarvestStealSteal, DEFAULT_ACCOUNT_CONFIG.autoAcceptHarvestStealSteal),
     };
 }
 
@@ -426,16 +404,8 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         );
     }
 
-    if (Array.isArray(src.plantBlacklist)) {
-        cfg.plantBlacklist = src.plantBlacklist.map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
-    }
-
     if (src.stealDelaySeconds !== undefined && src.stealDelaySeconds !== null) {
         cfg.stealDelaySeconds = Math.max(0, Math.min(300, Number(src.stealDelaySeconds) || 0));
-    }
-
-    if (src.plantOrderRandom !== undefined && src.plantOrderRandom !== null) {
-        cfg.plantOrderRandom = !!src.plantOrderRandom;
     }
 
     if (src.plantDelaySeconds !== undefined && src.plantDelaySeconds !== null) {
@@ -490,18 +460,6 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         cfg.autoAcceptRequireOwnLevel = !!src.autoAcceptRequireOwnLevel;
     }
 
-    if (src.autoAcceptHarvestStealEnabled !== undefined && src.autoAcceptHarvestStealEnabled !== null) {
-        cfg.autoAcceptHarvestStealEnabled = !!src.autoAcceptHarvestStealEnabled;
-    }
-
-    if (src.autoAcceptHarvestStealHarvest !== undefined && src.autoAcceptHarvestStealHarvest !== null) {
-        cfg.autoAcceptHarvestStealHarvest = normalizeAutoAcceptHarvestStealHarvest(src.autoAcceptHarvestStealHarvest, cfg.autoAcceptHarvestStealHarvest);
-    }
-
-    if (src.autoAcceptHarvestStealSteal !== undefined && src.autoAcceptHarvestStealSteal !== null) {
-        cfg.autoAcceptHarvestStealSteal = normalizeAutoAcceptHarvestStealSteal(src.autoAcceptHarvestStealSteal, cfg.autoAcceptHarvestStealSteal);
-    }
-
     return cfg;
 }
 
@@ -526,8 +484,10 @@ const globalConfig: GlobalConfig = {
     },
     loginSettings: { ...DEFAULT_LOGIN_SETTINGS },
     captureSettings: { ...DEFAULT_CAPTURE_SETTINGS },
-    offlineReminder: { ...DEFAULT_OFFLINE_REMINDER },
+    accountOfflineReminders: {},
+    offlineReminderDefault: null,
     systemConfig: null,
+    userDefaultPlan: null,
 };
 
 function resolveAccountId(accountId: unknown): string {
@@ -558,9 +518,16 @@ function loadGlobalConfig(): void {
             const theme = String(globalConfig.ui.theme || '').toLowerCase();
             globalConfig.ui.theme = theme === 'light' ? 'light' : 'dark';
 
-            // offlineReminder normalization done in global-config
+            // 下线提醒按账号存储：accountOfflineReminders[accountId]
+            if (data.accountOfflineReminders && typeof data.accountOfflineReminders === 'object') {
+                globalConfig.accountOfflineReminders = data.accountOfflineReminders;
+            }
+            // 旧版全局 offlineReminder 保留在 globalConfig 上，由 global-config 加载时迁移
             if (data.offlineReminder && typeof data.offlineReminder === 'object') {
-                globalConfig.offlineReminder = data.offlineReminder;
+                (globalConfig as any).offlineReminder = data.offlineReminder;
+            }
+            if (data.offlineReminderDefault && typeof data.offlineReminderDefault === 'object') {
+                globalConfig.offlineReminderDefault = data.offlineReminderDefault;
             }
 
             if (data.loginSettings && typeof data.loginSettings === 'object') {
@@ -603,6 +570,10 @@ function loadGlobalConfig(): void {
                         ? data.captureSettings.autoImportQqGids
                         : DEFAULT_CAPTURE_SETTINGS.autoImportQqGids,
                 };
+            }
+
+            if (data.userDefaultPlan && typeof data.userDefaultPlan === 'object') {
+                globalConfig.userDefaultPlan = data.userDefaultPlan;
             }
 
             if (data.systemConfig && typeof data.systemConfig === 'object') {
@@ -668,6 +639,8 @@ module.exports = {
     DEFAULT_KNOWN_FRIEND_GID_SYNC_COOLDOWN_SEC,
     DEFAULT_FRIENDS_LIST_CACHE_TTL_SEC,
     DEFAULT_OFFLINE_REMINDER,
+    OFFLINE_PUSH_CHANNELS,
+    defaultChannelCredentials,
     DEFAULT_LOGIN_SETTINGS,
     DEFAULT_CAPTURE_SETTINGS,
     DEFAULT_AUTO_CODE_REFRESH,
@@ -691,8 +664,6 @@ module.exports = {
     normalizeTimeString,
     normalizeIntervals,
     normalizeAutoAcceptFriendMinLevel,
-    normalizeAutoAcceptHarvestStealHarvest,
-    normalizeAutoAcceptHarvestStealSteal,
     normalizeAccountConfig,
     cloneAccountConfig,
     resolveAccountId,

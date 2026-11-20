@@ -6,16 +6,20 @@ export {};
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum, getSystemDateKey } = require('../utils/utils');
+const { describeRewardItems } = require('../utils/reward-items');
 
 const DAILY_KEY: string = 'month_card_gift';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
 
+// doneDateKey 只表示「今天查过了、不用再轮询」，不等于已领取；是否领到看 claimedDateKey。
 let doneDateKey: string = '';
+let claimedDateKey: string = '';
 let lastCheckAt: number = 0;
 let lastClaimAt: number = 0;
 let lastResult: string = '';
 let lastHasCard: boolean | null = null;
 let lastHasClaimable: boolean | null = null;
+let lastRewards: any[] = [];
 
 function markDoneToday(): void {
     doneDateKey = getSystemDateKey();
@@ -23,6 +27,10 @@ function markDoneToday(): void {
 
 function isDoneToday(): boolean {
     return doneDateKey === getSystemDateKey();
+}
+
+function isClaimedToday(): boolean {
+    return claimedDateKey === getSystemDateKey();
 }
 
 function getRewardSummary(items: any[]): string {
@@ -63,9 +71,13 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
     try {
         const rep: any = await getMonthCardInfos();
         const infos: any[] = Array.isArray(rep && rep.infos) ? rep.infos : [];
-        lastHasCard = infos.length > 0;
         const claimable: any[] = infos.filter((x: any) => x && x.can_claim && Number(x.goods_id || 0) > 0);
+        // 服务器对没买月卡的账号也会返回月卡条目（can_claim=false），条目存在不代表已开通；
+        // 只有能领或今天领过才能确认有卡，否则无法区分「未开通」和「已在游戏内领过」。
+        lastHasCard = infos.length === 0 ? false : (claimable.length > 0 || isClaimedToday() ? true : null);
         lastHasClaimable = claimable.length > 0;
+        if (claimable.length > 0) lastRewards = describeRewardItems(claimable.map((x: any) => x.reward));
+        else if (!isClaimedToday()) lastRewards = [];
         if (!infos.length) {
             markDoneToday();
             lastResult = 'none';
@@ -87,10 +99,12 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
             return false;
         }
         let claimed: number = 0;
+        const claimedItems: any[] = [];
         for (const info of claimable) {
             try {
                 const ret: any = await claimMonthCardReward(Number(info.goods_id || 0));
                 const items: any[] = Array.isArray(ret && ret.items) ? ret.items : [];
+                claimedItems.push(...items);
                 const reward: string = getRewardSummary(items);
                 log('月卡', reward ? `领取成功 → ${reward}` : '领取成功', {
                     module: 'task',
@@ -111,6 +125,9 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
         if (claimed > 0) {
             lastClaimAt = Date.now();
             markDoneToday();
+            claimedDateKey = getSystemDateKey();
+            lastHasClaimable = false;
+            if (claimedItems.length > 0) lastRewards = describeRewardItems(claimedItems);
             lastResult = 'ok';
             return true;
         }
@@ -136,11 +153,13 @@ module.exports = {
     performDailyMonthCardGift,
     getMonthCardDailyState: () => ({
         key: DAILY_KEY,
-        doneToday: isDoneToday(),
+        doneToday: isClaimedToday(),
+        checkedToday: isDoneToday(),
         lastCheckAt,
         lastClaimAt,
         result: lastResult,
         hasCard: lastHasCard,
         hasClaimable: lastHasClaimable,
+        rewards: lastRewards,
     }),
 };
