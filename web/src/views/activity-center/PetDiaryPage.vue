@@ -409,7 +409,7 @@ watch(pet, (value) => {
                       选择好友
                     </option>
                     <option v-for="f in friends.friends" :key="String(f.gid)" :value="String(f.gid)">
-                      {{ f.name || f.gid }}
+                      {{ f.name || '未命名好友' }}
                     </option>
                   </select>
                   <button type="button" class="pet-button pet-button--small pet-button--primary" :disabled="!!pending || !friendId || !pet.hunt.canPlunder" @click="diary.readExtra('friend', friendId)">

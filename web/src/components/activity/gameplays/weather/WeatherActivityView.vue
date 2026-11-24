@@ -37,7 +37,7 @@ const filteredFriends = computed(() => {
     return orderedFriends.value.slice(0, 60)
   return orderedFriends.value.filter((friend) => {
     const name = friend.name.toLowerCase()
-    return name.includes(keyword) || String(friend.gid || '').includes(keyword)
+    return name.includes(keyword)
   }).slice(0, 60)
 })
 
@@ -230,7 +230,7 @@ watch(friendList, (friends) => {
           <div class="friend-toolbar">
             <label class="search-field">
               <span class="i-carbon-search" />
-              <input v-model="friendSearch" type="search" placeholder="搜索好友名称或 GID">
+              <input v-model="friendSearch" type="search" placeholder="搜索好友名称">
             </label>
           </div>
           <div v-if="filteredFriends.length === 0" class="operation-empty">
@@ -250,7 +250,7 @@ watch(friendList, (friends) => {
               <span v-else class="friend-avatar-fallback i-carbon-user-avatar" />
               <span class="friend-option__name">
                 <strong>{{ friendName(friend) }}</strong>
-                <small>Lv.{{ friend.level || '--' }} · GID {{ friend.gid }}</small>
+                <small>Lv.{{ friend.level || '--' }}</small>
               </span>
               <span v-if="inspectingGid === friend.gid" class="friend-option__loading i-carbon-circle-dash animate-spin" />
             </button>
@@ -277,7 +277,7 @@ watch(friendList, (friends) => {
               <span v-else class="friend-avatar-fallback i-carbon-user-avatar" />
               <span class="selected-friend__name">
                 <strong :title="friendName(selectedFriend)">{{ friendName(selectedFriend) }}</strong>
-                <small>Lv.{{ selectedFriend.level || '--' }} · GID {{ selectedFriend.gid }}</small>
+                <small>Lv.{{ selectedFriend.level || '--' }}</small>
               </span>
             </div>
             <small>{{ selectedFriendState.detail }}</small>

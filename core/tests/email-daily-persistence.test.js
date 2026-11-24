@@ -213,7 +213,7 @@ test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重
         start() { loginReady = true; startDailyRoutineTimer(); },
     })`, {
         exports: {}, Date: h.ClockDate,
-        process: { env: { FARM_ACCOUNT_ID: 'worker' }, send: noop, on: noop },
+        process: { env: { FARM_ACCOUNT_ID: 'worker' }, send: noop, on: noop, once: noop },
         require: name => modules[name] || {},
     }, { filename });
     const flush = () => new Promise(resolve => setImmediate(resolve));

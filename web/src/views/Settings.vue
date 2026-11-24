@@ -2474,7 +2474,7 @@ async function confirmDefaultPlanOperation() {
 
                 <div class="grid grid-cols-2 gap-2">
                   <BaseSwitch v-model="localCaptureConfig.enabled" label="启用抓包登录" />
-                  <BaseSwitch v-model="localCaptureConfig.autoImportQqGids" label="QQ 好友 GID 自动导入" :disabled="!localCaptureConfig.enabled" />
+                  <BaseSwitch v-model="localCaptureConfig.autoImportQqGids" label="自动导入 QQ 好友" :disabled="!localCaptureConfig.enabled" />
                 </div>
                 <div class="grid grid-cols-2 mt-4 gap-2">
                   <BaseSwitch v-model="localLoginSettings.wechatQrLogin" label="微信扫码登录" />

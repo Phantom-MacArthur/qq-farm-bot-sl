@@ -16,9 +16,9 @@ interface DataProviderOptions {
     broadcastConfigToWorkers: (accountId?: string) => void;
     buildConfigSnapshotForAccount: (accountId: string) => any;
     broadcastGameConfigReload?: () => void;
-    startWorker: (account: any) => boolean;
-    stopWorker: (accountId: string) => void;
-    restartWorker: (account: any) => void;
+    startWorker: (account: any) => boolean | Promise<boolean>;
+    stopWorker: (account: any) => void | Promise<void>;
+    restartWorker: (account: any) => void | Promise<void>;
     scheduleAutoCodeRefresh?: (accountId: string) => void;
     rescheduleAllAutoCodeRefresh?: () => void;
     stopAutoCodeRefresh?: (accountId: string) => void;
@@ -491,27 +491,27 @@ function createDataProvider(options: DataProviderOptions) {
                 const refreshed = await refreshAccountCode(acc.id, 'manual_start');
                 if (refreshed) return true;
             }
-            startWorker(acc);
+            await startWorker(acc);
             return true;
         },
 
-        stopAccount: (accountRef: string) => {
+        stopAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            if (accountId) stopWorker(accountId);
+            if (accountId) await stopWorker(acc);
             // 退出轮询：用户手动停掉的账号不能又被定时刷新拉起来。
             if (typeof pauseAutoCodeRefreshPolling === 'function') pauseAutoCodeRefreshPolling(acc.id);
             return true;
         },
 
-        restartAccount: (accountRef: string) => {
+        restartAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
             if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(acc.id);
             if (typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(acc.id);
-            restartWorker(acc);
+            await restartWorker(acc);
             return true;
         },
 

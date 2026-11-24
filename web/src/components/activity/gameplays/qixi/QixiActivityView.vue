@@ -41,7 +41,7 @@ const filteredFriends = computed(() => {
     return source.slice(0, 60)
   return source.filter((friend) => {
     const name = String(friend.remark || friend.name || '').toLowerCase()
-    return name.includes(keyword) || String(friend.gid || '').includes(keyword)
+    return name.includes(keyword)
   }).slice(0, 60)
 })
 
@@ -49,7 +49,7 @@ const selectedFriend = computed(() => props.friends.find(friend => String(friend
 const giftDisabled = computed(() => !selectedFriend.value || sachetBalance.value < 1 || props.pendingGift || !props.activity?.actions.gift.enabled)
 
 function friendName(friend: FriendOption) {
-  return String(friend.remark || friend.name || `好友 ${friend.gid || ''}`)
+  return String(friend.remark || friend.name || '未命名好友')
 }
 
 function friendAvatar(friend: FriendOption) {
@@ -194,7 +194,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
           <div class="friend-picker">
             <label class="search-field">
               <span class="i-carbon-search" />
-              <input v-model="search" type="search" placeholder="搜索好友昵称或 GID">
+              <input v-model="search" type="search" placeholder="搜索好友昵称">
             </label>
             <div v-if="friendsLoading && friends.length === 0" class="friend-state">
               正在加载好友
@@ -220,7 +220,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
                 <span v-else class="friend-avatar-fallback i-carbon-user-avatar" />
                 <span class="friend-option__name">
                   <strong>{{ friendName(friend) }}</strong>
-                  <small>GID {{ friend.gid }}<template v-if="friend.level"> · Lv.{{ friend.level }}</template></small>
+                  <small v-if="friend.level">Lv.{{ friend.level }}</small>
                 </span>
                 <span v-if="selectedFriendGid === String(friend.gid)" class="friend-option__mark i-carbon-checkmark-filled" />
                 <span v-else class="friend-option__mark i-carbon-chevron-right" />
@@ -232,7 +232,6 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
             <div v-if="selectedFriend" class="selected-friend">
               <span>赠送给</span>
               <strong>{{ friendName(selectedFriend) }}</strong>
-              <small>GID {{ selectedFriend.gid }}</small>
             </div>
             <div v-else class="selected-friend selected-friend--empty">
               <span class="i-carbon-user-follow" />

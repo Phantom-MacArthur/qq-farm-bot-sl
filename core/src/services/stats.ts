@@ -53,6 +53,17 @@ const operations: OperationsMap = {
     steal: 0,
 };
 
+const ranchOperations: Record<string, number> = {
+    harvest: 0,
+    produce: 0,
+    helpFarming: 0,
+    steal: 0,
+};
+
+function restoreOperationCounts(target: Record<string, number>, saved: Record<string, number> = {}): void {
+    for (const key of Object.keys(target)) target[key] = Number(saved?.[key]) || 0;
+}
+
 let currentDateKey: string | null = null;
 
 const assetKeys = ['ranchCoupon', 'pinecone', 'grass', 'dung', 'diamond', 'fertilizerNormal', 'fertilizerOrganic', 'canNormal', 'canOrganic'] as const;
@@ -210,10 +221,11 @@ interface CurrentValues {
     goldBean: number;
 }
 
-function recordOperation(type: string, count: number = 1): void {
+function recordOperation(type: string, count: number = 1, scene: 'farm' | 'ranch' = 'farm'): void {
     checkAndResetDailyStats();
-    if (operations[type] !== undefined) {
-        operations[type] += count;
+    const target = scene === 'ranch' ? ranchOperations : operations;
+    if (target[type] !== undefined) {
+        target[type] += count;
         scheduleSave();
     }
 }
@@ -226,9 +238,8 @@ function checkAndResetDailyStats(current?: CurrentValues): void {
     const todayKey: string = getTodayKey();
     if (currentDateKey && currentDateKey !== todayKey) {
         console.warn(`[统计] 检测到跨天，重置每日统计 (${currentDateKey} -> ${todayKey})`);
-        Object.keys(operations).forEach((key: string) => {
-            operations[key] = 0;
-        });
+        restoreOperationCounts(operations);
+        restoreOperationCounts(ranchOperations);
         for (const key of assetKeys) {
             delete assetBaseline[key];
             delete assetBalances[key];
@@ -288,11 +299,12 @@ function doSave(): void {
     checkAndResetDailyStats();
     const todayKey: string = getTodayKey();
     const data: any = {
-        date: todayKey,
+        date: currentDateKey ?? getTodayKey(),
         operations: { ...operations },
         todayBaseline: { ...todayBaseline },
         baselineReady: { ...baselineReady },
         assetBaseline: { ...assetBaseline },
+        ranchOperations: { ...ranchOperations },
         savedAt: Date.now(),
     };
     savePersistedStats(currentAccountId, data);
@@ -367,6 +379,7 @@ function initStatsWithPersistence(
     currentDateKey = todayKey;
     const saved: any = loadPersistedStats(accountId);
 
+    restoreOperationCounts(ranchOperations, saved?.date === todayKey ? saved.ranchOperations : undefined);
     initStats(gold, exp, coupon, goldBean, confirmed);
 
     if (saved && saved.date === todayKey) {
@@ -590,6 +603,7 @@ function getStats(statusData: any, userState: any, connected: boolean, limits: a
         uptime: process.uptime(),
         sessionElapsedSeconds: Math.max(0, (Date.now() - sessionStartedAt) / 1000),
         operations: operationsSnapshot,
+        ranchOperations: { ...ranchOperations },
         sessionExpGained: session.expGained,
         sessionGoldGained: session.goldGained,
         sessionCouponGained: session.couponGained,

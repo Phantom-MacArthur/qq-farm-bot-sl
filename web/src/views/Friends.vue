@@ -78,10 +78,11 @@ const filteredKnownFriendGids = computed(() => {
   const list = knownFriendGids.value.map(gid => ({
     gid: Number(gid),
     synced: friendGidSet.value.has(Number(gid)),
+    name: friends.value.find(friend => Number(friend.gid) === Number(gid))?.name || '未命名好友',
   }))
   if (!keyword)
     return list
-  return list.filter(item => String(item.gid).includes(keyword))
+  return list.filter(item => item.name.toLowerCase().includes(keyword))
 })
 
 const syncedGidCount = computed(() => filteredKnownFriendGids.value.filter(item => item.synced).length)
@@ -99,12 +100,12 @@ async function handleRemoveUnsyncedGids() {
     return
   const unsyncedGids = filteredKnownFriendGids.value.filter(item => !item.synced).map(item => item.gid)
   if (unsyncedGids.length === 0) {
-    toast.info('没有需要删除的未同步 GID')
+    toast.info('没有未同步的好友记录')
     return
   }
   const result = await friendStore.removeUnsyncedKnownFriendGids(currentAccountId.value, unsyncedGids)
   if (result.ok && result.removedCount > 0) {
-    toast.success(`已删除 ${result.removedCount} 个未同步的 GID`)
+    toast.success(`已删除 ${result.removedCount} 条未同步的好友记录`)
   }
 }
 
@@ -419,7 +420,7 @@ function requestUseInteractionItem(friend: any) {
   const landIds = selectedInteractionIds(key, item.itemId)
   if (landIds.length === 0)
     return
-  const friendName = String(friend?.name || `GID ${key}`)
+  const friendName = String(friend?.name || '未命名好友')
   const saleConditionWarning = item.saleConditionSatisfiedCount > 0
     ? `该道具库存中有 ${item.saleConditionSatisfiedCount} 个已满足游戏配置的出售条件，可能已过活动或有效期，`
     : ''
@@ -486,7 +487,7 @@ function requestUseFarmInteractionItem(friend: any) {
   if (!accountId || !item || item.targetKind !== 'farm' || item.count < 1)
     return
   const key = friendKey(friend?.gid)
-  const name = String(friend?.name || `GID ${key}`)
+  const name = String(friend?.name || '未命名好友')
   confirmAction(`确定在 ${name} 的农场放出 1 个“${item.name}”吗？`, async () => {
     const result = await friendStore.useFarmInteractionItem(accountId, key, item.itemId)
     if (!result)
@@ -632,7 +633,7 @@ async function handleDeleteFriend(friend: any, e: Event) {
   if (!currentAccountId.value)
     return
   const gid = Number(friend?.gid) || 0
-  const name = String(friend?.name || `GID:${gid}`).trim()
+  const name = String(friend?.name || '未命名好友').trim()
   confirmAction(
     `确定删除好友 ${name} 吗？这会真正解除游戏好友关系且不可恢复，并加入本地黑名单。之后自动偷菜、帮忙、捣乱和自动同意申请都会跳过该好友。`,
     async () => {
@@ -868,9 +869,9 @@ async function handleRemoveKnownFriendGid(friend: any, e: Event) {
   if (!currentAccountId.value)
     return
   const gid = Number(friend?.gid) || 0
-  const name = String(friend?.name || `GID ${gid}`).trim()
+  const name = String(friend?.name || '未命名好友').trim()
   confirmAction(
-    `确定将 ${name} 移出同步列表吗？后续如果最近访客再次命中，这个 GID 仍可被自动同步回来。`,
+    `确定将 ${name} 移出同步列表吗？后续如果最近访客再次命中，该好友仍可被自动同步回来。`,
     async () => {
       await friendStore.removeKnownFriendGid(currentAccountId.value!, gid)
       await refreshFriendsAfterKnownGidChange()
@@ -925,7 +926,7 @@ async function handleBatchAddKnownFriendGids() {
     return
   const gids = parseBatchGids(batchGidInput.value)
   if (gids.length === 0) {
-    toast.error('请输入有效的 GID 列表')
+    toast.error('请输入有效的好友导入数据')
     return
   }
   const result = await friendStore.batchAddKnownFriendGids(currentAccountId.value, gids)
@@ -933,7 +934,7 @@ async function handleBatchAddKnownFriendGids() {
     batchGidInput.value = ''
     showBatchAddGidModal.value = false
     await refreshFriendsAfterKnownGidChange()
-    toast.success(`已批量添加 ${result.addedCount} 个 GID`)
+    toast.success(`已批量添加 ${result.addedCount} 条好友记录`)
   }
 }
 
@@ -1066,11 +1067,11 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     size="tiny"
                     @click="openGidListModal"
                   >
-                    {{ knownFriendGidCount }} 个 GID
+                    {{ knownFriendGidCount }} 条好友记录
                   </NButton>
                 </div>
                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  QQ 新好友接口依赖已知 GID。系统会自动从最近访客补充，进入好友农场明确失败时自动移除失效 GID。
+                  系统会自动从最近访客补充 QQ 好友记录，并移除已确认失效的记录。
                 </p>
               </div>
               <div class="flex shrink-0 gap-2">
@@ -1095,7 +1096,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   size="sm"
                   @click="showBatchAddGidModal = true"
                 >
-                  批量新增 GID
+                  批量导入好友
                 </BaseButton>
               </div>
             </div>
@@ -1340,8 +1341,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   <span v-else class="i-carbon-user text-gray-400" />
                 </div>
                 <div>
-                  <span class="font-medium">{{ item.name || `GID:${item.gid}` }}</span>
-                  <span class="ml-2 text-sm text-gray-400">({{ item.gid }})</span>
+                  <span class="font-medium">{{ item.name || '未命名好友' }}</span>
                 </div>
               </div>
               <NButton
@@ -1386,7 +1386,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
               <div class="min-w-0 flex-1">
                 <div class="mb-1 flex flex-wrap items-center gap-2">
                   <span class="max-w-full truncate text-base text-gray-800 font-medium dark:text-gray-100">
-                    {{ record.nick || `GID:${record.visitorGid}` }}
+                    {{ record.nick || '未命名访客' }}
                   </span>
                   <span
                     class="rounded-full px-2 py-0.5 text-xs font-medium"
@@ -1396,9 +1396,6 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   </span>
                   <span v-if="record.level" class="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-300">
                     Lv.{{ record.level }}
-                  </span>
-                  <span v-if="record.visitorGid" class="text-xs text-gray-400">
-                    GID {{ record.visitorGid }}
                   </span>
                 </div>
                 <div class="text-sm text-gray-600 dark:text-gray-300">
@@ -1427,14 +1424,14 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
     />
 
     <NModal :show="showBatchAddGidModal" @update:show="showBatchAddGidModal = $event">
-      <NCard class="gid-entry-card" title="批量新增 GID" :bordered="false" closable @close="showBatchAddGidModal = false">
+      <NCard class="gid-entry-card" title="批量导入好友" :bordered="false" closable @close="showBatchAddGidModal = false">
         <p class="mb-3 mt-0 text-sm text-gray-500 dark:text-gray-400">
           支持一行一个或用逗号、空格分隔，提交时自动去重。
         </p>
         <BaseTextarea
           v-model="batchGidInput"
           :rows="8"
-          placeholder="每行一个 GID，或用逗号、空格分隔"
+          placeholder="每行一条好友记录，或用逗号、空格分隔"
         />
         <template #footer>
           <div class="flex justify-end gap-2">
@@ -1455,12 +1452,12 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
     </NModal>
 
     <NModal :show="showGidListModal" @update:show="showGidListModal = $event">
-      <NCard class="gid-list-card" title="已导入的 GID" :bordered="false" closable @close="showGidListModal = false">
+      <NCard class="gid-list-card" title="已导入的好友" :bordered="false" closable @close="showGidListModal = false">
         <p class="mt-0 text-sm text-gray-500 dark:text-gray-400">
           共 {{ knownFriendGidCount }} 个，已同步 {{ syncedGidCount }} 个，未同步 {{ unsyncedGidCount }} 个。
         </p>
         <div class="mb-4 flex gap-2">
-          <BaseInput v-model="gidSearchKeyword" placeholder="搜索 GID..." clearable class="flex-1" />
+          <BaseInput v-model="gidSearchKeyword" placeholder="搜索好友昵称" clearable class="flex-1" />
           <BaseButton
             variant="danger"
             :loading="knownFriendSettingsSaving"
@@ -1485,7 +1482,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             >
               <div class="min-w-0">
                 <div class="truncate text-sm font-mono">
-                  {{ item.gid }}
+                  {{ item.name }}
                 </div>
                 <div class="text-xs" :class="item.synced ? 'text-green-600' : 'text-red-600'">
                   {{ item.synced ? '已同步' : '未同步' }}
@@ -1497,7 +1494,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                 type="error"
                 size="small"
                 :disabled="knownFriendSettingsSaving"
-                aria-label="删除 GID"
+                aria-label="删除好友记录"
                 @click="handleRemoveGidFromList(item.gid)"
               >
                 <span class="i-carbon-trash-can" />

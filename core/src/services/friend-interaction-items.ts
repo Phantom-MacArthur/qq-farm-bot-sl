@@ -580,7 +580,7 @@ async function performFriendInteractionItemBatch(friendGidInput: unknown, itemId
 
     const succeeded = attempts.filter((attempt: any) => attempt.ok);
     const failed = attempts.filter((attempt: any) => !attempt.ok);
-    const ownerName = String(enterReply?.basic?.remark || enterReply?.basic?.name || `GID:${friendGid}`);
+    const ownerName = String(enterReply?.basic?.remark || enterReply?.basic?.name || '未命名好友');
     const itemName = String(info.name || `物品${itemId}`);
     const refreshedInventory = await getFriendInteractionItems();
     const updatedLands = succeeded
@@ -632,7 +632,7 @@ async function performFriendFarmInteractionItem(friendGidInput: unknown, itemIdI
         const itemName = String(info.name || `物品${itemId}`);
         return {
             hostGid: friendGid,
-            ownerName: String(enterReply?.basic?.remark || enterReply?.basic?.name || `GID:${friendGid}`),
+            ownerName: String(enterReply?.basic?.remark || enterReply?.basic?.name || '未命名好友'),
             itemId: String(itemId),
             itemName,
             targetKind: 'farm',

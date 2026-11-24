@@ -228,7 +228,7 @@ test('data provider 把手动停止转为退出轮询，把启动/重启转为�
         store: { maskWxCredentialsForClient: data => data },
         getAccounts: () => ({ accounts }),
         startWorker: () => { calls.push('startWorker'); return true; },
-        stopWorker: accountId => { calls.push(`stopWorker:${accountId}`); },
+        stopWorker: account => { calls.push(`stopWorker:${account.id}`); },
         restartWorker: () => { calls.push('restartWorker'); },
         scheduleAutoCodeRefresh: accountId => calls.push(`schedule:${accountId}`),
         pauseAutoCodeRefreshPolling: accountId => calls.push(`pause:${accountId}`),
@@ -240,11 +240,11 @@ test('data provider 把手动停止转为退出轮询，把启动/重启转为�
     assert.deepEqual(calls, ['resume:7', 'schedule:7', 'refresh']);
 
     calls.length = 0;
-    assert.equal(provider.stopAccount('7'), true);
+    assert.equal(await provider.stopAccount('7'), true);
     assert.deepEqual(calls, ['stopWorker:7', 'pause:7']);
 
     calls.length = 0;
-    assert.equal(provider.restartAccount('7'), true);
+    assert.equal(await provider.restartAccount('7'), true);
     assert.deepEqual(calls, ['resume:7', 'schedule:7', 'restartWorker']);
 
     // “立即刷新”也是显式意图：先恢复轮询，成功后重新排期

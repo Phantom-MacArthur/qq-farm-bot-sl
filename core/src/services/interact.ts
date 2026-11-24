@@ -106,7 +106,7 @@ function normalizeInteractRecord(record: any, index: number): any {
     const flag1: number = toNum(extra.flag1);
     const flag2: number = toNum(extra.flag2);
     const cropName: string = resolveCropName(cropId);
-    const nick: string = String((record && record.nick) || '').trim() || `GID:${visitorGid}`;
+    const nick: string = String((record && record.nick) || '').trim() || '未命名好友';
     const avatarUrl: string = String((record && record.avatar_url) || '').trim();
 
     const normalized: any = {

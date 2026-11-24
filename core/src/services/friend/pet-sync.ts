@@ -210,7 +210,7 @@ export function collectPendingFriends(friends: any[], myGid: number, blacklist: 
         if (blacklist.has(gid) || invalid.has(gid)) continue;
         // 当天已经有结论的不重复同步（包括帮忙/偷菜/天气扫描顺手写入的）
         if (isFriendDogKnownToday(gid)) continue;
-        pending.push({ gid, name: friend.remark || friend.name || `GID:${gid}` });
+        pending.push({ gid, name: friend.remark || friend.name || '未命名好友' });
     }
     return pending;
 }

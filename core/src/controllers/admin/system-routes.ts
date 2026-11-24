@@ -3,6 +3,8 @@ import type { AdminContext } from './context';
 export {};
 
 const { version } = require('../../../package.json');
+const { getActiveWebBuildId } = require('./web-version');
+const { getServiceSummary } = require('../../session/ipc');
 const { getRuntimeConfig } = require('../../config/config');
 
 /**
@@ -11,12 +13,12 @@ const { getRuntimeConfig } = require('../../config/config');
  */
 function mountSystemRoutes(app: Application, _ctx: AdminContext): void {
     app.get('/api/ping', (_req: Request, res: Response) => {
-        res.json({ ok: true, data: { ok: true, uptime: process.uptime(), version } });
+        res.json({ ok: true, data: { ok: true, uptime: process.uptime(), version, webBuildId: getActiveWebBuildId() } });
     });
 
-    app.get('/api/game-version', (_req: Request, res: Response) => {
+    app.get('/api/game-version', async (_req: Request, res: Response) => {
         const { clientVersion, wxClientVersion } = getRuntimeConfig();
-        res.json({ ok: true, clientVersion, wxClientVersion, botVersion: version });
+        res.json({ ok: true, clientVersion, wxClientVersion, botVersion: version, serviceSummary: await getServiceSummary().catch(() => null) });
     });
 }
 

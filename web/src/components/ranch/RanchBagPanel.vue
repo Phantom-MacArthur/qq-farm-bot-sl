@@ -37,6 +37,8 @@ const items = computed<any[]>(() => state.value?.bag || [])
 const pens = computed<any[]>(() => (state.value?.facilities || []).filter((f: any) => f.ranch && f.state !== 2))
 const category = ref<Category>('all')
 const failed = ref<Record<string, boolean>>({})
+const batchLockMode = ref(false)
+const selectedUids = ref<string[]>([])
 
 function categoryOf(item: any): Exclude<Category, 'all'> {
   if (item.can)
@@ -161,7 +163,14 @@ function caption(item: any) {
   const prices = item.sellPrices?.map((price: RanchItem) => `${formatCount(price.count)} ${price.name}`).join(' + ')
   return prices ? `单价 ${prices} · 库存 ${formatCount(item.count)}` : `库存 ${formatCount(item.count)}`
 }
-watch(category, () => failed.value = {})
+watch(category, () => {
+  failed.value = {}
+  selectedUids.value = []
+})
+watch(currentAccountId, () => {
+  batchLockMode.value = false
+  selectedUids.value = []
+})
 </script>
 
 <template>

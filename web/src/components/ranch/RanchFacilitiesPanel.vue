@@ -16,6 +16,7 @@ const { serverNow, remainingSeconds } = useRanchClock()
 
 const facilities = computed<any[]>(() => sortFacilities(state.value?.facilities || []))
 const grass = computed(() => Number(state.value?.grass) || 0)
+const hourglass = computed(() => Number(state.value?.hourglassSeconds) || 0)
 const grassTarget = ref<any>(null)
 const refreshing = ref(false)
 
@@ -47,6 +48,12 @@ function upgradeDone(f: any) {
   const end = Number(f.upgradeEndTime)
   return f.upgradeState === 2 || end * (end < 1e11 ? 1000 : 1) <= serverNow.value
 }
+function accelerate(f: any) {
+  const seconds = Math.min(hourglass.value, remainingSeconds(f.upgradeEndTime))
+  if (seconds > 0)
+    void request('speedUpUpgrade', { facilityId: f.id, seconds })
+}
+
 function submitGrass(count: number) {
   const f = grassTarget.value
   grassTarget.value = null
@@ -117,7 +124,10 @@ function submitGrass(count: number) {
             <NButton v-if="f.feed" size="small" secondary :disabled="disabled || f.feed.count >= f.capacity || grass < 1" @click="grassTarget = f">
               <span class="i-carbon-add mr-0.5" aria-hidden="true" />补充牧草
             </NButton>
-            <NButton v-if="f.upgradeState" size="small" type="primary" :disabled="disabled || !upgradeDone(f)" @click="request('completeUpgrade', { facilityId: f.id })">
+            <NButton v-if="f.upgradeState && !upgradeDone(f)" size="small" secondary :disabled="disabled || hourglass < 1" @click="accelerate(f)">
+              沙漏加速
+            </NButton>
+            <NButton v-else-if="f.upgradeState" size="small" type="primary" :disabled="disabled" @click="request('completeUpgrade', { facilityId: f.id })">
               完成升级
             </NButton>
             <NPopover v-else-if="f.next" trigger="hover" placement="top" :flip="true">

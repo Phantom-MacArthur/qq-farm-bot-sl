@@ -554,7 +554,7 @@ function enqueueApplications(applications: any[]): void {
  */
 export function onFriendApplicationReceived(applications: any[]): void {
     if (!Array.isArray(applications) || applications.length === 0) return;
-    const names: string = applications.map((a: any) => a.name || `GID:${toNum(a.gid)}`).join(', ');
+    const names: string = applications.map((a: any) => a.name || '未命名好友').join(', ');
     log('申请', `收到 ${applications.length} 个好友申请: ${names}`);
     enqueueApplications(applications);
 }
@@ -569,7 +569,7 @@ async function checkAndAcceptApplications(): Promise<void> {
         const applications: any[] = reply.applications || [];
         if (applications.length === 0) return;
 
-        const names: string = applications.map((a: any) => a.name || `GID:${toNum(a.gid)}`).join(', ');
+        const names: string = applications.map((a: any) => a.name || '未命名好友').join(', ');
         log('申请', `发现 ${applications.length} 个待处理申请: ${names}`);
         await processFriendApplications(applications);
     } catch {
@@ -590,7 +590,7 @@ async function processFriendApplications(applications: any[]): Promise<void> {
 
     for (const app of list) {
         const gid: number = toNum(app && app.gid);
-        const name: string = (app && app.name) || `GID:${gid}`;
+        const name: string = (app && app.name) || '未命名好友';
         const level: number = toNum(app && app.level);
         if (!gid) continue;
 
@@ -635,7 +635,7 @@ async function acceptFriendsWithRetry(gids: number[]): Promise<void> {
         const reply: any = await acceptFriends(gids);
         const friends: any[] = reply.friends || [];
         if (friends.length > 0) {
-            const names: string = friends.map((f: any) => f.name || f.remark || `GID:${toNum(f.gid)}`).join(', ');
+            const names: string = friends.map((f: any) => f.name || f.remark || '未命名好友').join(', ');
             log('申请', `已同意 ${friends.length} 人: ${names}`);
         }
     } catch (e: any) {

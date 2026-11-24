@@ -8,6 +8,8 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import PageTabs from '@/components/PageTabs.vue'
 import { useRanchActions, useRanchClock } from '@/components/ranch/ranch-shared'
+import CareerHarvestSteal from '@/components/CareerHarvestSteal.vue'
+import RanchAmountDialog from '@/components/ranch/RanchAmountDialog.vue'
 import RanchAnimalCard from '@/components/ranch/RanchAnimalCard.vue'
 import RanchGate from '@/components/ranch/RanchGate.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -90,8 +92,10 @@ async function toggleBlacklist(gid: string | number) {
     if (!data?.ok)
       throw new Error(getApiErrorMessage(data, '牧场黑名单保存失败'))
     blacklistGids.value = data.data.gids
-    if (data.data.blacklisted && Number(selected.value) === Number(gid))
+    if (data.data.blacklisted && Number(selected.value) === Number(gid)) {
       selected.value = ''
+      grassDialogGid.value = ''
+    }
     toast.success(data.data.blacklisted ? '已加入牧场黑名单' : '已移出牧场黑名单')
   }
   catch (cause) {
@@ -115,7 +119,7 @@ function setActiveTab(value: string) {
 /** 黑名单视图条目：好友列表里能对上的补名称/头像，纯 GID 的兜底展示。 */
 const blacklistItems = computed(() => blacklistGids.value.map((gid) => {
   const friend = friends.value.find(f => Number(f.gid) === gid) || state.value?.friends?.find((f: any) => Number(f.gid) === gid)
-  return { gid, name: friend?.name || `GID:${gid}`, avatarUrl: friend?.avatarUrl || '' }
+  return { gid, name: friend?.name || '未命名好友', avatarUrl: friend?.avatarUrl || '' }
 }))
 
 const visible = computed(() => {
@@ -198,15 +202,30 @@ function onFriendRowClick(event: MouseEvent, friend: any) {
 
 async function toggle(friend: any) {
   const id = String(currentAccountId.value || '')
-  if (!id || disabled.value || blacklistedSet.value.has(Number(friend.gid)))
+  const gid = String(friend.gid || '')
+  if (!id || !gid || disabled.value || blacklistedSet.value.has(Number(gid)))
     return
-  if (selected.value === friend.gid) {
-    selected.value = ''
-    return
-  }
-  selected.value = friend.gid
-  await ranch.load(id, 'friends', undefined, friend.gid)
+  const wasSelected = selected.value === gid
+  selected.value = wasSelected ? '' : gid
+  grassDialogGid.value = ''
+  if (!wasSelected)
+    await ranch.load(id, 'friends', undefined, gid)
 }
+
+const grassDialogGid = ref('')
+const grassLimit = computed(() => {
+  const machine = detail.value?.feedMachine
+  return machine ? Math.max(0, Math.min(Number(detail.value.grassAvailable) || 0, machine.capacity - machine.count)) : 0
+})
+
+function submitGrass(count: number) {
+  const hostGid = grassDialogGid.value
+  const machine = detail.value?.feedMachine
+  grassDialogGid.value = ''
+  if (hostGid && hostGid === selected.value && machine && count > 0 && count <= grassLimit.value)
+    void request('addGrass', { hostGid, facilityId: machine.id, count })
+}
+
 async function reloadList() {
   const id = String(currentAccountId.value || '')
   if (!id || disabled.value || listRefreshing.value)
@@ -303,7 +322,6 @@ function chooseMischiefPen(ranchId: string) {
               </div>
               <div class="min-w-0 flex-1">
                 <strong class="block truncate text-sm">{{ item.name }}</strong>
-                <span class="text-xs text-gray-400">GID {{ item.gid }}</span>
               </div>
               <NButton size="small" secondary :disabled="blacklistBusy" @click="toggleBlacklist(item.gid)">
                 移出黑名单
@@ -342,6 +360,11 @@ function chooseMischiefPen(ranchId: string) {
                   </span>
                 </div>
                 <div class="friend-actions">
+                  <span v-if="!blacklistedSet.has(Number(friend.gid)) && (friend.canMidwife || friend.canSteal || friend.canHelp)" class="friend-tags text-xs">
+                    <span v-if="friend.canMidwife">可帮生产</span>
+                    <span v-if="friend.canSteal">可收取</span>
+                    <span v-if="friend.canHelp">可清理</span>
+                  </span>
                   <NButton size="small" secondary :type="selected === friend.gid && detail?.canSteal ? 'primary' : 'default'" :disabled="disabled || refreshing || blacklistedSet.has(Number(friend.gid))" @click="request('steal', { hostGid: friend.gid })">
                     <template #icon><span class="i-carbon-shopping-bag" /></template>
                     偷取
@@ -370,6 +393,10 @@ function chooseMischiefPen(ranchId: string) {
                   <span class="i-svg-spinners-90-ring-with-bg text-2xl text-green-600" />
                 </div>
                 <template v-else-if="detail">
+                  <CareerHarvestSteal v-if="detail.career" :career="detail.career" />
+                  <NButton v-if="detail.feedMachine" size="small" secondary :disabled="disabled || grassLimit === 0" @click="grassDialogGid = friend.gid">
+                    赠送牧草
+                  </NButton>
                   <p v-if="detail.notice" class="friend-detail__notice" role="alert">
                     {{ detail.notice }}
                   </p>
@@ -392,6 +419,15 @@ function chooseMischiefPen(ranchId: string) {
         </RanchGate>
       </div>
     </span></section>
+    <RanchAmountDialog
+      :show="!!grassDialogGid && grassDialogGid === selected && !!detail?.feedMachine"
+      title="赠送牧草"
+      name="牧草"
+      :max="grassLimit"
+      submit-text="确认赠送"
+      @close="grassDialogGid = ''"
+      @submit="submitGrass"
+    />
     <NModal :show="!!mischiefTarget" @update:show="!$event && (mischiefTarget = '')">
       <section class="mischief-panel page-card-surface" role="dialog" aria-modal="true" aria-label="选择放蚊子的栏舍">
         <div class="mischief-panel__content">
@@ -660,6 +696,13 @@ function chooseMischiefPen(ranchId: string) {
   color: var(--ui-danger);
   background: var(--ui-danger-soft);
   font-size: var(--ui-font-size-small-13);
+}
+
+@media (max-width: 1199px) {
+  .friend-pen__animals {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 10px;
+  }
 }
 
 @media (max-width: 767px) {

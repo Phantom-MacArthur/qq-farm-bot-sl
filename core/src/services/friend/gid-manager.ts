@@ -234,18 +234,18 @@ export function removeKnownFriendGid(friendGid: any, friendName?: string, reason
     const sent: boolean = postToMaster({
         type: 'known_friend_gid_remove',
         gid,
-        friendName: friendName || `GID:${gid}`,
+        friendName: friendName || '未命名好友',
         reason: String(reason || ''),
     });
     if (!sent && next.length !== current.length) {
         applyConfigSnapshot({ knownFriendGids: next }, { persist: true });
     }
 
-    logWarn('好友', `检测到失效好友 GID，已自动移除: ${friendName || `GID:${gid}`}`, {
+    logWarn('好友', `检测到失效好友 GID，已自动移除: ${friendName || '未命名好友'}`, {
         module: 'friend',
         event: '检测失效好友GID',
         result: 'auto_removed',
-        friendName: friendName || `GID:${gid}`,
+        friendName: friendName || '未命名好友',
         friendGid: gid,
         reason: String(reason || ''),
     });

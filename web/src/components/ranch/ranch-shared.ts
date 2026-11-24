@@ -22,12 +22,14 @@ export interface RanchPending {
   quote: RanchQuote
 }
 
+type RanchItemAmount = Pick<RanchItem, 'id' | 'count'>
+
 export interface RanchPurchaseTerms {
-  costItems: RanchItem[]
-  rewards: RanchItem[]
+  costItems: RanchItemAmount[]
+  rewards: RanchItemAmount[]
 }
 
-function itemTotals(items: RanchItem[]) {
+function itemTotals(items: RanchItemAmount[]) {
   const totals = new Map<number, bigint>()
   for (const item of items)
     totals.set(item.id, (totals.get(item.id) ?? 0n) + BigInt(item.count))
@@ -46,7 +48,7 @@ export interface RanchActions {
 
 const actionsKey: InjectionKey<RanchActions> = Symbol('ranch-actions')
 
-/** 商城在数量弹窗确认费用；两种入口均使用服务端报价和操作结果。 */
+/** 数量弹窗可以确认消耗，提交前仍会核对服务端报价。 */
 export function provideRanchActions(): RanchActions {
   const ranch = useRanchStore()
   const toast = useToastStore()
@@ -62,8 +64,9 @@ export function provideRanchActions(): RanchActions {
     const succeeded = await ranch.execute(chosen.accountId, chosen.action, chosen.input, chosen.quote.expected)
     if (pending.value === chosen)
       pending.value = null
+    const hostGid = typeof chosen.input.hostGid === 'string' && chosen.input.hostGid ? chosen.input.hostGid : undefined
     if (succeeded && actionsMounted && sessionVersion === ranch.ranchAccountSessionVersion && chosen.accountId === String(currentAccountId.value || ''))
-      await ranch.reload(chosen.accountId)
+      await ranch.reload(chosen.accountId, hostGid ? { hostGid } : undefined)
   }
 
   async function requestDirect(action: 'feed' | 'produce' | 'harvest' | 'clean', input: Record<string, unknown> = {}) {
@@ -119,8 +122,9 @@ export function provideRanchActions(): RanchActions {
       return
     }
     if (itemTotals(quote.costItems) !== itemTotals(acceptedTerms.costItems) || itemTotals(quote.rewards) !== itemTotals(acceptedTerms.rewards)) {
-      toast.error('商品价格或内容已变化，请重新选择')
-      await ranch.reload(accountId)
+      toast.error('操作内容或消耗已变化，请重新选择')
+      const hostGid = typeof input.hostGid === 'string' && input.hostGid ? input.hostGid : undefined
+      await ranch.reload(accountId, hostGid ? { hostGid } : undefined)
       return
     }
     await execute(chosen)
@@ -225,6 +229,10 @@ export function formatHours(seconds: number | string) {
 }
 
 /** 数量字段可能超出安全整数，按 BigInt 加千分位。 */
+export function formatRanchReward(item: RanchItem) {
+  return Number(item.id) === 1006 ? formatDuration(item.count) : `×${formatCount(item.count)}`
+}
+
 export function formatCount(value: unknown) {
   const text = String(value ?? '0')
   try {

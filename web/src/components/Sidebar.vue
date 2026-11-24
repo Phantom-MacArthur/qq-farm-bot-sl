@@ -10,12 +10,14 @@ import { useRoute } from 'vue-router'
 import { getSpaceMenu } from '@/router/menu'
 import { useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
+import { useAppUpdateStore } from '@/stores/app-update'
 import { useStatusStore } from '@/stores/status'
 
 const route = useRoute()
 const accountStore = useAccountStore()
 const statusStore = useStatusStore()
 const appStore = useAppStore()
+const { reconnecting: panelReconnecting } = storeToRefs(useAppUpdateStore())
 const { currentAccount } = storeToRefs(accountStore)
 const { status, realtimeConnected } = storeToRefs(statusStore)
 const { sidebarCollapsed, sidebarAutoCollapsed, sidebarToggleLabel } = storeToRefs(appStore)
@@ -39,7 +41,7 @@ const now = useNow({ interval: 1000 })
 
 async function checkConnection() {
   try {
-    const res = await api.get('/api/ping')
+    const res = await api.get('/api/ping', { skipErrorToast: true } as any)
     systemConnected.value = true
     if (res.data.ok && res.data.data) {
       if (res.data.data.uptime) {
@@ -126,6 +128,14 @@ const uptime = computed(() => {
 })
 
 const connectionStatus = computed(() => {
+  if (panelReconnecting.value) {
+    return {
+      text: '正在重连',
+      color: 'bg-amber-500',
+      pulse: true,
+    }
+  }
+
   if (!systemConnected.value) {
     return {
       text: '系统离线',

@@ -28,14 +28,14 @@ const canSlot = ref<number | 'all'>('all')
 const shelf = ref<number | 'all'>('all')
 const { refresh } = useRanchLoader(props.tab, () => ({ shopId: props.tab === 'market' ? undefined : 0 }))
 
-const ACTION = { shop: 'buy', market: 'exchange', cans: 'buyCan' } as const
+const ACTION = { shop: 'buy', market: 'exchange', cans: 'buyMall' } as const
 const VERB = { shop: '购买', market: '兑换', cans: '购买' } as const
 
 const segments = computed(() => {
   if (props.tab === 'shop')
     return [{ key: 'all' as const, label: '全部' }, { key: 5, label: '幼崽' }, { key: 6, label: '饲料' }]
   if (props.tab === 'cans')
-    return [{ key: 'all' as const, label: '全部' }, { key: 6, label: '常驻商品' }, { key: 7, label: '限时商品' }]
+    return [{ key: 'all' as const, label: '全部' }, { key: 6, label: '礼包商城' }, { key: 7, label: '特惠商城' }]
   const shelves = [...(state.value?.market?.shelves || [])].sort((a: any, b: any) => a.sort - b.sort)
   return [{ key: 'all' as const, label: '全部' }, ...shelves.map((s: any) => ({ key: s.id as number, label: s.name }))]
 })
@@ -74,7 +74,7 @@ const allGoods = computed<RanchGood[]>(() => {
   if (props.tab === 'shop')
     return state.value?.shop?.goods || []
   if (props.tab === 'cans')
-    return state.value?.canShop?.goods || []
+    return state.value?.mall?.goods || []
   return state.value?.market?.goods || []
 })
 const goods = computed(() => {

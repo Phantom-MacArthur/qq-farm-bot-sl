@@ -3,9 +3,10 @@ export {};
 
 const { rpc, inScene } = require('./transport');
 const network = require('../../utils/network');
-const { error, positiveId, positiveCount, quantity, sumItems } = require('./model');
-const { animalDto } = require('./state');
+const { error, positiveId, positiveCount, quantity, itemDto, sumItems } = require('./model');
+const { animalDto, ranchCareer } = require('./state');
 const reservations = require('./operation-state');
+const { recordOperation } = require('../stats');
 const { getAmbientSendContext, runWithSendContext } = require('./context');
 const { getServerTimeSec, logWarn } = require('../../utils/utils');
 
@@ -39,7 +40,7 @@ function targets(ranches: any[]): any[] {
             itemIds: shelf.lots.filter((lot: any) => lot.can_steal && !lot.stealers.some((id: any) => quantity(id) === gid)).map((lot: any) => quantity(lot.item_id)) })));
 }
 
-async function visit(hostGid: unknown, run: (entry: any, ranches: any[], host: string) => Promise<any>): Promise<any> {
+async function withFriendVisit(hostGid: unknown, run: (entry: any, host: string) => Promise<any>): Promise<any> {
     const host = positiveId(hostGid, '好友GID');
     if (host === quantity(network.getUserState().gid)) throw error('INVALID_ARGUMENT', '请选择好友牧场');
     return inScene(async () => {
@@ -49,8 +50,7 @@ async function visit(hostGid: unknown, run: (entry: any, ranches: any[], host: s
         try {
             const entry = await rpc('enterFriend', { host_gid: host, reason: 2 });
             if (quantity(entry.basic?.gid) !== host || !entry.homestead_cells) throw error('RANCH_RESPONSE_MISMATCH', '好友牧场回包与目标不匹配');
-            const detail = await rpc('animals', { host_gid: host });
-            result = await run(entry, detail.ranches, host);
+            result = await run(entry, host);
             return result;
         } catch (error: any) {
             entryRejected = error.name === 'GatewayError' && error.serviceName === 'gamepb.visitpb.VisitService' && error.methodName === 'EnterHomestead';
@@ -69,13 +69,23 @@ async function visit(hostGid: unknown, run: (entry: any, ranches: any[], host: s
     });
 }
 
+function visit(hostGid: unknown, run: (entry: any, ranches: any[], host: string) => Promise<any>): Promise<any> {
+    return withFriendVisit(hostGid, async (entry, host) => {
+        const detail = await rpc('animals', { host_gid: host });
+        return run(entry, detail.ranches, host);
+    });
+}
+
 async function getFriend(hostGid: unknown): Promise<any> {
     return visit(hostGid, async (entry, ranches, host) => {
         const eligible = targets(ranches);
         // The action quote checks live quota. The display only needs known exhaustion.
         const strokeQuotaExhausted = getInteractionQuotaResetAt('stroke') > 0;
+        const machine = entry.homestead_cells.facilities.find((facility: any) => facility.module_type === 8 && facility.state === 1 && facility.feed_machine);
         return { gid: host, name: entry.basic.name, level: Number(entry.basic.big_farm_level),
-            canSteal: eligible.length > 0,
+            career: await ranchCareer(Number(host)),
+            feedMachine: machine ? { id: quantity(machine.instance_id), count: machine.feed_machine.feed_count, capacity: machine.capacity } : null,
+            canSteal: eligible.length > 0, stealableShelves: eligible.length,
             cleanableHazards: ranches.reduce((sum, ranch) => sum + cleanableHazards(ranch).length, 0),
             mosquitoQuotaExhausted: getInteractionQuotaResetAt('putMosquito') > 0,
             ranches: ranches.map(ranch => ({ id: quantity(ranch.ranch_inst_id),
@@ -206,6 +216,7 @@ async function commitInteraction(plan: any, ranch?: any): Promise<any> {
         // 放蚊子回包包含栏舍当前的全部污物，用它规划下一只。
         if (plan.action === 'putMosquito' && ranch) ranch.hazards = reply.hazards;
         const items = sumItems(rewards);
+        if (plan.action === 'cleanFriend' && completed > 0) recordOperation('helpFarming', completed, 'ranch');
         return { action: plan.action, status: completed ? 'confirmed' : 'skipped', snapshot: null, costs: [], rewards: items, completed,
             remainingTimes: plan.action === 'cleanFriend' ? undefined : remaining, triggered: reply.triggered === true, refreshRequired: true,
             notice: `${plan.label}${completed ? '完成' : '当前已无可清理项目'}${reply.triggered ? '，触发巨大变异' : ''}${items.length ? `，获得 ${items.map((item: any) => `${item.name} ×${item.count}`).join('、')}` : ''}` };
@@ -257,6 +268,7 @@ async function commitSteal(host: string, ranches: any[], plan: any): Promise<any
         }
         const completed = reply.op_results.length;
         const rewards = sumItems(reply.op_results.flatMap((row: any) => row.rewards));
+        if (completed > 0) recordOperation('steal', completed, 'ranch');
         const notice = rewards.length ? `获得 ${rewards.map((item: any) => `${item.name} ×${item.count}`).join('、')}` : '当前没有可偷取的产物';
         return { action: 'steal', status: completed ? 'confirmed' : 'skipped', snapshot: null, costs: [],
             rewards, completed, refreshRequired: true,
@@ -376,4 +388,4 @@ async function automateFriend(
     });
 }
 
-module.exports = { getFriend, prepareSteal, steal, getInteractionTimes, getInteractionQuotaResetAt, prepareInteraction, interact, automateFriend };
+module.exports = { getFriend, withFriendVisit, prepareSteal, steal, getInteractionTimes, getInteractionQuotaResetAt, prepareInteraction, interact, automateFriend };
