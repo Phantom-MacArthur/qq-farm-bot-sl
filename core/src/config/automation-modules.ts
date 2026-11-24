@@ -29,7 +29,7 @@ export const AUTOMATION_MODULE_DEFAULTS = {
 
 type BooleanAction = { [K in keyof AutomationConfig]: AutomationConfig[K] extends boolean ? K : never }[keyof AutomationConfig];
 
-const RANCH_FRIEND_ACTIONS = ['ranch_friend_steal', 'ranch_friend_clean', 'ranch_friend_produce', 'ranch_friend_mosquito', 'ranch_stroke'] as const;
+const RANCH_FRIEND_ACTIONS = ['ranch_friend_steal', 'ranch_friend_clean', 'ranch_friend_mosquito', 'ranch_stroke'] as const;
 
 const MODULE_ACTIONS: Record<keyof typeof AUTOMATION_MODULE_DEFAULTS, BooleanAction[]> = {
     planting_enabled: ['farm', 'farm_push', 'sell'],

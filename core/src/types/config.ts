@@ -1,5 +1,5 @@
 import type { AUTOMATION_MODULE_DEFAULTS, FARM_DAILY_DEFAULTS, MugeRewardKey } from '../config/automation-modules';
-import type { NotificationTypes } from '../config/notification-types';
+import type { MysteryNotificationMessages, NotificationTypes } from '../config/notification-types';
 import type { RanchAutomationConfig } from '../config/ranch-automation';
 export {};
 export type PlantingStrategy =
@@ -109,19 +109,6 @@ export interface OfflineChannelCredential {
   wxPusherUid: string;
 }
 
-export interface OfflineReminderChannel {
-  channel: string;
-  enabled: boolean;
-  endpoint: string;
-  token: string;
-  secret: string;
-}
-
-export interface PushSettings extends Pick<OfflineReminder, 'channel' | 'endpoint' | 'token' | 'secret' | 'title' | 'msg'> {
-  notificationTypes: NotificationTypes;
-  channels: OfflineReminderChannel[];
-}
-
 export interface OfflineReminder {
   channel: string;
   // 旧版全局单凭据字段（webhook/dingtalk 等渠道仍在使用），保留以兼容既有数据。
@@ -133,6 +120,8 @@ export interface OfflineReminder {
   channelCredentials: Record<string, OfflineChannelCredential>;
   title: string;
   msg: string;
+  notificationTypes?: Partial<NotificationTypes>;
+  mysteryMessages?: Partial<MysteryNotificationMessages>;
 }
 
 export interface UIConfig {
@@ -210,7 +199,8 @@ export interface GlobalConfig {
   // 下线提醒按账号分别保存（origin 同款：accountOfflineReminders[accountId]）。
   accountOfflineReminders: Record<string, OfflineReminder>;
   offlineReminderDefault: OfflineReminder | null;
-  pushNotifications?: PushSettings;
+  // 旧版全局开关仅为尚未保存账号开关的配置提供默认值。
+  pushNotifications?: { notificationTypes?: Partial<NotificationTypes> };
   systemConfig: SystemConfig | null;
   userDefaultPlan: UserDefaultPlan | null;
 }

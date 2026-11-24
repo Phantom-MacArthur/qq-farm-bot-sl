@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { AutomationConfig, OfflineConfig, SettingsSavePayload } from '@/stores/setting'
+import type { AutomationConfig, SettingsSavePayload } from '@/stores/setting'
 import type { BagPreferenceModule, FeatureModuleKey } from '@/utils/account-feature-modules'
 import { NModal } from 'naive-ui/es/modal'
 import { NTab } from 'naive-ui/es/tabs'
@@ -13,7 +13,7 @@ import PageTabs from '@/components/PageTabs.vue'
 import AccountFeatureSettings from '@/components/settings/AccountFeatureSettings.vue'
 import FarmSeedPriorityDialog from '@/components/settings/FarmSeedPriorityDialog.vue'
 import IllustratedPriorityPreview from '@/components/settings/IllustratedPriorityPreview.vue'
-import OfflineReminderCard from '@/components/settings/OfflineReminderCard.vue'
+import PushNotificationSettings from '@/components/settings/notifications/PushNotificationSettings.vue'
 import PlantingStrategyPanel from '@/components/settings/PlantingStrategyPanel.vue'
 import SettingsPanel from '@/components/settings/SettingsPanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
@@ -97,7 +97,7 @@ watch(() => route.query.tab, (value) => {
 const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-profile' },
   { key: 'account-config', label: '助手设置', icon: 'i-carbon-settings-adjust' },
-  { key: 'notification', label: '下线通知', icon: 'i-carbon-notification' },
+  { key: 'notification', label: '推送通知', icon: 'i-carbon-notification' },
 ] as const
 
 function setActiveTab(value: string) {
@@ -261,7 +261,6 @@ onMounted(async () => {
   }
   if (currentAccountId.value)
     await loadStrategyData(currentAccountId.value)
-  await loadNotificationDefault()
 })
 
 function openAddModal() {
@@ -871,7 +870,6 @@ async function loadStrategyData(accountId = currentAccountId.value) {
     return
   syncLocalStrategySettings()
   syncLocalAutomationSettings()
-  syncLocalOfflineSettings()
   if (isAccountConnected(accountId))
     await fetchSeedOptions(accountId)
 }
@@ -1270,168 +1268,6 @@ async function saveFeatureModule(module: FeatureModuleKey, gateOnly = false): Pr
   finally {
     if (accountId === currentAccountId.value)
       automationSaving.value = strategySaving.value = false
-  }
-}
-
-// ==================== 系统设置 ====================
-const offlineSaving = ref(false)
-const offlineTesting = ref(false)
-
-const localOffline = ref<OfflineConfig>({
-  channel: 'wxpusher',
-  endpoint: '',
-  token: '',
-  secret: '',
-  wxPusherUid: '',
-  channelCredentials: {
-    qmsg: { token: '', wxPusherUid: '' },
-    wxpusher: { token: '', wxPusherUid: '' },
-    wxpusher_wechat: { token: '', wxPusherUid: '' },
-    bark: { token: '', wxPusherUid: '' },
-  },
-  title: '',
-  msg: '农场下线',
-})
-
-const channelOptions = [
-  { label: 'WxPusher(SPT)', value: 'wxpusher' },
-  { label: 'WxPusher(标准)', value: 'wxpusher_wechat' },
-  { label: 'Qmsg 酱', value: 'qmsg' },
-  { label: 'Bark（iPhone 推送）', value: 'bark' },
-]
-
-const CHANNEL_DOCS: Record<string, string> = {
-  qmsg: 'https://qmsg.zendee.cn/',
-  wxpusher: 'https://wxpusher.zjiecode.com/docs/#/',
-  wxpusher_wechat: 'https://wxpusher.zjiecode.com/docs/api-reference.html',
-  bark: 'https://github.com/Finb/Bark',
-}
-
-const offlineChannel = computed(() => String(localOffline.value.channel || '').trim().toLowerCase())
-const currentChannelDocUrl = computed(() => CHANNEL_DOCS[offlineChannel.value] || '')
-
-function openChannelDocs() {
-  const url = currentChannelDocUrl.value
-  if (!url)
-    return
-  window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-function syncLocalOfflineSettings() {
-  if (settings.value?.offlineReminder) {
-    const saved = JSON.parse(JSON.stringify(settings.value.offlineReminder)) as Partial<OfflineConfig>
-    localOffline.value = {
-      ...localOffline.value,
-      ...saved,
-      // 标题不开放编辑，固定置空，由服务端回退成账号备注；内容默认「农场下线」。
-      title: '',
-      msg: String(saved.msg || '').trim() || '农场下线',
-      channelCredentials: {
-        qmsg: { token: '', wxPusherUid: '' },
-        wxpusher: { token: '', wxPusherUid: '' },
-        wxpusher_wechat: { token: '', wxPusherUid: '' },
-        bark: { token: '', wxPusherUid: '' },
-        ...(saved.channelCredentials || {}),
-      },
-    }
-  }
-}
-
-watch(settings, () => {
-  syncLocalOfflineSettings()
-}, { deep: true })
-
-// ===== 通知默认设置 =====
-const notificationDefaultExists = ref(false)
-const notificationDefaultLoading = ref(false)
-const notificationDefaultSaving = ref(false)
-const notificationDefaultApplying = ref(false)
-const notificationDefaultApplyConfirmationVisible = ref(false)
-
-async function loadNotificationDefault() {
-  notificationDefaultLoading.value = true
-  try {
-    const res = await settingStore.fetchOfflineDefault()
-    notificationDefaultExists.value = res.exists
-  }
-  finally {
-    notificationDefaultLoading.value = false
-  }
-}
-
-async function saveNotificationDefault() {
-  if (notificationDefaultSaving.value || !currentAccountId.value)
-    return
-  notificationDefaultSaving.value = true
-  try {
-    const res = await settingStore.saveOfflineDefault(localOffline.value)
-    if (res.ok) {
-      notificationDefaultExists.value = true
-      showAlert('通知默认设置已保存', 'primary')
-    }
-    else {
-      showAlert(`保存失败: ${res.error || '未知错误'}`, 'danger')
-    }
-  }
-  finally {
-    notificationDefaultSaving.value = false
-  }
-}
-
-async function applyNotificationDefault() {
-  notificationDefaultApplyConfirmationVisible.value = false
-  if (notificationDefaultApplying.value || !notificationDefaultExists.value)
-    return
-  notificationDefaultApplying.value = true
-  try {
-    const res = await settingStore.applyOfflineDefault()
-    if (res.ok) {
-      syncLocalOfflineSettings()
-      showAlert('通知默认设置已应用到当前账号', 'primary')
-    }
-    else {
-      showAlert(`应用失败: ${res.error || '未知错误'}`, 'danger')
-    }
-  }
-  finally {
-    notificationDefaultApplying.value = false
-  }
-}
-
-async function handleSaveOffline() {
-  offlineSaving.value = true
-  try {
-    const res = await settingStore.saveOfflineConfig(localOffline.value)
-
-    if (res.ok) {
-      showAlert('下线提醒设置已保存', 'primary')
-    }
-    else {
-      showAlert(`保存失败: ${res.error || '未知错误'}`, 'danger')
-    }
-  }
-  finally {
-    offlineSaving.value = false
-  }
-}
-
-async function handleTestOffline() {
-  offlineTesting.value = true
-  try {
-    const { data } = await api.post('/api/settings/offline-reminder/test', localOffline.value)
-    if (data?.ok) {
-      showAlert('测试消息发送成功', 'primary')
-    }
-    else {
-      showAlert(`测试失败: ${getApiErrorMessage(data, '未知错误')}`, 'danger')
-    }
-  }
-  catch (e: any) {
-    const msg = getApiErrorMessage(e, '请求失败')
-    showAlert(`测试失败: ${msg}`, 'danger')
-  }
-  finally {
-    offlineTesting.value = false
   }
 }
 
@@ -1942,55 +1778,9 @@ async function confirmDefaultPlanOperation() {
           </SettingsPanel>
         </div>
 
-        <!-- 下线通知 -->
+        <!-- 推送通知 -->
         <div v-else-if="activeTab === 'notification'" class="space-y-3 panel-fill">
-          <SettingsPanel>
-            <BaseButton
-              variant="secondary"
-              :loading="notificationDefaultSaving"
-              :disabled="offlineSaving || offlineTesting || notificationDefaultLoading || notificationDefaultApplying || !currentAccountId"
-              @click="saveNotificationDefault"
-            >
-              <span class="i-carbon-bookmark" />
-              <span>设为默认设置</span>
-            </BaseButton>
-            <BaseButton
-              variant="secondary"
-              :loading="notificationDefaultApplying"
-              :disabled="offlineSaving || offlineTesting || notificationDefaultLoading || notificationDefaultSaving || notificationDefaultApplying || !currentAccountId || !notificationDefaultExists"
-              @click="notificationDefaultApplyConfirmationVisible = true"
-            >
-              <span class="i-carbon-checkmark" />
-              <span>应用默认设置</span>
-            </BaseButton>
-            <BaseButton
-              variant="primary"
-              :loading="offlineSaving"
-              :disabled="offlineTesting || notificationDefaultSaving || notificationDefaultApplying || !currentAccountId"
-              @click="handleSaveOffline"
-            >
-              <span class="i-carbon-save" />
-              <span>保存</span>
-            </BaseButton>
-            <BaseButton
-              variant="success"
-              class="toolbar-control ml-auto !w-auto !min-w-0"
-              :loading="offlineTesting"
-              :disabled="offlineSaving || !currentAccountId"
-              @click="handleTestOffline"
-            >
-              测试通知
-            </BaseButton>
-
-            <template #body>
-              <OfflineReminderCard
-                v-model:config="localOffline"
-                :channel-options="channelOptions"
-                :current-channel-doc-url="currentChannelDocUrl"
-                @open-docs="openChannelDocs"
-              />
-            </template>
-          </SettingsPanel>
+          <PushNotificationSettings />
         </div>
 
       </div>
@@ -2006,18 +1796,6 @@ async function confirmDefaultPlanOperation() {
       confirm-text="确认"
       @confirm="confirmDefaultPlanOperation"
       @cancel="closeDefaultPlanConfirmation"
-    />
-
-    <ConfirmModal
-      :show="notificationDefaultApplyConfirmationVisible"
-      title="应用通知默认设置"
-      message="将用已保存的通知默认设置覆盖当前账号的下线提醒配置，确认应用？"
-      type="danger"
-      confirm-text="确认应用"
-      :loading="notificationDefaultApplying"
-      @confirm="applyNotificationDefault"
-      @close="notificationDefaultApplyConfirmationVisible = false"
-      @cancel="notificationDefaultApplyConfirmationVisible = false"
     />
 
     <!-- 策略预览弹窗：展示各策略下当前等级可种的最优作物；点遮罩 / Esc 回到「种植与收获」弹层 -->

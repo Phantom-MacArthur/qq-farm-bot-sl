@@ -130,7 +130,7 @@ const MODULE_AUTOMATION_KEYS: Record<FeatureModuleKey, string[]> = {
   ],
   friends: [
     ...Object.values(FRIEND_ACTION_FIELDS).flat(),
-    'friend_help_exp_limit', 'friend_help_protect_dog_ignore_exp_limit', 'friend_auto_accept', 'ranch_stroke', 'ranch_friend_produce',
+    'friend_help_exp_limit', 'friend_help_protect_dog_ignore_exp_limit', 'friend_auto_accept', 'ranch_stroke',
   ],
   activity: [
     'task', 'farm_illustrated', 'farm_email_rewards', 'farm_free_gifts', 'farm_daily_share', 'farm_vip_gift', 'farm_month_card_gift',

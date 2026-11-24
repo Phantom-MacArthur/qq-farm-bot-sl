@@ -219,6 +219,8 @@ test('worker unified scheduler checks mystery shop at due time and stops after d
     const modules = {
         'node:worker_threads': {},
         '../config/config': { CONFIG: { farmCheckIntervalMin: 600000, farmCheckIntervalMax: 600000, friendCheckIntervalMin: 600000, friendCheckIntervalMax: 600000 } },
+        '../config/automation-modules': require('../dist/config/automation-modules'),
+        '../config/fertilizer-strategy': require('../dist/config/fertilizer-strategy'),
         '../models/store': { getAutomation: () => auto, applyConfigSnapshot: snapshot => { if (snapshot.automation) auto = snapshot.automation; return snapshot; } },
         '../services/status': { setRecordGoldExpHook: noop },
         '../services/email': { configureEmailClaim: noop },

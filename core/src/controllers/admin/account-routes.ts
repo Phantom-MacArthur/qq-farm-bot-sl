@@ -1,5 +1,3 @@
-import type { OfflineReminderChannel } from '../../types/config';
-import { normalizePushChannel, readPushChannels, singlePushChannel } from '../../config/push-channels';
 import type { Application, Request, Response } from 'express';
 import type { AdminContext } from './context';
 export {};
@@ -9,7 +7,6 @@ export {};
  */
 
 const store = require('../../models/store');
-const { pushChannelError, sendPushChannels } = require('../../services/push');
 const { addOrUpdateAccount, deleteAccount } = store;
 const { findAccountByRef } = require('../../services/account-resolver');
 const { updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig, getDevicePresets, getTimeZoneOptions } = require('../../config/config');
@@ -347,6 +344,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             if (!data) {
                 return res.status(400).json({ ok: false, error: '尚未保存通知默认设置' });
             }
+            ctx.provider.broadcastConfig?.(accountId);
             res.json({ ok: true, data });
         } catch (e: any) {
             handleApiError(res, e);
@@ -362,6 +360,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             }
             const body = (req.body && typeof req.body === 'object') ? req.body : {};
             const data = store.setOfflineReminder ? store.setOfflineReminder(body, accountId) : {};
+            ctx.provider.broadcastConfig?.(accountId);
             res.json({ ok: true, data: data || {} });
         } catch (e: any) {
             handleApiError(res, e);
@@ -387,7 +386,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const accountName = String((ctx.provider.getAccounts().accounts || [])
                 .find((a: any) => String(a?.id) === String(accountId))?.name || '').trim();
             const titleBase = String(cfg.title || '').trim() || accountName || '农场下线';
-            const msgBase = String(cfg.msg || '农场下线').trim();
+            const msgBase = String(cfg.msg || '').trim();
 
             if (!channel) {
                 return res.status(400).json({ ok: false, error: '推送渠道不能为空' });
@@ -408,133 +407,49 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const now = new Date();
             const ts = now.toISOString().replace('T', ' ').slice(0, 19);
             const { sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage } = require('../../services/push');
-            const payload = {
-                channel,
-                endpoint,
-                token,
-                secret,
-                wxPusherUid,
-                title: `${titleBase}（测试）`,
-                content: `${msgBase}\n\n这是一条下线提醒测试消息。\n时间: ${ts}`,
-            };
-            const ret = channel === 'wxpusher'
-                ? await sendWxPusherMessage(payload)
-                : channel === 'wxpusher_wechat'
-                    ? await sendWxPusherWechatMessage(payload)
-                    : await sendPushooMessage(payload);
-
-            if (!ret) {
-                return res.status(400).json({ ok: false, error: '推送失败：无返回结果' });
+            const notifications = [
+                { type: 'offline', label: '账号下线', content: msgBase },
+                { type: 'mysteryArrival', label: '神秘商店到访', content: String(cfg.mysteryMessages?.mysteryArrival || '').trim() },
+                { type: 'mysteryPurchase', label: '神秘商店购买', content: String(cfg.mysteryMessages?.mysteryPurchase || '').trim() },
+            ];
+            const results = [];
+            for (const notification of notifications) {
+                try {
+                    const payload = {
+                        channel, endpoint, token, secret, wxPusherUid,
+                        title: [`${titleBase}（${notification.label}测试）`, notification.content].filter(Boolean).join(' '),
+                        content: `这是一条${notification.label}测试消息。\n时间: ${ts}`,
+                    };
+                    const ret = channel === 'wxpusher'
+                        ? await sendWxPusherMessage(payload)
+                        : channel === 'wxpusher_wechat'
+                            ? await sendWxPusherWechatMessage(payload)
+                            : await sendPushooMessage(payload);
+                    results.push({
+                        type: notification.type,
+                        label: notification.label,
+                        ok: ret?.ok === true,
+                        error: ret?.ok ? undefined : String(ret?.msg || '推送失败：无返回结果'),
+                    });
+                } catch (error: any) {
+                    results.push({ type: notification.type, label: notification.label, ok: false, error: String(error?.message || '推送失败') });
+                }
             }
-
-            const isSuccess = ret.ok ||
-                ret.code === 'ok' ||
-                ret.code === '0' ||
-                String(ret.msg || '').includes('成功') ||
-                String(ret.raw?.status || '').toLowerCase() === 'success';
-
-            if (!isSuccess && ret.msg && !String(ret.msg).includes('成功')) {
-                return res.status(400).json({ ok: false, error: ret.msg || '推送失败', data: ret });
+            const failures = results.filter(result => !result.ok);
+            if (failures.length) {
+                return res.status(400).json({
+                    ok: false,
+                    error: `测试完成，${results.length - failures.length}/3 条成功；${failures.map(result => `${result.label}：${result.error}`).join('；')}`,
+                    data: results,
+                });
             }
-            return res.json({ ok: true, data: ret, message: ret.msg || '推送成功' });
+            return res.json({ ok: true, data: results, message: '三类测试通知均发送成功' });
         } catch (e: any) {
             return handleApiError(res, e);
         }
     });
 
     // API: 获取配置
-    app.get('/api/settings/push-notifications', (_req: Request, res: Response) => {
-        try {
-            res.json({ ok: true, data: store.getPushNotifications() });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    function channelListError(entries: unknown): string {
-        if (!Array.isArray(entries)) return '推送渠道列表格式无效';
-        const seen = new Set<string>();
-        for (const raw of entries) {
-            if (!raw || typeof raw !== 'object' || typeof raw.enabled !== 'boolean') return '推送渠道配置格式无效';
-            const entry = normalizePushChannel(raw);
-            if (seen.has(entry.channel)) return '推送渠道重复';
-            seen.add(entry.channel);
-            const error = pushChannelError(entry, entry.enabled);
-            if (error) return error;
-        }
-        return '';
-    }
-
-    app.post('/api/settings/push-notifications', (req: Request, res: Response) => {
-        try {
-            const body = req.body || {};
-            if (Object.hasOwn(body, 'notificationTypes')) {
-                const types = body.notificationTypes;
-                if (!types || typeof types !== 'object' || Array.isArray(types) || Object.values(types).some(value => typeof value !== 'boolean')) {
-                    return res.status(400).json({ ok: false, error: '通知类型的开关值无效' });
-                }
-            }
-            let error = '';
-            if (Object.hasOwn(body, 'channels')) {
-                error = channelListError(body.channels);
-            } else if (Object.hasOwn(body, 'enabled')) {
-                if (typeof body.enabled !== 'boolean' || !body.channel) {
-                    error = '请指定要修改的渠道和启用状态';
-                } else {
-                    error = pushChannelError(singlePushChannel(store.getPushNotifications(), body), body.enabled);
-                }
-            } else if (['channel', 'endpoint', 'token', 'secret'].some(key => Object.hasOwn(body, key))) {
-                const saved = store.getPushNotifications();
-                const entry = singlePushChannel(saved, body);
-                error = pushChannelError(entry, entry.channel !== saved.channel);
-            }
-            if (error) return res.status(400).json({ ok: false, error });
-            res.json({ ok: true, data: store.setPushNotifications(body) });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
-    // 指定渠道时只测试该渠道，草稿参数不写入配置。
-    app.post('/api/settings/push-notifications/test', async (req: Request, res: Response) => {
-        try {
-            const body = req.body || {};
-            const saved = store.getPushNotifications();
-            const single = ['channel', 'endpoint', 'token', 'secret'].some(key => Object.hasOwn(body, key));
-            let targets: OfflineReminderChannel[];
-            if (single) {
-                const entry = singlePushChannel(saved, body);
-                const error = pushChannelError(entry, true);
-                if (error) return res.status(400).json({ ok: false, error });
-                targets = [entry];
-            } else {
-                if (Object.hasOwn(body, 'channels')) {
-                    const error = channelListError(body.channels);
-                    if (error) return res.status(400).json({ ok: false, error });
-                }
-                targets = readPushChannels(body.channels ? body : saved).filter(entry => entry.enabled);
-                if (!targets.length) return res.status(400).json({ ok: false, error: '请先配置并启用推送渠道' });
-            }
-
-            const title = String(body.title ?? saved.title ?? '').trim() || '账号下线提醒';
-            const msg = String(body.msg ?? saved.msg ?? '').trim() || '账号下线';
-            const ts = new Date().toISOString().replace('T', ' ').slice(0, 19);
-            const results = await sendPushChannels(targets, { title: `${title}（测试）`, content: `${msg}\n\n这是一条通知测试消息。\n时间: ${ts}` });
-            if (single) {
-                const [result] = results;
-                return result.ok
-                    ? res.json({ ok: true, data: result, message: result.msg })
-                    : res.status(400).json({ ok: false, error: result.msg, data: result });
-            }
-            const data = results.map(({ channel, ok, msg }) => ({ channel, ok, msg }));
-            const sent = data.filter(result => result.ok).length;
-            if (!sent) return res.status(400).json({ ok: false, error: data.map(r => `${r.channel}: ${r.msg}`).join('；'), data });
-            return res.json({ ok: true, message: `测试完成，${sent}/${data.length} 个渠道成功`, data });
-        } catch (e: any) {
-            handleApiError(res, e);
-        }
-    });
-
     app.get('/api/settings', async (req: Request, res: Response) => {
         try {
             const id = getAccId(ctx, req);

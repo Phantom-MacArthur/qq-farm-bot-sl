@@ -54,8 +54,6 @@ module.exports = {
     setCaptureSettings: globalConfig.setCaptureSettings,
     getAutoCodeRefresh: globalConfig.getAutoCodeRefresh,
     setAutoCodeRefresh: globalConfig.setAutoCodeRefresh,
-    getPushNotifications: globalConfig.getPushNotifications,
-    setPushNotifications: globalConfig.setPushNotifications,
     getOfflineReminder: globalConfig.getOfflineReminder,
     setOfflineReminder: globalConfig.setOfflineReminder,
     getOfflineReminderDefault: globalConfig.getOfflineReminderDefault,

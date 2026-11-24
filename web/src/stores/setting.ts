@@ -32,7 +32,6 @@ export interface AutomationConfig {
   ranch_friend_patrol?: boolean
   ranch_friend_steal?: boolean
   ranch_friend_clean?: boolean
-  ranch_friend_produce?: boolean
   ranch_friend_mosquito?: boolean
   ranch_task?: boolean
   ranch_illustrated?: boolean
@@ -125,6 +124,8 @@ export interface OfflineConfig {
   channelCredentials: Record<string, OfflineChannelCredential>
   title: string
   msg: string
+  notificationTypes: { offline: boolean, mysteryArrival: boolean, mysteryPurchase: boolean }
+  mysteryMessages: { mysteryArrival: string, mysteryPurchase: string }
 }
 
 export interface UIConfig {
@@ -234,7 +235,9 @@ function createDefaultSettings(): SettingsState {
         bark: { token: '', wxPusherUid: '' },
       },
       title: '',
-      msg: '农场下线',
+      msg: '账号下线',
+      notificationTypes: { offline: true, mysteryArrival: false, mysteryPurchase: false },
+      mysteryMessages: { mysteryArrival: '神秘商人到访', mysteryPurchase: '神秘商人到访' },
     },
     stealDelaySeconds: 0,
     plantDelaySeconds: 0,
@@ -303,6 +306,8 @@ export const useSettingStore = defineStore('setting', () => {
       offlineReminder: {
         ...defaults.offlineReminder,
         ...(cloneValue(data.offlineReminder) || {}),
+        notificationTypes: { ...defaults.offlineReminder.notificationTypes, ...data.offlineReminder?.notificationTypes },
+        mysteryMessages: { ...defaults.offlineReminder.mysteryMessages, ...data.offlineReminder?.mysteryMessages },
         channelCredentials: {
           ...defaults.offlineReminder.channelCredentials,
           ...((cloneValue(data.offlineReminder) || {}).channelCredentials || {}),
@@ -475,12 +480,13 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
-  async function saveOfflineConfig(config: OfflineConfig) {
+  async function saveOfflineConfig(config: OfflineConfig, accountId: string) {
     beginRequest()
     try {
-      const { data } = await api.post('/api/settings/offline-reminder', config)
+      const { data } = await api.post('/api/settings/offline-reminder', config, { headers: { 'x-account-id': accountId } })
       if (data && data.ok) {
-        settings.value.offlineReminder = cloneValue(config)
+        if (loadedAccountId.value === accountId)
+          settings.value.offlineReminder = { ...cloneValue(config), ...data.data }
         return { ok: true }
       }
       return { ok: false, error: '保存失败' }
@@ -510,11 +516,6 @@ export const useSettingStore = defineStore('setting', () => {
     try {
       const { data } = await api.put('/api/settings/offline-reminder/default', { config })
       if (data && data.ok) {
-        const next: OfflineConfig = {
-          ...cloneValue(config),
-          ...(data.data?.config || {}),
-        }
-        settings.value.offlineReminder = next
         return { ok: true }
       }
       return { ok: false, error: getApiErrorMessage(data, '保存失败') }
@@ -524,13 +525,15 @@ export const useSettingStore = defineStore('setting', () => {
     }
   }
 
-  async function applyOfflineDefault() {
+  async function applyOfflineDefault(accountId: string) {
     try {
-      const { data } = await api.post('/api/settings/offline-reminder/default/apply', {})
+      const { data } = await api.post('/api/settings/offline-reminder/default/apply', {}, { headers: { 'x-account-id': accountId } })
       if (data && data.ok && data.data) {
-        settings.value.offlineReminder = {
-          ...settings.value.offlineReminder,
-          ...cloneValue(data.data),
+        if (loadedAccountId.value === accountId) {
+          settings.value.offlineReminder = {
+            ...settings.value.offlineReminder,
+            ...cloneValue(data.data),
+          }
         }
         return { ok: true, config: data.data as OfflineConfig }
       }

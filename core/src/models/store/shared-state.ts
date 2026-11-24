@@ -52,7 +52,7 @@ const DEFAULT_OFFLINE_REMINDER: OfflineReminder = {
     channelCredentials: defaultChannelCredentials(),
     // 标题留空，发送时用当前账号备注兜底。
     title: '',
-    msg: '农场下线',
+    msg: '账号下线',
 };
 
 const DEFAULT_LOGIN_SETTINGS: LoginSettings = {

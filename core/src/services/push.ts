@@ -1,8 +1,8 @@
-import type { OfflineReminderChannel } from '../types/config';
-import { isPushChannelConfigured, PUSHOO_CHANNELS } from '../config/push-channels';
 /**
  * 推送接口封装（基于 pushoo）
  */
+
+export {};
 
 const crypto = require('node:crypto');
 const axios = require('axios').default;
@@ -225,40 +225,7 @@ async function sendWxPusherWechatMessage(payload: any = {}, post: any = axios.po
     return mapWxPusherResponse(response);
 }
 
-function pushChannelError(entry: OfflineReminderChannel, required: boolean): string {
-    if (!PUSHOO_CHANNELS.has(entry.channel)) return '不支持的推送渠道';
-    if (required && !isPushChannelConfigured(entry)) {
-        if (entry.channel === 'webhook') return 'Webhook 渠道需要填写接口地址';
-        if (entry.channel === 'dingtalk') return '钉钉渠道需要填写 Webhook 地址';
-        return '当前推送渠道需要填写 Token';
-    }
-    if (entry.channel === 'dingtalk' && entry.endpoint) {
-        try {
-            if (!/^https:\/\//i.test(entry.endpoint)) return '钉钉 Webhook 地址格式无效';
-            buildDingTalkWebhook(entry.endpoint, '');
-        } catch (error: any) {
-            return error.message;
-        }
-    }
-    return '';
-}
-
-async function sendPushChannels(
-    channels: OfflineReminderChannel[], message: { title: string; content: string }, send = sendPushooMessage,
-) {
-    return Promise.all(channels.map(async ({ channel, endpoint, token, secret }) => {
-        try {
-            const result = await send({ channel, endpoint, token, secret, ...message });
-            return { ...result, channel };
-        } catch (error) {
-            return { channel, ok: false, msg: error instanceof Error ? error.message : String(error) };
-        }
-    }));
-}
-
 module.exports = {
-    pushChannelError,
-    sendPushChannels,
     buildDingTalkWebhook,
     createDingTalkSign,
     sendMeowMessage,

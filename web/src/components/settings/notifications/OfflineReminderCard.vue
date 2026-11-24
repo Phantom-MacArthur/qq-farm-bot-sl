@@ -5,16 +5,22 @@ import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 
-defineProps<{
-  channelOptions: { label: string, value: string | number }[]
-  currentChannelDocUrl: string
-}>()
-
-const emit = defineEmits<{
-  openDocs: []
-}>()
+defineProps<{ disabled?: boolean }>()
 
 const config = defineModel<OfflineConfig>('config', { required: true })
+
+const channelOptions = [
+  { label: 'WxPusher(SPT)', value: 'wxpusher', docs: 'https://wxpusher.zjiecode.com/docs/#/' },
+  { label: 'WxPusher(标准)', value: 'wxpusher_wechat', docs: 'https://wxpusher.zjiecode.com/docs/api-reference.html' },
+  { label: 'Qmsg 酱', value: 'qmsg', docs: 'https://qmsg.zendee.cn/' },
+  { label: 'Bark（iPhone 推送）', value: 'bark', docs: 'https://github.com/Finb/Bark' },
+]
+const currentChannelDocUrl = computed(() => channelOptions.find(option => option.value === config.value.channel)?.docs)
+
+function openChannelDocs() {
+  if (currentChannelDocUrl.value)
+    window.open(currentChannelDocUrl.value, '_blank', 'noopener,noreferrer')
+}
 
 // 分渠道凭据：token / wxPusherUid 均按当前渠道分别保存。
 const activeToken = computed({
@@ -49,7 +55,7 @@ const activeWxPusherUid = computed({
               size="sm"
               class="underline decoration-1 underline-offset-2 hover:!text-blue-600 dark:hover:!text-blue-400"
               :disabled="!currentChannelDocUrl"
-              @click="emit('openDocs')"
+              @click="openChannelDocs"
             >
               官网
             </BaseButton>
@@ -57,6 +63,7 @@ const activeWxPusherUid = computed({
           <BaseSelect
             v-model="config.channel"
             :options="channelOptions"
+            :disabled="disabled"
           />
         </div>
 
@@ -66,6 +73,7 @@ const activeWxPusherUid = computed({
               v-model="activeToken"
               label="WxPusher AppToken"
               type="password"
+              :disabled="disabled"
               placeholder="以 AT_ 开头的应用令牌"
             />
           </div>
@@ -74,6 +82,7 @@ const activeWxPusherUid = computed({
               v-model="activeWxPusherUid"
               label="WxPusher 接收者 UID"
               type="text"
+              :disabled="disabled"
               placeholder="以 UID_ 开头的用户标识"
             />
           </div>
@@ -84,6 +93,7 @@ const activeWxPusherUid = computed({
             v-model="activeToken"
             label="WxPusher SPT"
             type="password"
+            :disabled="disabled"
             placeholder="以 SPT_ 开头的极简推送令牌"
           />
           <BaseInput
@@ -91,6 +101,7 @@ const activeWxPusherUid = computed({
             v-model="activeToken"
             label="Bark Key 或服务器 URL"
             type="password"
+            :disabled="disabled"
             placeholder="设备 Key 或 https://api.day.app/设备Key/"
           />
           <BaseInput
@@ -98,20 +109,12 @@ const activeWxPusherUid = computed({
             v-model="activeToken"
             label="Qmsg 酱 Key"
             type="password"
+            :disabled="disabled"
             placeholder="在 Qmsg 酱管理台获取"
           />
         </div>
       </div>
 
-      <!-- 标题不开放编辑：推送标题始终取账号备注，改名后不会残留旧标题。 -->
-      <div class="grid grid-cols-1 gap-3">
-        <BaseInput
-          v-model="config.msg"
-          label="内容"
-          type="text"
-          placeholder="农场下线"
-        />
-      </div>
     </div>
   </div>
 </template>

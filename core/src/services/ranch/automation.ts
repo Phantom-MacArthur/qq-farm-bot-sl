@@ -68,7 +68,11 @@ function resetFriendCycle(): void {
 }
 
 const FRIEND_CONTROLS = {
-    stroke: 'ranch_stroke', steal: 'ranch_friend_steal', produceFriend: 'ranch_friend_produce', cleanFriend: 'ranch_friend_clean', putMosquito: 'ranch_friend_mosquito',
+    stroke: 'ranch_stroke',
+    produceFriend: 'ranch_stroke',
+    steal: 'ranch_friend_steal',
+    cleanFriend: 'ranch_friend_clean',
+    putMosquito: 'ranch_friend_mosquito',
 } as const;
 type FriendAction = keyof typeof FRIEND_CONTROLS;
 const FRIEND_ACTIONS = Object.keys(FRIEND_CONTROLS) as FriendAction[];

@@ -59,8 +59,14 @@ function createRuntimeState(options: RuntimeStateOptions) {
 
     function buildConfigSnapshotForAccount(accountId: string): any {
         const { ui: _ui, ...accountConfig } = store.getConfigSnapshot(accountId);
+        const notificationTypes = store.getOfflineReminder?.(accountId)?.notificationTypes;
         return {
             ...accountConfig,
+            automation: notificationTypes ? {
+                ...accountConfig.automation,
+                mystery_shop_arrival_notify: notificationTypes.mysteryArrival,
+                mystery_shop_purchase_notify: notificationTypes.mysteryPurchase,
+            } : accountConfig.automation,
             systemTimeZone: getRuntimeConfig().timeZone,
             systemServerUrl: getRuntimeConfig().serverUrl,
             systemClientVersion: getRuntimeConfig().clientVersion,

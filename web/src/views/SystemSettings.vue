@@ -5,7 +5,6 @@ import { computed, onMounted, ref } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import PageTabs from '@/components/PageTabs.vue'
 import AutoCodeRefreshCard from '@/components/settings/AutoCodeRefreshCard.vue'
-import PushNotificationSettings from '@/components/settings/PushNotificationSettings.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -26,13 +25,12 @@ function showAlert(message: string, type: 'primary' | 'danger' = 'primary') {
   toast.success(message)
 }
 
-type SystemTab = 'refresh' | 'login' | 'environment' | 'notifications'
+type SystemTab = 'refresh' | 'login' | 'environment'
 const activeSystemTab = ref<SystemTab>('refresh')
 const systemTabs = [
   { key: 'refresh', label: '定时刷新', icon: 'i-carbon-time' },
   { key: 'login', label: '登录设置', icon: 'i-carbon-login' },
   { key: 'environment', label: '运行环境', icon: 'i-carbon-settings-adjust' },
-  { key: 'notifications', label: '推送通知', icon: 'i-carbon-notification' },
 ] as const
 function setActiveSystemTab(value: string) {
   if (systemTabs.some(tab => tab.key === value))
@@ -439,8 +437,6 @@ onMounted(async () => {
                 </div>
               </div>
             </span></section>
-
-            <PushNotificationSettings v-if="activeSystemTab === 'notifications'" class="system-settings-form" />
 
             <AutoCodeRefreshCard
               v-if="activeSystemTab === 'refresh'"

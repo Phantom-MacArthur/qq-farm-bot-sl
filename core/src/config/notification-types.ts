@@ -4,6 +4,8 @@ export interface NotificationTypes {
     mysteryPurchase: boolean;
 }
 
+export type MysteryNotificationMessages = Record<'mysteryArrival' | 'mysteryPurchase', string>;
+
 export interface PushNotification {
     type: keyof NotificationTypes;
     title: string;

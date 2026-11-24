@@ -101,9 +101,12 @@ test('pausing friend patrol preserves ranch actions and still allows own ranch w
     assert.equal(resumed.ranch_friend_clean, true);
 });
 
-test('ranch friend patrol uses the shared interval and handles stroking independently of stealing', async () => {
+test('ranch friend patrol uses the shared interval and enables production with stroking', async () => {
     let now = 1000;
-    const automation = { ranch_friend_steal: true, ranch_friend_clean: true, ranch_stroke: false, ranch_check_minutes: 60 };
+    const automation = {
+        ranch_friend_steal: true, ranch_friend_clean: true, ranch_stroke: false,
+        ranch_friend_produce: true, ranch_check_minutes: 60,
+    };
     const visits = [];
     const filename = require.resolve('../dist/services/ranch/automation');
     const module = { exports: {} };
@@ -120,7 +123,7 @@ test('ranch friend patrol uses the shared interval and handles stroking independ
         './friends': {
             getInteractionQuotaResetAt: () => 0,
             automateFriend: async (_gid, enabled) => {
-                visits.push(['steal', 'stroke', 'cleanFriend'].filter(enabled));
+                visits.push(['steal', 'stroke', 'produceFriend', 'cleanFriend'].filter(enabled));
                 return { times: {} };
             },
         },
@@ -138,8 +141,9 @@ test('ranch friend patrol uses the shared interval and handles stroking independ
     now = 8000;
     automation.ranch_friend_steal = false;
     automation.ranch_stroke = true;
+    automation.ranch_friend_produce = false;
     await run(options);
-    assert.deepEqual(visits[1], ['stroke', 'cleanFriend']);
+    assert.deepEqual(visits[1], ['stroke', 'produceFriend', 'cleanFriend']);
     assert.equal(getRoutineState().nextCheckAt, 15000);
 });
 

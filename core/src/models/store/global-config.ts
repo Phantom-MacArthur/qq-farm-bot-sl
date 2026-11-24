@@ -1,12 +1,12 @@
-import type { PushSettings } from '../../types/config';
-import { normalizeNotificationTypes } from '../../config/notification-types';
-import { isPushChannelConfigured, readPushChannels, singlePushChannel } from '../../config/push-channels';
+import type { NotificationTypes } from '../../config/notification-types';
 import type { AutoCodeRefreshConfig, CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
+import { normalizeNotificationTypes } from '../../config/notification-types';
 export {};
 
 const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
 
 const sharedState = require('./shared-state');
+const { getSavedAutomation } = require('./account-config');
 
 const {
     PUSHOO_CHANNELS,
@@ -74,6 +74,11 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
             channelCredentials[key]!.wxPusherUid = wxPusherUid;
         }
     }
+    const notificationTypes: Partial<NotificationTypes> = {};
+    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase'] as const) {
+        const value = src.notificationTypes?.[key];
+        if (typeof value === 'boolean') notificationTypes[key] = value;
+    }
     return {
         channel,
         endpoint,
@@ -83,6 +88,11 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
         channelCredentials,
         title,
         msg,
+        notificationTypes,
+        mysteryMessages: {
+            mysteryArrival: typeof src.mysteryMessages?.mysteryArrival === 'string' ? src.mysteryMessages.mysteryArrival.trim() : '神秘商人到访',
+            mysteryPurchase: typeof src.mysteryMessages?.mysteryPurchase === 'string' ? src.mysteryMessages.mysteryPurchase.trim() : '神秘商人到访',
+        },
     };
 }
 
@@ -112,10 +122,19 @@ function getOfflineReminder(accountId: string): OfflineReminder {
     const id = String(accountId || '').trim();
     if (!id)
         return normalizeOfflineReminder({});
-    const stored = globalConfig.accountOfflineReminders
-        ? globalConfig.accountOfflineReminders[id]
-        : undefined;
-    return normalizeOfflineReminder(stored || {});
+    const stored = globalConfig.accountOfflineReminders?.[id];
+    const config = normalizeOfflineReminder(stored);
+    const flags = normalizeNotificationTypes(globalConfig.pushNotifications?.notificationTypes);
+    const automation = getSavedAutomation(id);
+    return {
+        ...config,
+        notificationTypes: {
+            offline: flags.offline,
+            mysteryArrival: flags.mysteryArrival && automation.mystery_shop_arrival_notify === true,
+            mysteryPurchase: flags.mysteryPurchase && automation.mystery_shop_purchase_notify === true,
+            ...config.notificationTypes,
+        },
+    };
 }
 
 function normalizeLoginSettings(input: unknown): LoginSettings {
@@ -193,7 +212,12 @@ function setOfflineReminder(cfg: Partial<OfflineReminder> | undefined, accountId
     if (!globalConfig.accountOfflineReminders)
         globalConfig.accountOfflineReminders = {};
     const current = normalizeOfflineReminder(globalConfig.accountOfflineReminders[id] || {});
-    const next = normalizeOfflineReminder({ ...current, ...(cfg || {}) });
+    const next = normalizeOfflineReminder({
+        ...current,
+        ...cfg,
+        notificationTypes: { ...current.notificationTypes, ...cfg?.notificationTypes },
+        mysteryMessages: { ...current.mysteryMessages, ...cfg?.mysteryMessages },
+    });
     saveGlobalConfig({
         accountOfflineReminders: {
             ...globalConfig.accountOfflineReminders,
@@ -315,69 +339,7 @@ if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
     sharedState.systemConfigMigrated = false;
 }
 
-function normalizePushSettings(input: unknown): PushSettings {
-    const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
-    const channels = readPushChannels(src);
-    const primary = channels.find(entry => entry.enabled);
-    const title = (src.title !== undefined && src.title !== null)
-        ? String(src.title).trim()
-        : '';
-    const msg = (src.msg !== undefined && src.msg !== null)
-        ? String(src.msg).trim()
-        : '';
-    return {
-        notificationTypes: normalizeNotificationTypes(src.notificationTypes),
-        channels,
-        channel: primary?.channel ?? DEFAULT_OFFLINE_REMINDER.channel,
-        endpoint: primary?.endpoint ?? '',
-        token: primary?.token ?? '',
-        secret: primary?.secret ?? '',
-        title,
-        msg,
-    };
-}
-
-function getPushNotifications(): PushSettings {
-    return normalizePushSettings(globalConfig.pushNotifications);
-}
-
-function setPushNotifications(cfg: Partial<Omit<PushSettings, 'notificationTypes'>> & {
-    notificationTypes?: Partial<PushSettings['notificationTypes']>;
-    enabled?: boolean;
-} = {}): PushSettings {
-    const current = getPushNotifications();
-    let channels = cfg.channels ?? current.channels;
-    if (!cfg.channels && cfg.enabled !== undefined) {
-        const selected = singlePushChannel(current, cfg);
-        const byName = new Map(current.channels.map(entry => [entry.channel, entry]));
-        if (selected.endpoint || selected.token || selected.secret) byName.set(selected.channel, selected);
-        else byName.delete(selected.channel);
-        channels = [...byName.values()];
-    } else if (!cfg.channels && ['channel', 'endpoint', 'token', 'secret'].some(key => Object.hasOwn(cfg, key))) {
-        const selected = singlePushChannel(current, cfg);
-        // 单渠道表单只替换原先选中的渠道，保留 App 另行启用的渠道。
-        const configured = isPushChannelConfigured(selected);
-        const changed = selected.channel !== current.channel || selected.endpoint !== current.endpoint
-            || selected.token !== current.token || selected.secret !== current.secret;
-        if (changed) {
-            channels = current.channels.filter(entry => entry.channel !== selected.channel);
-            if (selected.channel !== current.channel && configured) {
-                channels = channels.map(entry => entry.channel === current.channel ? { ...entry, enabled: false } : entry);
-            }
-            if (configured) channels.unshift(selected);
-        }
-    }
-    const next = normalizePushSettings({
-        ...current, ...cfg, channels,
-        notificationTypes: { ...current.notificationTypes, ...cfg.notificationTypes },
-    });
-    saveGlobalConfig({ pushNotifications: next });
-    return getPushNotifications();
-}
-
 module.exports = {
-    getPushNotifications,
-    setPushNotifications,
     saveGlobalConfig,
     getUI,
     setUITheme,
