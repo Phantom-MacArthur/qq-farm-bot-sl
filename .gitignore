@@ -8,7 +8,13 @@ web/dist/
 core/client.js
 
 # Runtime data (contains user credentials and logs)
-core/data/
+core/data/*
+!core/data/accounts.json
+!core/data/store.json
+!core/data/account-configs/
+core/data/account-configs/*
+!core/data/account-configs/.format.json
+!core/data/account-configs/*.json
 
 # Debug/test scripts
 core/scripts/

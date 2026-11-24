@@ -1,0 +1,487 @@
+{
+  "defaultAccountConfig": {
+    "automation": {
+      "ranch_harvest": true,
+      "ranch_produce": true,
+      "ranch_buy": true,
+      "ranch_activate_shed": true,
+      "ranch_upgrade": true,
+      "ranch_sell": true,
+      "ranch_market_organic": true,
+      "ranch_market_organic_poop": true,
+      "ranch_market_organic_pinecone": true,
+      "ranch_grass": true,
+      "ranch_grass_buy": true,
+      "ranch_grass_threshold_percent": 20,
+      "ranch_fill_cans": true,
+      "ranch_feed_normal": true,
+      "ranch_feed_normal_stage": "longest",
+      "ranch_feed_organic": true,
+      "ranch_feed_organic_stage": "near_harvest",
+      "ranch_clean": true,
+      "ranch_stroke": true,
+      "ranch_friend_patrol": true,
+      "ranch_friend_steal": true,
+      "ranch_friend_clean": true,
+      "ranch_friend_mosquito": true,
+      "ranch_task": true,
+      "ranch_illustrated": true,
+      "ranch_share": true,
+      "ranch_daily_benefit": true,
+      "ranch_coupon_gift_buy": false,
+      "ranch_check_minutes": 5,
+      "ranch_check_min_seconds": 300,
+      "ranch_check_max_seconds": 300,
+      "ranch_strategy": "level",
+      "ranch_bag_fallback": "level",
+      "ranch_coop_animal": 0,
+      "ranch_shed_animal": 0,
+      "ranch_coop_cub_priority": [],
+      "ranch_shed_cub_priority": [],
+      "planting_enabled": true,
+      "fertilizer_enabled": true,
+      "ranch_production_enabled": true,
+      "ranch_facilities_enabled": true,
+      "friends_enabled": true,
+      "activity_enabled": true,
+      "farm_illustrated": false,
+      "farm_email_rewards": true,
+      "farm_free_gifts": true,
+      "farm_daily_share": true,
+      "farm_vip_gift": true,
+      "farm_month_card_gift": true,
+      "muge_claim_celebration": false,
+      "muge_claim_friends": false,
+      "muge_claim_handbook": false,
+      "muge_claim_personality": false,
+      "farm": true,
+      "farm_harvest_tiangong": true,
+      "farm_push": true,
+      "land_upgrade": true,
+      "friend": true,
+      "friend_auto_accept": true,
+      "friend_help_exp_limit": true,
+      "friend_steal": true,
+      "friend_help": true,
+      "friend_bad": true,
+      "friend_help_protect_dog_ignore_exp_limit": true,
+      "task": true,
+      "fertilizer_gift": false,
+      "fertilizer_buy_organic": false,
+      "fertilizer_buy_normal": false,
+      "mystery_shop_auto_buy": false,
+      "mystery_shop_allow_gold": true,
+      "mystery_shop_allow_coupon": false,
+      "mystery_shop_allow_gold_bean": false,
+      "mystery_shop_allow_diamond": false,
+      "mystery_shop_arrival_notify": false,
+      "mystery_shop_purchase_notify": false,
+      "mall_coupon_gift_buy": false,
+      "sell": true,
+      "fertilizer": "none",
+      "fertilizer_multi_season": true,
+      "fertilizer_land_types": [
+        "purple-gold",
+        "gold",
+        "black",
+        "red",
+        "normal"
+      ],
+      "fertilizer_land_strategies": {},
+      "fertilizer_smart_seconds": 300,
+      "skip_own_weed_bug": true,
+      "show_manual_fertilizer": true
+    },
+    "plantingStrategy": "max_exp",
+    "preferredSeedId": 0,
+    "intervals": {
+      "farm": 2,
+      "farmMin": 20,
+      "farmMax": 25,
+      "friendMin": 20,
+      "friendMax": 25,
+      "helpMin": 20,
+      "helpMax": 25,
+      "stealMin": 20,
+      "stealMax": 25
+    },
+    "friendQuietHours": {
+      "enabled": false,
+      "start": "01:00",
+      "end": "07:30",
+      "continueFarm": true
+    },
+    "knownFriendGids": [],
+    "knownFriendGidSyncCooldownSec": 300,
+    "friendsListCacheTtlSec": 60,
+    "friendBlacklist": [],
+    "ranchFriendBlacklist": [],
+    "plantBlacklist": [
+      20002,
+      20003,
+      20059,
+      20065,
+      20064,
+      20060,
+      20061
+    ],
+    "stealDelaySeconds": 1,
+    "plantDelaySeconds": 0,
+    "fertilizerBuyOrganicCount": 1,
+    "fertilizerBuyOrganicThresholdHours": 10,
+    "fertilizerBuyNormalCount": 1,
+    "fertilizerBuyNormalThresholdHours": 10,
+    "fertilizerBuyCheckIntervalMinutes": 60,
+    "fertilizerBuyNormalCheckIntervalMinutes": 60,
+    "emailClaimHour": 10,
+    "bagSeedPriority": [],
+    "bagSeedMultiLandReservationEnabled": false,
+    "bagSeedLandTypes": {},
+    "bagSeedFallbackStrategy": "level",
+    "autoAcceptFriendMinLevel": 0,
+    "autoAcceptRequireOwnLevel": false
+  },
+  "autoCodeRefresh": {
+    "enabled": true,
+    "intervalMinutes": 5,
+    "maxRetries": 100
+  },
+  "ui": {
+    "theme": "light"
+  },
+  "loginSettings": {
+    "wechatQrLogin": true,
+    "qqQrLogin": false,
+    "napCatEndpoint": "",
+    "napCatSignature": ""
+  },
+  "captureSettings": {
+    "enabled": true,
+    "autoImportQqGids": true
+  },
+  "accountOfflineReminders": {
+    "1": {
+      "channel": "wxpusher",
+      "endpoint": "",
+      "token": "",
+      "secret": "",
+      "wxPusherUid": "",
+      "channelCredentials": {
+        "qmsg": {
+          "token": "",
+          "wxPusherUid": ""
+        },
+        "wxpusher": {
+          "token": "SPT_WlYrezyR1i9TBhwLVy1EXriugM85",
+          "wxPusherUid": ""
+        },
+        "wxpusher_wechat": {
+          "token": "AT_Egxxcqgq7Pxvk2RuocOgM2wfOjKaDNaR",
+          "wxPusherUid": "UID_wXYqBAXL9e99WOFkvo4qiVjbpMKV"
+        },
+        "bark": {
+          "token": "",
+          "wxPusherUid": ""
+        }
+      },
+      "title": "",
+      "msg": "账号下线",
+      "notificationTypes": {
+        "offline": true,
+        "mysteryArrival": true,
+        "mysteryPurchase": true
+      },
+      "mysteryMessages": {
+        "mysteryArrival": "神秘商人到访",
+        "mysteryPurchase": "神秘商人已购买"
+      }
+    },
+    "4": {
+      "channel": "wxpusher",
+      "endpoint": "",
+      "token": "",
+      "secret": "",
+      "wxPusherUid": "",
+      "channelCredentials": {
+        "qmsg": {
+          "token": "",
+          "wxPusherUid": ""
+        },
+        "wxpusher": {
+          "token": "SPT_WlYrezyR1i9TBhwLVy1EXriugM85",
+          "wxPusherUid": ""
+        },
+        "wxpusher_wechat": {
+          "token": "AT_Egxxcqgq7Pxvk2RuocOgM2wfOjKaDNaR",
+          "wxPusherUid": "UID_wXYqBAXL9e99WOFkvo4qiVjbpMKV"
+        },
+        "bark": {
+          "token": "",
+          "wxPusherUid": ""
+        }
+      },
+      "title": "",
+      "msg": "账号下线",
+      "notificationTypes": {
+        "offline": true,
+        "mysteryArrival": true,
+        "mysteryPurchase": true
+      },
+      "mysteryMessages": {
+        "mysteryArrival": "神秘商人到访",
+        "mysteryPurchase": "神秘商人已购买"
+      }
+    },
+    "5": {
+      "channel": "wxpusher",
+      "endpoint": "",
+      "token": "",
+      "secret": "",
+      "wxPusherUid": "",
+      "channelCredentials": {
+        "qmsg": {
+          "token": "",
+          "wxPusherUid": ""
+        },
+        "wxpusher": {
+          "token": "SPT_WlYrezyR1i9TBhwLVy1EXriugM85",
+          "wxPusherUid": ""
+        },
+        "wxpusher_wechat": {
+          "token": "AT_Egxxcqgq7Pxvk2RuocOgM2wfOjKaDNaR",
+          "wxPusherUid": "UID_wXYqBAXL9e99WOFkvo4qiVjbpMKV"
+        },
+        "bark": {
+          "token": "",
+          "wxPusherUid": ""
+        }
+      },
+      "title": "",
+      "msg": "农场下线",
+      "notificationTypes": {},
+      "mysteryMessages": {
+        "mysteryArrival": "",
+        "mysteryPurchase": ""
+      }
+    },
+    "6": {
+      "channel": "wxpusher",
+      "endpoint": "",
+      "token": "",
+      "secret": "",
+      "wxPusherUid": "",
+      "channelCredentials": {
+        "qmsg": {
+          "token": "",
+          "wxPusherUid": ""
+        },
+        "wxpusher": {
+          "token": "SPT_WlYrezyR1i9TBhwLVy1EXriugM85",
+          "wxPusherUid": ""
+        },
+        "wxpusher_wechat": {
+          "token": "AT_Egxxcqgq7Pxvk2RuocOgM2wfOjKaDNaR",
+          "wxPusherUid": "UID_wXYqBAXL9e99WOFkvo4qiVjbpMKV"
+        },
+        "bark": {
+          "token": "",
+          "wxPusherUid": ""
+        }
+      },
+      "title": "",
+      "msg": "账号下线",
+      "notificationTypes": {
+        "offline": true,
+        "mysteryArrival": true,
+        "mysteryPurchase": true
+      },
+      "mysteryMessages": {
+        "mysteryArrival": "神秘商人到访",
+        "mysteryPurchase": "神秘商人已购买"
+      }
+    }
+  },
+  "offlineReminderDefault": {
+    "channel": "wxpusher",
+    "endpoint": "",
+    "token": "",
+    "secret": "",
+    "wxPusherUid": "",
+    "channelCredentials": {
+      "qmsg": {
+        "token": "",
+        "wxPusherUid": ""
+      },
+      "wxpusher": {
+        "token": "SPT_WlYrezyR1i9TBhwLVy1EXriugM85",
+        "wxPusherUid": ""
+      },
+      "wxpusher_wechat": {
+        "token": "AT_Egxxcqgq7Pxvk2RuocOgM2wfOjKaDNaR",
+        "wxPusherUid": "UID_wXYqBAXL9e99WOFkvo4qiVjbpMKV"
+      },
+      "bark": {
+        "token": "",
+        "wxPusherUid": ""
+      }
+    },
+    "title": "",
+    "msg": "账号下线",
+    "notificationTypes": {
+      "offline": true,
+      "mysteryArrival": true,
+      "mysteryPurchase": true
+    },
+    "mysteryMessages": {
+      "mysteryArrival": "神秘商人到访",
+      "mysteryPurchase": "神秘商人已购买"
+    }
+  },
+  "systemConfig": {
+    "serverUrl": "wss://gate-obt.nqf.qq.com/prod/ws",
+    "clientVersion": "1.17.0.4_20261117",
+    "clientVersionUpdatedAt": 1794888024122,
+    "wxClientVersion": "1.17.0.4_20261117",
+    "wxClientVersionUpdatedAt": 1794891946317,
+    "platform": "qq",
+    "os": "Windows",
+    "timeZone": "Asia/Shanghai",
+    "deviceInfo": {
+      "os": "Windows",
+      "clientVersion": "1.17.0.4_20261117",
+      "sysSoftware": "Windows",
+      "network": "wifi",
+      "memory": "16384",
+      "deviceId": "DESKTOP-PC<WPC>",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13)"
+    }
+  },
+  "userDefaultPlan": {
+    "enabled": true,
+    "config": {
+      "automation": {
+        "ranch_harvest": true,
+        "ranch_produce": true,
+        "ranch_buy": true,
+        "ranch_activate_shed": true,
+        "ranch_upgrade": true,
+        "ranch_sell": true,
+        "ranch_market_organic": true,
+        "ranch_market_organic_poop": true,
+        "ranch_market_organic_pinecone": true,
+        "ranch_grass": true,
+        "ranch_grass_buy": true,
+        "ranch_grass_threshold_percent": 90,
+        "ranch_fill_cans": true,
+        "ranch_feed_normal": true,
+        "ranch_feed_normal_stage": "any",
+        "ranch_feed_organic": true,
+        "ranch_feed_organic_stage": "any",
+        "ranch_clean": true,
+        "ranch_stroke": true,
+        "ranch_friend_patrol": true,
+        "ranch_friend_steal": true,
+        "ranch_friend_clean": true,
+        "ranch_friend_mosquito": true,
+        "ranch_task": true,
+        "ranch_illustrated": true,
+        "ranch_share": true,
+        "ranch_daily_benefit": true,
+        "ranch_check_minutes": 5,
+        "ranch_check_min_seconds": 30,
+        "ranch_check_max_seconds": 50,
+        "ranch_strategy": "illustrated",
+        "ranch_bag_fallback": "bag_priority",
+        "ranch_coop_animal": 0,
+        "ranch_shed_animal": 0,
+        "ranch_coop_cub_priority": [],
+        "ranch_shed_cub_priority": [],
+        "planting_enabled": true,
+        "fertilizer_enabled": true,
+        "ranch_production_enabled": true,
+        "ranch_facilities_enabled": true,
+        "friends_enabled": true,
+        "activity_enabled": true,
+        "farm_illustrated": true,
+        "farm_email_rewards": true,
+        "farm_free_gifts": true,
+        "farm_daily_share": true,
+        "farm_vip_gift": true,
+        "farm_month_card_gift": true,
+        "muge_claim_celebration": true,
+        "muge_claim_friends": true,
+        "muge_claim_handbook": true,
+        "muge_claim_personality": true,
+        "farm": true,
+        "farm_harvest_tiangong": true,
+        "farm_push": true,
+        "land_upgrade": true,
+        "friend": true,
+        "friend_auto_accept": false,
+        "friend_help_exp_limit": true,
+        "friend_steal": true,
+        "friend_help": true,
+        "friend_bad": true,
+        "friend_help_protect_dog_ignore_exp_limit": true,
+        "task": true,
+        "fertilizer_gift": true,
+        "fertilizer_buy_organic": true,
+        "fertilizer_buy_normal": false,
+        "mystery_shop_auto_buy": true,
+        "mystery_shop_allow_gold": true,
+        "mystery_shop_allow_coupon": false,
+        "mystery_shop_allow_gold_bean": false,
+        "mystery_shop_allow_diamond": false,
+        "mystery_shop_arrival_notify": false,
+        "mystery_shop_purchase_notify": false,
+        "mall_coupon_gift_buy": true,
+        "sell": true,
+        "fertilizer": "normal",
+        "fertilizer_multi_season": true,
+        "fertilizer_land_types": [
+          "purple-gold",
+          "gold",
+          "black",
+          "red",
+          "normal",
+          "blue-crystal"
+        ],
+        "fertilizer_land_strategies": {},
+        "fertilizer_smart_seconds": 300,
+        "skip_own_weed_bug": true,
+        "show_manual_fertilizer": true
+      },
+      "plantingStrategy": "illustrated",
+      "intervals": {
+        "farm": 2,
+        "farmMin": 20,
+        "farmMax": 30,
+        "friendMin": 5,
+        "friendMax": 10,
+        "helpMin": 20,
+        "helpMax": 25,
+        "stealMin": 20,
+        "stealMax": 25
+      },
+      "friendQuietHours": {
+        "enabled": false,
+        "start": "01:00",
+        "end": "07:30",
+        "continueFarm": true
+      },
+      "stealDelaySeconds": 0,
+      "plantDelaySeconds": 0,
+      "fertilizerBuyOrganicCount": 1,
+      "fertilizerBuyOrganicThresholdHours": 10,
+      "fertilizerBuyNormalCount": 1,
+      "fertilizerBuyNormalThresholdHours": 10,
+      "fertilizerBuyCheckIntervalMinutes": 60,
+      "emailClaimHour": 10,
+      "bagSeedFallbackStrategy": "bag_priority",
+      "autoAcceptFriendMinLevel": 0,
+      "autoAcceptRequireOwnLevel": false
+    },
+    "updatedAt": 1795546444003
+  },
+  "accountConfigStorageVersion": 1
+}
