@@ -1,3 +1,7 @@
+import type { PushNotification } from '../config/notification-types';
+import { normalizeNotificationTypes } from '../config/notification-types';
+const { sendPushChannels } = require('../services/push');
+
 export {};
 
 interface ReloginReminderOptions {
@@ -45,15 +49,28 @@ function createReloginReminderService(options: ReloginReminderOptions) {
         return { ok: true, channel, token, wxPusherUid, endpoint, secret };
     }
 
-    async function sendConfiguredPush(payload: { title?: string; content?: string; accountId?: string; accountName?: string; logLabel?: string; appendAccountName?: boolean } = {}): Promise<void> {
+    async function sendConfiguredPush(payload: { candidates?: PushNotification[]; title?: string; content?: string; accountId?: string; accountName?: string; logLabel?: string; appendAccountName?: boolean } = {}): Promise<void> {
         const accountId = String(payload.accountId || '').trim();
         const accountName = String(payload.accountName || '').trim();
-        const baseTitle = String(payload.title || '').trim();
-        const content = String(payload.content || '').trim();
+        const global = store.getPushNotifications?.();
+        const enabled = normalizeNotificationTypes(global?.notificationTypes);
+        const notification = payload.candidates ? payload.candidates.find(item => enabled[item.type]) : payload;
+        if (!notification) return;
+        const baseTitle = String(notification.title || '').trim();
+        const content = String(notification.content || '').trim();
         const appendAccountName = payload.appendAccountName !== false;
         const title = appendAccountName && accountName ? `${baseTitle} ${accountName}` : baseTitle;
         const logLabel = String(payload.logLabel || '事件提醒').trim() || '事件提醒';
         try {
+            const targets = global?.channels.filter((entry: { enabled: boolean }) => entry.enabled) || [];
+            if (targets.length && title && content) {
+                const results = await sendPushChannels(targets, { title, content }, sendPushooMessage);
+                for (const result of results) {
+                    if (result.ok) log('系统', `${logLabel}发送成功（${result.channel}）: ${accountName || accountId || title}`);
+                    else log('错误', `${logLabel}发送失败（${result.channel}）: ${result.msg}`);
+                }
+                return;
+            }
             const channelCfg = resolvePushChannel(accountId);
             if (channelCfg.ok === false) {
                 log('错误', channelCfg.reason);
@@ -100,7 +117,10 @@ function createReloginReminderService(options: ReloginReminderOptions) {
             const reason = String(payload.reason || 'unknown');
             log('系统', `触发下线提醒: 账号=${accountName || accountId}, 原因=${reason}`, { accountId, accountName, reason });
 
-            const cfg = store.getOfflineReminder ? store.getOfflineReminder(accountId) : null;
+            const global = store.getPushNotifications?.();
+            if (global?.notificationTypes.offline === false) return;
+            const useGlobal = global?.channels.some((entry: { enabled: boolean }) => entry.enabled);
+            const cfg = useGlobal ? global : store.getOfflineReminder?.(accountId);
             if (!cfg) {
                 log('错误', '未找到下线提醒配置');
                 return;

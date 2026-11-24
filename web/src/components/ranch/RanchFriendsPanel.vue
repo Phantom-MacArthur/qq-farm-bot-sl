@@ -24,7 +24,7 @@ const ranch = useRanchStore()
 const { state, loading, refreshing, error } = storeToRefs(ranch)
 const { currentAccountId } = storeToRefs(useAccountStore())
 const toast = useToastStore()
-const { disabled, request } = useRanchActions()
+const { disabled, request, requestDirect } = useRanchActions()
 const { remainingSeconds } = useRanchClock()
 
 const friends = ref<any[]>([])
@@ -134,6 +134,11 @@ const detail = computed(() => {
     return current
   return refreshingDetail.value?.gid === selected.value ? refreshingDetail.value : null
 })
+function canHelpProduce(friend: { gid: string, canMidwife?: boolean }) {
+  if (selected.value === friend.gid && detail.value)
+    return detail.value.ranches.some((pen: { animals: any[] }) => pen.animals.some(animal => animal.canProduce))
+  return Boolean(friend.canMidwife)
+}
 const detailAnimals = computed(() => (detail.value?.ranches || []).flatMap((pen: { id: string, animals: any[] }) => pen.animals.map((animal) => {
   const deadline = animal.deliveringUntilMs || animal.nextAtMs
   const remaining = deadline ? remainingSeconds(deadline) : 0
@@ -360,11 +365,15 @@ function chooseMischiefPen(ranchId: string) {
                   </span>
                 </div>
                 <div class="friend-actions">
-                  <span v-if="!blacklistedSet.has(Number(friend.gid)) && (friend.canMidwife || friend.canSteal || friend.canHelp)" class="friend-tags text-xs">
-                    <span v-if="friend.canMidwife">可帮生产</span>
+                  <span v-if="!blacklistedSet.has(Number(friend.gid)) && (canHelpProduce(friend) || friend.canSteal || friend.canHelp)" class="friend-tags text-xs">
+                    <span v-if="canHelpProduce(friend)">可帮生产</span>
                     <span v-if="friend.canSteal">可收取</span>
                     <span v-if="friend.canHelp">可清理</span>
                   </span>
+                  <NButton v-if="canHelpProduce(friend)" size="small" secondary type="primary" :disabled="disabled || refreshing || blacklistedSet.has(Number(friend.gid))" @click="requestDirect('produceFriend', { hostGid: friend.gid })">
+                    <template #icon><span class="i-carbon-circle-dash" /></template>
+                    帮忙生产
+                  </NButton>
                   <NButton size="small" secondary :type="selected === friend.gid && detail?.canSteal ? 'primary' : 'default'" :disabled="disabled || refreshing || blacklistedSet.has(Number(friend.gid))" @click="request('steal', { hostGid: friend.gid })">
                     <template #icon><span class="i-carbon-shopping-bag" /></template>
                     偷取

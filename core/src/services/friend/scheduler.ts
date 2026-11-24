@@ -31,6 +31,7 @@ const {
 } = require('./application-filter');
 const {
     extractReplyFriends,
+    canScanFriend,
     clearAllInvalidKnownFriendGidCooldowns,
 } = require('./gid-manager');
 const {
@@ -369,7 +370,7 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
         let midRoundExpSkipped: number = 0;
         const deferredSteals: Array<{ target: typeof plan.visits[number]; readyAt: number }> = [];
         const stealDelayMs = getStealDelaySeconds(accountId) * 1000;
-        const canVisit = (target: typeof plan.visits[number]) => canContinue() && !getFriendBlacklist(accountId).includes(target.gid);
+        const canVisit = (target: typeof plan.visits[number]) => canContinue() && canScanFriend(target.gid) && !getFriendBlacklist(accountId).includes(target.gid);
 
         async function runVisit(target: typeof plan.visits[number], stealOnly = false) {
             try {

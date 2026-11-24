@@ -36,6 +36,8 @@ const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 const {
   friends,
   loading,
+  friendsListState,
+  friendsError,
   friendLands,
   friendLandsLoading,
   friendLandsError,
@@ -50,8 +52,7 @@ const {
   interactionUsePending,
   interactionUseError,
   knownFriendGids,
-  knownFriendGidSyncCooldownSec,
-  friendsListCacheTtlSec,
+  knownFriendSettings,
   knownFriendSettingsLoading,
   knownFriendSettingsSaving,
 } = storeToRefs(friendStore)
@@ -87,7 +88,17 @@ const filteredKnownFriendGids = computed(() => {
 
 const syncedGidCount = computed(() => filteredKnownFriendGids.value.filter(item => item.synced).length)
 const unsyncedGidCount = computed(() => filteredKnownFriendGids.value.filter(item => !item.synced).length)
-const knownFriendSettingsLoadedAccount = ref('')
+const canRemoveUnsynced = computed(() => !loading.value && ['ready', 'partial'].includes(friendsListState.value))
+const friendListNotice = computed(() => {
+  if (friendsListState.value === 'error')
+    return `好友详情读取失败：${friendsError.value}。已导入的 GID 和已有详情保留。`
+  if (friendsListState.value === 'partial') {
+    return isQqAccount.value
+      ? '部分好友详情暂未返回。游戏漏回的好友会在 30 分钟后补查一次，仍未返回就暂停巡查。重新登录或手动刷新好友列表后再查。'
+      : '部分好友详情暂未返回，已保留现有名单。'
+  }
+  return ''
+})
 
 async function handleRemoveGidFromList(gid: number) {
   if (!currentAccountId.value)
@@ -95,28 +106,28 @@ async function handleRemoveGidFromList(gid: number) {
   await friendStore.removeKnownFriendGid(currentAccountId.value, gid)
 }
 
-async function handleRemoveUnsyncedGids() {
-  if (!currentAccountId.value)
+function handleRemoveUnsyncedGids() {
+  const accountId = currentAccountId.value
+  if (!accountId || !canRemoveUnsynced.value)
     return
   const unsyncedGids = filteredKnownFriendGids.value.filter(item => !item.synced).map(item => item.gid)
   if (unsyncedGids.length === 0) {
     toast.info('没有未同步的好友记录')
     return
   }
-  const result = await friendStore.removeUnsyncedKnownFriendGids(currentAccountId.value, unsyncedGids)
-  if (result.ok && result.removedCount > 0) {
-    toast.success(`已删除 ${result.removedCount} 条未同步的好友记录`)
-  }
+  confirmAction(`确定从已导入的名单移除这 ${unsyncedGids.length} 个未返回详情的 GID 吗？`, async () => {
+    if (accountId !== currentAccountId.value || !canRemoveUnsynced.value)
+      return
+    const remaining = unsyncedGids.filter(gid => !friendGidSet.value.has(gid))
+    const result = await friendStore.removeUnsyncedKnownFriendGids(accountId, remaining)
+    if (result.ok && result.removedCount > 0)
+      toast.success(`已删除 ${result.removedCount} 个未同步的 GID`)
+  })
 }
 
 function openGidListModal() {
   gidSearchKeyword.value = ''
   showGidListModal.value = true
-  const accountId = currentAccountId.value
-  if (accountId && isQqAccount.value && knownFriendSettingsLoadedAccount.value !== accountId) {
-    knownFriendSettingsLoadedAccount.value = accountId
-    void friendStore.fetchKnownFriendSettings(accountId)
-  }
 }
 
 const TABS = [
@@ -146,8 +157,13 @@ const confirmLoading = ref(false)
 const pendingAction = ref<(() => Promise<any>) | null>(null)
 const avatarErrorKeys = ref<Set<string>>(new Set())
 const searchKeyword = ref('')
-const localKnownFriendGidSyncCooldownSec = ref(300)
-const localFriendsListCacheTtlSec = ref(60)
+const localKnownFriendGidSyncCooldownSec = ref<number | string>('')
+const localFriendsListCacheTtlSec = ref<number | string>('')
+const settingsBusy = computed(() => !knownFriendSettings.value || knownFriendSettingsLoading.value || knownFriendSettingsSaving.value)
+const settingsChanged = computed(() => knownFriendSettings.value && (
+  localKnownFriendGidSyncCooldownSec.value !== knownFriendSettings.value.knownFriendGidSyncCooldownSec
+  || localFriendsListCacheTtlSec.value !== knownFriendSettings.value.friendsListCacheTtlSec
+))
 const showBatchAddGidModal = ref(false)
 const batchGidInput = ref('')
 const interactFilter = ref('all')
@@ -513,7 +529,9 @@ watch(currentAccountId, () => {
   friendsLoadedAccount.value = ''
   blacklistLoadedAccount.value = ''
   interactRecordsLoadedAccount.value = ''
-  knownFriendSettingsLoadedAccount.value = ''
+  showGidListModal.value = false
+  showBatchAddGidModal.value = false
+  batchGidInput.value = ''
   friendStore.resetInteractionState()
   friendStore.resetFriendLandState()
 })
@@ -524,19 +542,8 @@ watch(interactionItems, (items) => {
 }, { immediate: true })
 
 async function handleRefreshFriends() {
-  const accountId = currentAccountId.value
-  if (!accountId || !currentAccountRunning.value)
-    return
-  try {
-    await api.post('/api/friends/clear-cache', {}, {
-      headers: { 'x-account-id': accountId },
-    })
-  }
-  catch {
-    // ignore
-  }
-  if (accountId === currentAccountId.value && currentAccountRunning.value)
-    await friendStore.fetchFriends(accountId, true)
+  if (currentAccountId.value)
+    await friendStore.fetchFriends(currentAccountId.value, true)
 }
 
 async function refreshFriendLands(friendId: unknown) {
@@ -850,30 +857,18 @@ function formatInteractTime(timestamp: number) {
   })
 }
 
-function normalizeKnownFriendGidSyncCooldownSec(value: number) {
-  const v = Number.parseInt(String(value || ''), 10)
-  if (!Number.isFinite(v) || v <= 0)
-    return 600
-  return Math.max(30, Math.min(86400, v))
-}
-
-function normalizeFriendsListCacheTtlSec(value: number) {
-  const v = Number.parseInt(String(value || ''), 10)
-  if (!Number.isFinite(v) || v <= 0)
-    return 60
-  return Math.max(10, Math.min(86400, v))
-}
-
 async function handleRemoveKnownFriendGid(friend: any, e: Event) {
   e.stopPropagation()
-  if (!currentAccountId.value)
+  const accountId = currentAccountId.value
+  if (!accountId)
     return
   const gid = Number(friend?.gid) || 0
   const name = String(friend?.name || '未命名好友').trim()
   confirmAction(
     `确定将 ${name} 移出同步列表吗？后续如果最近访客再次命中，该好友仍可被自动同步回来。`,
     async () => {
-      await friendStore.removeKnownFriendGid(currentAccountId.value!, gid)
+      if (currentAccountId.value !== accountId || !await friendStore.removeKnownFriendGid(accountId, gid))
+        return
       await refreshFriendsAfterKnownGidChange()
       toast.success(`已移出同步列表: ${name}`)
     },
@@ -887,24 +882,45 @@ async function refreshFriendsAfterKnownGidChange() {
 }
 
 async function handleSaveKnownFriendSettings() {
-  if (!currentAccountId.value)
+  const accountId = currentAccountId.value
+  if (!accountId || settingsBusy.value || !settingsChanged.value)
     return
-  const cooldownSec = normalizeKnownFriendGidSyncCooldownSec(localKnownFriendGidSyncCooldownSec.value)
-  const cacheTtlSec = normalizeFriendsListCacheTtlSec(localFriendsListCacheTtlSec.value)
-  await friendStore.saveKnownFriendSettings(currentAccountId.value, {
+  const cooldownSec = Number(localKnownFriendGidSyncCooldownSec.value)
+  const cacheTtlSec = Number(localFriendsListCacheTtlSec.value)
+  if (!Number.isInteger(cooldownSec) || cooldownSec < 30 || cooldownSec > 86400) {
+    toast.error('访客检测入库冷却须填写 30 至 86400 的整数秒数')
+    return
+  }
+  if (!Number.isInteger(cacheTtlSec) || cacheTtlSec < 10 || cacheTtlSec > 86400) {
+    toast.error('好友列表缓存须填写 10 至 86400 的整数秒数')
+    return
+  }
+  const saved = await friendStore.saveKnownFriendSettings(accountId, {
     knownFriendGidSyncCooldownSec: cooldownSec,
     friendsListCacheTtlSec: cacheTtlSec,
   })
-  toast.success('设置已保存')
+  if (saved && currentAccountId.value === accountId) {
+    resetSettingsDraft()
+    toast.success('设置已保存')
+  }
 }
 
-watch(knownFriendGidSyncCooldownSec, (val) => {
-  localKnownFriendGidSyncCooldownSec.value = val
+function resetSettingsDraft() {
+  localKnownFriendGidSyncCooldownSec.value = knownFriendSettings.value?.knownFriendGidSyncCooldownSec ?? ''
+  localFriendsListCacheTtlSec.value = knownFriendSettings.value?.friendsListCacheTtlSec ?? ''
+}
+
+async function refreshKnownFriendSettings(accountId: string) {
+  if (await friendStore.fetchKnownFriendSettings(accountId) && accountId === currentAccountId.value)
+    resetSettingsDraft()
+}
+
+watch(() => isQqAccount.value ? currentAccountId.value : '', (accountId) => {
+  if (accountId)
+    void refreshKnownFriendSettings(accountId)
 }, { immediate: true })
 
-watch(friendsListCacheTtlSec, (val) => {
-  localFriendsListCacheTtlSec.value = val
-}, { immediate: true })
+watch(() => !!knownFriendSettings.value, resetSettingsDraft, { immediate: true })
 
 function parseBatchGids(input: string): number[] {
   const text = String(input || '').trim()
@@ -1053,6 +1069,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
       <template v-else>
         <div v-if="activeTab === 'friends'" class="friends-tab space-y-4">
+          <p v-if="friendListNotice" role="status" class="text-sm text-amber-700 dark:text-amber-300">{{ friendListNotice }}</p>
           <div v-if="currentAccountId && isQqAccount" class="mb-4 border page-card-surface border-amber-200 rounded-2xl bg-white shadow-md dark:border-amber-700/50 dark:bg-gray-800 margin-shell"><span class="margin-content !m-4">
             <div class="flex flex-row items-start justify-between gap-3">
               <div>
@@ -1461,7 +1478,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
           <BaseButton
             variant="danger"
             :loading="knownFriendSettingsSaving"
-            :disabled="unsyncedGidCount === 0"
+            :disabled="!canRemoveUnsynced || unsyncedGidCount === 0"
             @click="handleRemoveUnsyncedGids"
           >
             删除未同步（{{ unsyncedGidCount }}）

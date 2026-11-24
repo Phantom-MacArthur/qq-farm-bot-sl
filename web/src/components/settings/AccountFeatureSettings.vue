@@ -483,6 +483,7 @@ async function saveRanchCubs() {
                     />
                   </template>
                   <BaseSwitch v-model="auto.ranch_stroke" label="自动抚摸" />
+                  <BaseSwitch v-model="auto.ranch_friend_produce" label="自动帮忙生产" />
                 </div>
                 <div v-if="auto.friend_help" class="grid grid-cols-2 gap-2">
                   <BaseSwitch v-model="auto.friend_help_exp_limit" label="农场经验满不帮忙" />

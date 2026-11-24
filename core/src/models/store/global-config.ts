@@ -1,3 +1,6 @@
+import type { PushSettings } from '../../types/config';
+import { normalizeNotificationTypes } from '../../config/notification-types';
+import { isPushChannelConfigured, readPushChannels, singlePushChannel } from '../../config/push-channels';
 import type { AutoCodeRefreshConfig, CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
 export {};
 
@@ -312,7 +315,69 @@ if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
     sharedState.systemConfigMigrated = false;
 }
 
+function normalizePushSettings(input: unknown): PushSettings {
+    const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
+    const channels = readPushChannels(src);
+    const primary = channels.find(entry => entry.enabled);
+    const title = (src.title !== undefined && src.title !== null)
+        ? String(src.title).trim()
+        : '';
+    const msg = (src.msg !== undefined && src.msg !== null)
+        ? String(src.msg).trim()
+        : '';
+    return {
+        notificationTypes: normalizeNotificationTypes(src.notificationTypes),
+        channels,
+        channel: primary?.channel ?? DEFAULT_OFFLINE_REMINDER.channel,
+        endpoint: primary?.endpoint ?? '',
+        token: primary?.token ?? '',
+        secret: primary?.secret ?? '',
+        title,
+        msg,
+    };
+}
+
+function getPushNotifications(): PushSettings {
+    return normalizePushSettings(globalConfig.pushNotifications);
+}
+
+function setPushNotifications(cfg: Partial<Omit<PushSettings, 'notificationTypes'>> & {
+    notificationTypes?: Partial<PushSettings['notificationTypes']>;
+    enabled?: boolean;
+} = {}): PushSettings {
+    const current = getPushNotifications();
+    let channels = cfg.channels ?? current.channels;
+    if (!cfg.channels && cfg.enabled !== undefined) {
+        const selected = singlePushChannel(current, cfg);
+        const byName = new Map(current.channels.map(entry => [entry.channel, entry]));
+        if (selected.endpoint || selected.token || selected.secret) byName.set(selected.channel, selected);
+        else byName.delete(selected.channel);
+        channels = [...byName.values()];
+    } else if (!cfg.channels && ['channel', 'endpoint', 'token', 'secret'].some(key => Object.hasOwn(cfg, key))) {
+        const selected = singlePushChannel(current, cfg);
+        // 单渠道表单只替换原先选中的渠道，保留 App 另行启用的渠道。
+        const configured = isPushChannelConfigured(selected);
+        const changed = selected.channel !== current.channel || selected.endpoint !== current.endpoint
+            || selected.token !== current.token || selected.secret !== current.secret;
+        if (changed) {
+            channels = current.channels.filter(entry => entry.channel !== selected.channel);
+            if (selected.channel !== current.channel && configured) {
+                channels = channels.map(entry => entry.channel === current.channel ? { ...entry, enabled: false } : entry);
+            }
+            if (configured) channels.unshift(selected);
+        }
+    }
+    const next = normalizePushSettings({
+        ...current, ...cfg, channels,
+        notificationTypes: { ...current.notificationTypes, ...cfg.notificationTypes },
+    });
+    saveGlobalConfig({ pushNotifications: next });
+    return getPushNotifications();
+}
+
 module.exports = {
+    getPushNotifications,
+    setPushNotifications,
     saveGlobalConfig,
     getUI,
     setUITheme,

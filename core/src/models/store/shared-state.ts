@@ -584,6 +584,9 @@ function loadGlobalConfig(): void {
             if (data.offlineReminder && typeof data.offlineReminder === 'object') {
                 (globalConfig as any).offlineReminder = data.offlineReminder;
             }
+            if (data.pushNotifications && typeof data.pushNotifications === 'object') {
+                globalConfig.pushNotifications = data.pushNotifications;
+            }
             if (data.offlineReminderDefault && typeof data.offlineReminderDefault === 'object') {
                 globalConfig.offlineReminderDefault = data.offlineReminderDefault;
             }

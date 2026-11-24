@@ -48,6 +48,7 @@ test('fertilizer purchase timers check only their fertilizer and refresh indepen
     const { startFarmCheckLoop, refreshFarmCheckLoop, stopFarmCheckLoop } = load('../dist/services/farm/scheduler', {
         '../../models/store': {
             isAutomationOn: key => enabled.has(key),
+            getAutomation: () => ({}),
             getFertilizerBuyCheckIntervalMinutes: () => 19,
             getFertilizerBuyNormalCheckIntervalMinutes: () => normalMinutes,
             getFertilizerBuyOrganicCount: () => 1,
@@ -55,7 +56,7 @@ test('fertilizer purchase timers check only their fertilizer and refresh indepen
             getFertilizerBuyNormalCount: () => 2,
             getFertilizerBuyNormalThresholdHours: () => 8,
         },
-        '../../utils/network': { networkEvents: { on() {}, removeListener() {} } },
+        '../../utils/network': { getUserState: () => ({ gid: 1 }), networkEvents: { on() {}, removeListener() {} } },
         '../../utils/utils': { log() {}, logWarn: message => assert.fail(message) },
         '../scheduler': {
             createScheduler: () => ({

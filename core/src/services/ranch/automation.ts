@@ -68,7 +68,7 @@ function resetFriendCycle(): void {
 }
 
 const FRIEND_CONTROLS = {
-    stroke: 'ranch_stroke', steal: 'ranch_friend_steal', cleanFriend: 'ranch_friend_clean', putMosquito: 'ranch_friend_mosquito',
+    stroke: 'ranch_stroke', steal: 'ranch_friend_steal', produceFriend: 'ranch_friend_produce', cleanFriend: 'ranch_friend_clean', putMosquito: 'ranch_friend_mosquito',
 } as const;
 type FriendAction = keyof typeof FRIEND_CONTROLS;
 const FRIEND_ACTIONS = Object.keys(FRIEND_CONTROLS) as FriendAction[];
@@ -228,7 +228,7 @@ async function runFriendPatrol(options: RoutineOptions): Promise<void> {
                 const blacklist = new Set(getRanchFriendBlacklist(process.env.FARM_ACCOUNT_ID));
                 const friends = patrolFriends.filter(friend => !blacklist.has(friend.gid));
                 if (!friends.length) return;
-                const hasBulkWork = enabled('ranch_friend_steal') || enabled('ranch_friend_clean');
+                const hasBulkWork = canInteract('steal') || canInteract('produceFriend') || canInteract('cleanFriend');
                 const times = hasBulkWork ? {} : await interactions.getInteractionTimes();
                 const wanted = (action: FriendAction) => canInteract(action) && times[action] !== 0;
                 const statusDecides = () => !wanted('stroke') && !wanted('putMosquito');
@@ -261,7 +261,8 @@ async function runFriendPatrol(options: RoutineOptions): Promise<void> {
                             checkpoint();
                         }
                         if (!canVisit() || (pendingFriend?.gid !== gid && statusDecides() && Date.now() - friend.statusAtMs <= FRIEND_STATUS_FRESH_MS
-                            && !(wanted('steal') && friend.canSteal) && !(wanted('cleanFriend') && friend.canHelp))) {
+                            && !(wanted('steal') && friend.canSteal) && !(wanted('produceFriend') && friend.canMidwife)
+                            && !(wanted('cleanFriend') && friend.canHelp))) {
                             pendingFriend = null;
                             continue;
                         }

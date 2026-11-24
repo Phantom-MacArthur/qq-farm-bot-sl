@@ -17,7 +17,7 @@ const { recordOperation } = require('../stats');
 const { updateStatusGold } = require('../status');
 const { getBagSeeds } = require('../warehouse');
 const { getCareerInfoOrNull } = require('../career');
-const { getAllLands, buyGoods, removePlant, fertilizeOne } = require('./api');
+const { getAllLands, buyGoods, removePlant, fertilizeOne, decodeChangedLands } = require('./api');
 const { isRipeningOnlyMode, runRipeningFertilizer } = require('./ripening');
 const {
     selectFutureLayoutReservation,
@@ -145,7 +145,7 @@ async function plantSeeds(seedId: number | string, landIds: number[], options: {
             const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Plant', body);
             pacing.lastPlantAt = performance.now();
             rpcSucceeded = true;
-            const reply = types.PlantReply.decode(replyBody);
+            const reply = decodeChangedLands(types.PlantReply, replyBody);
             const changedLands = Array.isArray(reply && reply.land) ? reply.land : [];
             let resolved = resolveOccupiedLandIds(landId, changedLands);
             resolvedMasterId = toNum(resolved.masterLandId) || landId;

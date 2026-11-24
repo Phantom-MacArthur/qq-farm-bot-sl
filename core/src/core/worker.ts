@@ -9,7 +9,7 @@ const { getLevelExpProgress, loadConfigs } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot } = require('../models/store');
 const { checkAndClaimEmails, configureEmailClaim, getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand, getAllLands } = require('../services/farm');
-const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, getFriendsList, getFriendsListCacheOnly, getFriendLandsDetail, doFriendOperation, deleteFriend } = require('../services/friend');
+const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCheckLoop, getFriendsList, getFriendsListCacheOnly, isFriendsListPartial, getFriendLandsDetail, doFriendOperation, deleteFriend } = require('../services/friend');
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
 const { autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, autoBuyCouponGifts, COUPON_GIFT_CHECK_INTERVAL_MS } = require('../services/mall');
@@ -531,8 +531,8 @@ async function runMysteryShopTick(): Promise<void> {
         await runExclusiveAutomationTask('mystery_shop', async () => {
             if (!canContinue()) return;
             const result = await checkMysteryShopTick(canContinue);
-            if (canContinue() && result?.push?.title && result?.push?.content) {
-                sendToMaster({ type: 'push_notify', title: result.push.title, content: result.push.content });
+            if (canContinue() && result?.notifications?.length) {
+                sendToMaster({ type: 'push_notify', candidates: result.notifications });
             }
         });
     } catch {
@@ -1165,9 +1165,11 @@ async function handleApiCall(msg: any): Promise<void> {
                 break;
             case 'getFriends':
                 result = await getFriendsList(args[0] === true, 'normal', args[1] === true);
+                if (args[2]) result = { data: result, partial: isFriendsListPartial() };
                 break;
             case 'getFriendsCache':
                 result = getFriendsListCacheOnly();
+                if (args[0]) result = { data: result, partial: isFriendsListPartial() };
                 break;
             case 'clearFriendsCache':
                 require('../services/friend').clearFriendsListCache();

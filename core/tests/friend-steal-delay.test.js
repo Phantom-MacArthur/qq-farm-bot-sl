@@ -19,6 +19,7 @@ test('farm schedules stealing from the first entry, then rechecks on a later vis
         '../../config/config': { PlantPhase: { MATURE: 6 } },
         '../../config/gameConfig': { getPlantName: () => '白菜' },
         '../../models/store': { isAutomationOn: key => key === 'friend_steal' },
+        '../../utils/network': { networkEvents: { on() {} } },
         '../../utils/utils': { toNum: Number, randomDelay: async () => {}, log: () => {} },
         '../farm': {
             buildLandMap: () => ({}), isOccupiedSlaveLand: () => false, getCurrentPhase: phases => phases[0],
