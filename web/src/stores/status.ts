@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { io } from 'socket.io-client'
 import { computed, ref } from 'vue'
 import api, { confirmAccountConnection, getApiErrorMessage } from '@/api'
+import { LOG_CACHE_LIMIT } from '@/constants/log-filters'
 import { useAccountStore } from '@/stores/account'
 
 // Define interfaces for better type checking
@@ -72,6 +73,8 @@ export const useStatusStore = defineStore('status', () => {
     return (input && typeof input === 'object') ? { ...input } : {}
   }
 
+  let logRequestSequence = 0
+
   function normalizeLogEntry(input: any) {
     const entry = (input && typeof input === 'object') ? { ...input } : {}
     const ts = Number(entry.ts) || Date.parse(String(entry.time || '')) || Date.now()
@@ -85,8 +88,8 @@ export const useStatusStore = defineStore('status', () => {
   function pushRealtimeLog(entry: any) {
     const next = normalizeLogEntry(entry)
     logs.value.push(next)
-    if (logs.value.length > 300)
-      logs.value = logs.value.slice(-300)
+    if (logs.value.length > LOG_CACHE_LIMIT)
+      logs.value = logs.value.slice(-LOG_CACHE_LIMIT)
   }
 
   function handleRealtimeStatus(payload: any) {
@@ -110,9 +113,13 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function handleRealtimeLogsSnapshot(payload: any) {
+    // 筛选启用时实时日志已暂停，全量快照会把筛选结果覆盖回全量日志，
+    // 导致列表在「筛选结果」和「全部日志」之间来回跳。
+    if (!realtimeLogsEnabled.value)
+      return
     const body = (payload && typeof payload === 'object') ? payload : {}
     const list = Array.isArray(body.logs) ? body.logs : []
-    logs.value = list.map((item: any) => normalizeLogEntry(item))
+    logs.value = list.slice(-LOG_CACHE_LIMIT).map(normalizeLogEntry)
   }
 
   function clearReconnectDelayTimer() {
@@ -202,6 +209,8 @@ export const useStatusStore = defineStore('status', () => {
     const accountChanged = nextAccountId !== currentRealtimeAccountId.value
     currentRealtimeAccountId.value = nextAccountId
     if (accountChanged) {
+      logRequestSequence++
+      logs.value = []
       statusRequestSequence++
       status.value = null
       loading.value = false
@@ -276,7 +285,9 @@ export const useStatusStore = defineStore('status', () => {
   async function fetchLogs(accountId: string, options: any = {}) {
     if (!accountId && options.accountId !== 'all')
       return
-    const params: any = { limit: 100, ...options }
+    const request = ++logRequestSequence
+    const selectedAccount = String(useAccountStore().currentAccountId || '')
+    const params: any = { limit: LOG_CACHE_LIMIT, ...options }
     const headers: any = {}
     if (accountId && accountId !== 'all') {
       headers['x-account-id'] = accountId
@@ -287,10 +298,8 @@ export const useStatusStore = defineStore('status', () => {
 
     try {
       const { data } = await api.get('/api/logs', { headers, params })
-      if (data.ok) {
-        logs.value = data.data
-        error.value = ''
-      }
+      if (request === logRequestSequence && selectedAccount === String(useAccountStore().currentAccountId || '') && data.ok && Array.isArray(data.data))
+        logs.value = data.data.slice(-LOG_CACHE_LIMIT).map(normalizeLogEntry)
     }
     catch (e: any) {
       console.error(e)
@@ -347,7 +356,10 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function setRealtimeLogsEnabled(enabled: boolean) {
-    realtimeLogsEnabled.value = !!enabled
+    if (realtimeLogsEnabled.value !== enabled) {
+      logRequestSequence++
+      realtimeLogsEnabled.value = enabled
+    }
   }
 
   return {

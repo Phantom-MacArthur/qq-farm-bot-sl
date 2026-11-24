@@ -1,27 +1,22 @@
 <script setup lang="ts">
-import { useIntervalFn, watchDebounced } from '@vueuse/core'
+import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { NTooltip } from 'naive-ui/es/tooltip'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import api, { getApiErrorMessage } from '@/api'
-import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseInput from '@/components/ui/BaseInput.vue'
-import BaseSelect from '@/components/ui/BaseSelect.vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import api from '@/api'
+import RunLogPanel from '@/components/RunLogPanel.vue'
 import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useBagStore } from '@/stores/bag'
 import { useStatusStore } from '@/stores/status'
-import { useToastStore } from '@/stores/toast'
 import { formatCompactAmount, formatNumber } from '@/utils/format-number'
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
 const bagStore = useBagStore()
-const toastStore = useToastStore()
 const {
   status,
-  logs: statusLogs,
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId } = storeToRefs(accountStore)
@@ -56,13 +51,8 @@ async function refreshRanch() {
   }
 }
 const { dashboardItems } = storeToRefs(bagStore)
-const logContainer = ref<HTMLElement | null>(null)
-const autoScroll = ref(true)
 const lastBagFetchAt = ref(0)
 const bagAccountId = ref('')
-const clearingLogs = ref(false)
-const logsAccountId = ref('')
-let logRequestVersion = 0
 
 /**
  * 方案B：保留上一次有效的种植经验。
@@ -96,104 +86,6 @@ watch(
 
 const showPlantExp = computed(() => !!status.value?.connection?.connected && cachedPlantExp.value !== null)
 const plantExpValue = computed(() => cachedPlantExp.value ?? 0)
-
-const allLogs = computed(() => [...(logsAccountId.value === String(currentAccountId.value || '') ? statusLogs.value || [] : [])]
-  .slice(-200)
-  .sort((a: any, b: any) => a.ts - b.ts))
-
-type LogLevel = 'error' | 'warn' | 'success' | 'info'
-
-function getLogLevel(log: any): LogLevel {
-  const result = String(log?.meta?.result || '')
-  if (log?.tag === '错误' || result === 'error' || result === 'failed')
-    return 'error'
-  if (log?.isWarn || log?.tag === '警告' || result === 'defer' || result === 'skip')
-    return 'warn'
-  if (['ok', 'success', 'done', 'resume', 'resumed'].includes(result))
-    return 'success'
-  return 'info'
-}
-
-/**
- * 连续出现、仅数字不同的同类日志合并为一行（×N + 时间范围），保留最新一条的内容，
- * 避免巡查类日志刷屏。
- */
-const logGroups = computed(() => {
-  const groups: Array<{ key: string, log: any, level: LogLevel, count: number, firstTime: string }> = []
-  for (const log of allLogs.value) {
-    const signature = `${log.tag}|${log.meta?.event || ''}|${String(log.msg || '').replace(/\d+/g, '#')}`
-    const last = groups[groups.length - 1]
-    if (last && last.key === signature) {
-      last.count += 1
-      last.log = log
-      continue
-    }
-    groups.push({ key: signature, log, level: getLogLevel(log), count: 1, firstTime: log.time })
-  }
-  return groups
-})
-
-const filter = reactive({
-  module: '',
-  event: '',
-  keyword: '',
-  isWarn: '',
-})
-
-const hasActiveLogFilter = computed(() =>
-  !!(filter.module || filter.event || filter.keyword || filter.isWarn),
-)
-
-const modules = [
-  { label: '所有模块', value: '' },
-  { label: '农场', value: 'farm' },
-  { label: '牧场', value: 'ranch' },
-  { label: '好友', value: 'friend' },
-  { label: '仓库', value: 'warehouse' },
-  { label: '任务', value: 'task' },
-  { label: '系统', value: 'system' },
-]
-
-const events = [
-  { label: '所有事件', value: '' },
-  { label: '农场巡查', value: 'farm_cycle' },
-  { label: '收获作物', value: 'harvest_crop' },
-  { label: '清理枯株', value: 'remove_plant' },
-  { label: '种植种子', value: 'plant_seed' },
-  { label: '施加化肥', value: 'fertilize' },
-  { label: '土地推送', value: 'lands_notify' },
-  { label: '选择种子', value: 'seed_pick' },
-  { label: '购买种子', value: 'seed_buy' },
-  { label: '购买化肥', value: 'fertilizer_buy' },
-  { label: '开启礼包', value: 'fertilizer_gift_open' },
-  { label: '获取任务', value: 'task_scan' },
-  { label: '完成任务', value: 'task_claim' },
-  { label: '免费礼包', value: 'mall_free_gifts' },
-  { label: '分享奖励', value: 'daily_share' },
-  { label: '会员礼包', value: 'vip_daily_gift' },
-  { label: '月卡礼包', value: 'month_card_gift' },
-  { label: '图鉴奖励', value: 'illustrated_rewards' },
-  { label: '邮箱领取', value: 'email_rewards' },
-  { label: '出售成功', value: 'sell_success' },
-  { label: '土地升级', value: 'upgrade_land' },
-  { label: '土地解锁', value: 'unlock_land' },
-  { label: '好友巡查', value: 'friend_cycle' },
-  { label: '访问好友', value: 'visit_friend' },
-]
-
-const eventLabelMap: Record<string, string> = Object.fromEntries(
-  events.filter(e => e.value).map(e => [e.value, e.label]),
-)
-
-function getEventLabel(event: string) {
-  return eventLabelMap[event] || event
-}
-
-const logs = [
-  { label: '所有等级', value: '' },
-  { label: '普通', value: 'info' },
-  { label: '警告', value: 'warn' },
-]
 
 const activeRanch = computed(() => ranchAccountId.value === String(currentAccountId.value || '') ? ranchSnapshot.value : null)
 const facilitySummaries = computed(() => [6, 7, 8].map((type) => {
@@ -278,15 +170,6 @@ function assetGain(key: string, amount: number | null, hours?: boolean) {
   return `(${difference > 0 ? '+' : '-'}${value})`
 }
 
-function formatLogTime(timeStr: string) {
-  // 传入形如「2024/5/20 12时34分56秒」的日志时间，仅保留时分秒部分。
-  // 注意：注释里不要写 hh:mm:ss 样式的冒号字面量，否则会被 UnoCSS attributify 误提取为无效 CSS。
-  if (!timeStr)
-    return ''
-  const parts = timeStr.split(' ')
-  return parts.length > 1 ? parts[1] : timeStr
-}
-
 function getExpPercent(p: any) {
   if (p?.current == null)
     return 0
@@ -330,47 +213,15 @@ async function refreshDiamond() {
   }
 }
 
-async function refresh(forceReloadLogs = false) {
-  if (currentAccountId.value) {
-    const accountId = String(currentAccountId.value)
-    const statusRequest = realtimeConnected.value ? undefined : statusStore.fetchStatus(accountId)
-
-    if (forceReloadLogs || logsAccountId.value !== accountId || hasActiveLogFilter.value || !realtimeConnected.value) {
-      const version = ++logRequestVersion
-      try {
-        const { data } = await api.get('/api/logs', {
-          headers: { 'x-account-id': accountId },
-          params: {
-            limit: 100,
-            module: filter.module || undefined,
-            event: filter.event || undefined,
-            keyword: filter.keyword || undefined,
-            isWarn: filter.isWarn === 'warn' ? true : filter.isWarn === 'info' ? false : undefined,
-          },
-        })
-        if (data?.ok && Array.isArray(data.data) && version === logRequestVersion && accountId === String(currentAccountId.value || '')) {
-          statusLogs.value = data.data
-          logsAccountId.value = accountId
-        }
-      }
-      catch {
-        // 保留当前账号已获取的日志，等待下一次刷新。
-      }
-    }
-
-    // 仅在账号已运行且连接就绪后拉背包，避免启动阶段触发500
-    await statusRequest
+async function refresh() {
+  const accountId = String(currentAccountId.value || '')
+  if (!accountId)
+    return
+  if (!realtimeConnected.value)
+    await statusStore.fetchStatus(accountId)
+  if (accountId === String(currentAccountId.value || ''))
     await refreshBag()
-  }
 }
-
-function onLogFilterChange() {
-  refresh(true)
-}
-
-watchDebounced(() => filter.keyword, () => {
-  refresh(true)
-}, { debounce: 300 })
 
 watch(currentAccountId, () => {
   ranchRequestVersion++
@@ -381,18 +232,10 @@ watch(currentAccountId, () => {
   bagAccountId.value = ''
   lastBagFetchAt.value = 0
   cachedPlantExp.value = null
-  logRequestVersion++
-  logsAccountId.value = ''
-  statusLogs.value = []
-  filter.module = ''
-  filter.event = ''
-  filter.keyword = ''
-  filter.isWarn = ''
-  refresh(true)
+  refresh()
   refreshBag(true)
   refreshDiamond()
   refreshRanch()
-  scrollToBottom()
 })
 
 // 上线及每 30 秒刷新牧场只读快照，不触碰牧场其他页面共用的 store。
@@ -418,84 +261,18 @@ watch(() => status.value?.operations, (next, prev) => {
   refreshBag()
 })
 
-watch(hasActiveLogFilter, (enabled) => {
-  statusStore.setRealtimeLogsEnabled(!enabled)
-})
-
-function onLogScroll(e: Event) {
-  const el = e.target as HTMLElement
-  if (!el)
-    return
-  const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-  autoScroll.value = isNearBottom
-}
-
-async function clearLogs() {
-  if (!currentAccountId.value)
-    return
-  clearingLogs.value = true
-  try {
-    const { data } = await api.delete('/api/logs')
-    if (data?.ok) {
-      toastStore.success('日志已清空')
-      await refresh(true)
-    }
-    else {
-      toastStore.error(`清空失败: ${getApiErrorMessage(data, '未知错误')}`)
-    }
-  }
-  catch (e: any) {
-    const msg = getApiErrorMessage(e, '请求失败')
-    toastStore.error(`清空失败: ${msg}`)
-  }
-  finally {
-    clearingLogs.value = false
-  }
-}
-
-let logScrollFrame: number | undefined
-
-function scheduleLogScroll(force = false) {
-  nextTick(() => {
-    if (!logContainer.value || (!force && !autoScroll.value) || logScrollFrame !== undefined)
-      return
-    logScrollFrame = window.requestAnimationFrame(() => {
-      if (logContainer.value)
-        logContainer.value.scrollTop = logContainer.value.scrollHeight
-      logScrollFrame = undefined
-    })
-  })
-}
-
-watch(allLogs, () => {
-  scheduleLogScroll()
-})
-
-function scrollToBottom() {
-  scheduleLogScroll(true)
-}
-
 onMounted(async () => {
-  statusStore.setRealtimeLogsEnabled(!hasActiveLogFilter.value)
-  filter.module = ''
-  filter.event = ''
-  filter.keyword = ''
-  filter.isWarn = ''
-  logsAccountId.value = ''
-  await refresh(true)
+  await refresh()
   refreshDiamond()
   refreshRanch()
-  scrollToBottom()
 })
 
 onBeforeUnmount(() => {
   ranchRequestVersion++
   diamondRequestVersion++
-  if (logScrollFrame !== undefined)
-    window.cancelAnimationFrame(logScrollFrame)
 })
 
-// Auto refresh fallback every 10s (WS 断开或筛选条件启用时会回退 HTTP)
+// WebSocket 断开时轮询账号状态。
 useIntervalFn(refresh, 10000)
 useIntervalFn(refreshRanch, 30000)
 </script>
@@ -561,83 +338,8 @@ useIntervalFn(refreshRanch, 30000)
     </div>
 
     <!-- 运行日志（页面最下方，整宽展示） -->
-    <section class="dashboard-log-card panel-scroll-layout page-card-surface margin-shell" aria-labelledby="dashboard-log-title"><span class="margin-content">
-      <header class="panel-titlebar panel-titlebar--flush log-titlebar margin-shell"><span class="margin-content">
-        <h3 id="dashboard-log-title" class="flex shrink-0 items-center gap-2 whitespace-nowrap text-lg font-bold">
-          <span class="i-carbon-document" /> <span>运行日志</span>
-        </h3>
-
-        <div class="log-filters">
-          <BaseSelect
-            v-model="filter.module"
-            size="small"
-            :options="modules"
-            fit-width
-            @change="onLogFilterChange"
-          />
-
-          <BaseSelect
-            v-model="filter.event"
-            size="small"
-            :options="events"
-            fit-width
-            @change="onLogFilterChange"
-          />
-
-          <BaseSelect
-            v-model="filter.isWarn"
-            :options="logs"
-            fit-width
-            @change="onLogFilterChange"
-          />
-
-          <BaseInput
-            v-model="filter.keyword"
-            type="search"
-            placeholder="关键词"
-            clearable
-          />
-
-          <div class="log-filters__buttons">
-            <BaseButton
-              variant="secondary"
-              title="清空日志"
-              aria-label="清空日志"
-              :loading="clearingLogs"
-              @click="clearLogs"
-            >
-              <template #icon>
-                <span class="i-carbon-trash-can" />
-              </template>
-              清空日志
-            </BaseButton>
-          </div>
-        </div>
-      </span></header>
-
-      <div ref="logContainer" class="panel-scroll-body log-list" @scroll="onLogScroll">
-        <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">
-          暂无日志
-        </div>
-        <div
-          v-for="group in logGroups"
-          :key="group.log.ts + group.key"
-          class="log-row"
-          :class="`log-row--${group.level}`"
-        >
-          <span class="log-row__time">
-            {{ formatLogTime(group.log.time) }}
-          </span>
-          <span class="log-row__tag">{{ group.log.tag }}</span>
-          <span class="log-row__body">
-            <span v-if="group.log.meta?.event" class="log-row__event">{{ getEventLabel(group.log.meta.event) }}</span>
-            <span class="log-row__msg">{{ group.log.msg }}</span>
-            <span v-if="group.count > 1" class="log-row__repeat" :title="`${formatLogTime(group.firstTime)} 起重复 ${group.count} 次`">
-              ×{{ group.count }} · {{ formatLogTime(group.firstTime) }} 起
-            </span>
-          </span>
-        </div>
-      </div>
+    <section class="dashboard-log-card panel-scroll-layout page-card-surface margin-shell" aria-label="运行日志"><span class="margin-content">
+      <RunLogPanel default-module="farm" :max-logs="200" list-class="max-h-[50vh] min-h-0 flex-1" />
     </span></section>
   </div>
 </template>
@@ -658,15 +360,14 @@ useIntervalFn(refreshRanch, 30000)
   --inset-top: 0; --inset-right: 0; --inset-bottom: 0; --inset-left: 0;
 }
 
-.log-titlebar {
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.dashboard-log-card h3 {
+.dashboard-log-card :deep(.run-log-heading) {
   font-family: "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
   font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-600);
+}
+
+.dashboard-log-card :deep(.run-log-header) {
+  padding-inline: 16px;
 }
 
 .overview-grid {
@@ -903,99 +604,4 @@ useIntervalFn(refreshRanch, 30000)
   font-size: var(--ov-font-size);
 }
 
-.log-filters {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.log-filters__buttons {
-  display: flex;
-  grid-column: 1 / -1;
-  justify-content: flex-end;
-  gap: 8px;
-}
-
-@container (min-width: 560px) {
-  .log-filters {
-    grid-template-columns: repeat(3, max-content) minmax(100px, 1fr) auto;
-    align-items: center;
-  }
-
-  .log-filters__buttons {
-    grid-column: auto;
-  }
-}
-
-.log-list {
-  padding-inline-start: 16px;
-  font-size: var(--ui-font-size-small-13);
-  line-height: 1.55;
-}
-
-.log-row {
-  display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  align-items: baseline;
-  gap: 10px;
-  padding: 5px 8px 5px 0;
-  content-visibility: auto;
-  contain-intrinsic-size: auto 28px;
-}
-
-.log-row + .log-row {
-  margin-top: 2px;
-}
-
-.log-row__time {
-  color: var(--ui-subtle);
-  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
-  font-size: var(--ui-content-item-font-height-tiny-12);
-  white-space: nowrap;
-  user-select: none;
-}
-
-.log-row__tag {
-  min-width: 2.5em;
-  color: var(--ui-muted);
-  font-size: var(--ui-content-item-font-height-tiny-12);
-  font-weight: var(--fw-600);
-  white-space: nowrap;
-}
-
-.log-row__body {
-  min-width: 0;
-  color: var(--ui-ink);
-  overflow-wrap: anywhere;
-}
-
-.log-row__event {
-  margin-right: 6px;
-  color: var(--ui-muted);
-  font-size: var(--ui-content-item-font-height-tiny-12);
-}
-
-.log-row__event::after {
-  margin-left: 6px;
-  color: var(--ui-subtle);
-  content: '·';
-}
-
-.log-row__repeat {
-  display: inline-block;
-  margin-left: 8px;
-  color: var(--ui-muted);
-  font-size: var(--ui-content-item-font-height-tiny-12);
-  white-space: nowrap;
-}
-
-.log-row--warn .log-row__tag {
-  color: var(--ui-warning);
-}
-
-.log-row--error .log-row__tag,
-.log-row--error .log-row__msg {
-  color: var(--ui-danger);
-}
 </style>
