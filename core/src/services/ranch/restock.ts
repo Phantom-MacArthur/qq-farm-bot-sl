@@ -6,7 +6,14 @@ const { selectAnimal } = require('./automation');
 
 async function restock(): Promise<any> {
     const settings = getAutomation();
-    const bagFirst = settings.ranch_strategy === 'bag_priority';
+    const illustrated = settings.ranch_strategy === 'illustrated';
+    const bagFirst = settings.ranch_strategy === 'bag_priority' || illustrated;
+    const pending = new Set<number>();
+    if (illustrated) {
+        const book = await getState('illustrated');
+        if (!Array.isArray(book.book?.animals)) throw new Error('牧场图鉴状态无效');
+        for (const item of book.book.animals) if (!item.unlocked && item.animalId) pending.add(Number(item.animalId));
+    }
     let completed = 0;
     const messages: string[] = [];
     const initial = await getState('animals');
@@ -22,30 +29,52 @@ async function restock(): Promise<any> {
                 const room = pen?.ranch ? pen.ranch.capacity - pen.ranch.count : 0;
                 if (room <= 0) break;
                 const priority: number[] = type === 6 ? settings.ranch_coop_cub_priority : settings.ranch_shed_cub_priority;
+                const active = new Set<number>(state.facilities.flatMap((facility: any) => (facility.ranch?.animals || []).map((animal: any) => Number(animal.animalId))));
+                const targets = new Set([...pending].filter(id => !active.has(id)));
+                const choose = (goods: any[]) => {
+                    if (!illustrated) return selectAnimal(goods, settings, type === 6 ? 1 : 2);
+                    const candidates = goods.filter(good => good.available && good.animal?.enable_flag
+                        && good.animal.husbandry_type === (type === 6 ? '窝' : '棚') && good.price.id === 1007 && BigInt(good.price.count) > 0n);
+                    return candidates.filter(good => targets.has(good.animal.id))
+                        .sort((a, b) => Number(a.requiredLevel || 0) - Number(b.requiredLevel || 0) || a.animal.id - b.animal.id)[0]
+                        || selectAnimal(candidates, { ...settings, ranch_strategy: settings.ranch_bag_fallback }, type === 6 ? 1 : 2);
+                };
                 let selected: any;
                 if (!bagFirst) {
                     const shop = await getState('shop', 5);
-                    selected = selectAnimal(shop.shop.goods, settings, type === 6 ? 1 : 2);
+                    selected = choose(shop.shop.goods);
                     if (!selected) break;
                 }
                 const stock = (state.bag || []).filter((item: any) => !item.locked && item.animalId
                     && Number(item.count) > 0 && item.husbandryType === (type === 6 ? '窝' : '棚')
-                    && (bagFirst || item.animalId === selected.animal.id));
-                stock.sort((a: any, b: any) => (bagFirst
+                    && (illustrated ? targets.has(item.animalId) : bagFirst || item.animalId === selected.animal.id));
+                stock.sort((a: any, b: any) => (illustrated ? (a.requiredLevel ?? Infinity) - (b.requiredLevel ?? Infinity) || a.animalId - b.animalId : bagFirst
                     ? (priority.indexOf(a.id) < 0 ? priority.length : priority.indexOf(a.id))
                     - (priority.indexOf(b.id) < 0 ? priority.length : priority.indexOf(b.id)) : 0)
                     || b.animalId - a.animalId || a.id - b.id);
+                if (illustrated && settings.ranch_bag_fallback === 'bag_priority' && !stock.length) {
+                    const shop = await getState('shop', 5);
+                    selected = choose(shop.shop.goods);
+                    // 可执行的图鉴目标优先于第二策略的常规背包补栏。
+                    if (!selected || !targets.has(selected.animal.id)) {
+                        const extra = (state.bag || []).filter((item: any) => !item.locked && item.animalId
+                            && Number(item.count) > 0 && item.husbandryType === (type === 6 ? '窝' : '棚'));
+                        const rank = (id: number) => priority.indexOf(id) < 0 ? priority.length : priority.indexOf(id);
+                        extra.sort((a: any, b: any) => rank(a.id) - rank(b.id) || b.animalId - a.animalId || a.id - b.id);
+                        stock.push(...extra);
+                    }
+                }
                 let action = 'place';
                 let input: any;
                 if (stock.length) {
-                    input = { ranchId: pen.id, itemId: stock[0].id, count: Math.min(room, Number(stock[0].count)) };
+                    input = { ranchId: pen.id, itemId: stock[0].id, count: Math.min(illustrated && targets.has(stock[0].animalId) ? 1 : Infinity, room, Number(stock[0].count)) };
                 } else {
                     if (!selected) {
                         const shop = await getState('shop', 5);
-                        selected = selectAnimal(shop.shop.goods, settings, type === 6 ? 1 : 2);
+                        selected = choose(shop.shop.goods);
                     }
                     if (!selected) break;
-                    const count = Math.min(room, selected.maxCount, selected.remaining ?? Infinity,
+                    const count = Math.min(illustrated && targets.has(selected.animal.id) ? 1 : Infinity, room, selected.maxCount, selected.remaining ?? Infinity,
                         Math.floor(Number(selected.price.balance) / Number(selected.price.count)));
                     if (count <= 0) break;
                     action = 'buy';

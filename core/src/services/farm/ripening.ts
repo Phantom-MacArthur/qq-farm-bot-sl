@@ -1,4 +1,6 @@
-import type { AutomationConfig, FertilizerMode } from '../../types/config';
+import type { FertilizerSettings } from '../../config/fertilizer-strategy';
+import type { FertilizerMode } from '../../types/config';
+import { getFertilizerStrategyGroups, usesRipeningFertilizer } from '../../config/fertilizer-strategy';
 
 const { getAllLands, fertilizeBatch, fertilizeOrganicLoop, isFertilizerStockError, logFertilizerStockSkip } = require('./api');
 const {
@@ -6,7 +8,6 @@ const {
     getFastMatureLands,
     getLandTypeByLevel,
     getNormalFertilizerTargetsFromLands,
-    normalizeFertilizerLandTypes,
 } = require('./land-analysis');
 const { log, toNum } = require('../../utils/utils');
 const { recordOperation } = require('../stats');
@@ -16,14 +17,12 @@ export function isRipeningOnlyMode(mode: FertilizerMode): boolean {
 }
 
 export async function runRipeningFertilizer(
-    automation: Pick<AutomationConfig, 'fertilizer' | 'fertilizer_land_types' | 'fertilizer_smart_seconds'>,
+    automation: FertilizerSettings,
     lands?: any[],
     propagateErrors = false,
 ): Promise<number> {
-    const mode = automation.fertilizer;
-    if (mode !== 'smart' && !isRipeningOnlyMode(mode)) return 0;
-    const selectedTypes = normalizeFertilizerLandTypes(automation.fertilizer_land_types);
-    if (selectedTypes.length === 0) return 0;
+    const groups = [...getFertilizerStrategyGroups(automation)].filter(([mode]) => usesRipeningFertilizer(mode));
+    if (!groups.length) return 0;
     const snapshot = lands ?? (await getAllLands())?.lands;
     if (!Array.isArray(snapshot)) return 0;
     const roots = snapshot.filter(land => {
@@ -31,9 +30,17 @@ export async function runRipeningFertilizer(
         return land && (!masterId || masterId === toNum(land.id));
     });
     const typesById = new Map<number, string>(roots.map(land => [toNum(land.id), getLandTypeByLevel(land.level)]));
-    let targets = [...new Set<number>(filterLandIdsByTypes(
-        getFastMatureLands(roots, automation.fertilizer_smart_seconds), typesById, selectedTypes,
-    ))];
+    const fastMature = getFastMatureLands(roots, automation.fertilizer_smart_seconds);
+    let total = 0;
+    for (const [mode, landTypes] of groups) {
+        const targets = [...new Set<number>(filterLandIdsByTypes(fastMature, typesById, landTypes))];
+        total += await fertilizeRipeningTargets(mode, targets, roots, propagateErrors);
+    }
+    return total;
+}
+
+async function fertilizeRipeningTargets(mode: FertilizerMode, candidates: number[], roots: any[], propagateErrors: boolean): Promise<number> {
+    let targets = candidates;
     const normal = mode === 'normal_ripen';
     if (normal) {
         const eligible = new Set<number>(getNormalFertilizerTargetsFromLands(roots));

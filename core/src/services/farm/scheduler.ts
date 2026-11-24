@@ -1,11 +1,11 @@
-export {};
+import { getFertilizerStrategyGroups, usesNormalFertilizer, usesRipeningFertilizer } from '../../config/fertilizer-strategy';
 /**
  * 农场循环调度 - 循环管理、可变状态
  */
 
 const { CONFIG } = require('../../config/config');
 const { getPlantById, getItemById } = require('../../config/gameConfig');
-const { isAutomationOn, getAutomation, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes } = require('../../models/store');
+const { isAutomationOn, getAutomation, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes, getFertilizerBuyNormalCheckIntervalMinutes } = require('../../models/store');
 const { getUserState, networkEvents } = require('../../utils/network');
 const { toNum, log, logWarn, randomDelay } = require('../../utils/utils');
 const { createScheduler } = require('../scheduler');
@@ -18,12 +18,11 @@ const {
     getNormalFertilizerTargetsFromLands,
     resolveRemovableHarvestedLands,
     getLandTypeByLevel,
-    normalizeFertilizerLandTypes,
     filterLandIdsByTypes,
     ALL_FERTILIZER_LAND_TYPES,
 } = require('./land-analysis');
 const { autoPlantEmptyLands, getRemainingPlantDelayMs, runFertilizerByConfig } = require('./planting');
-const { isRipeningOnlyMode, runRipeningFertilizer } = require('./ripening');
+const { runRipeningFertilizer } = require('./ripening');
 const { checkAndBuyFertilizerBoth } = require('../mall');
 // 延迟加载以打破循环依赖: visit-strategy → farm/index → scheduler → visit-strategy
 function inFarmQuietHours() {
@@ -89,8 +88,8 @@ async function runMultiSeasonFertilizer(
     actions?: string[],
 ): Promise<number> {
     if (!isAutomationOn('fertilizer_multi_season')) return 0;
-    const mode = getAutomation().fertilizer;
-    if (mode === 'none' || isRipeningOnlyMode(mode)) return 0;
+    const groups = getFertilizerStrategyGroups(getAutomation());
+    if (![...groups.keys()].some(mode => usesNormalFertilizer(mode) || mode === 'organic')) return 0;
     const multiSeasonTargets: number[] = [...new Set(
         (Array.isArray(growingLandIds) ? growingLandIds : []).map((v: any) => toNum(v)).filter(Boolean),
     )];
@@ -489,20 +488,15 @@ async function runFarmOperation(
     if (opType === 'all') {
         if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: actions.length > 0, actions, counts };
         const automation = getAutomation();
-        const fertilizerConfig = automation.fertilizer || 'none';
-        const canApplyNormal = fertilizerConfig === 'normal'
-            || fertilizerConfig === 'both'
-            || fertilizerConfig === 'smart';
-        if (isAutomationOn('fertilizer_multi_season') && canApplyNormal) {
+        const groups = [...getFertilizerStrategyGroups(automation)];
+        const normalLandTypes = groups.filter(([mode]) => usesNormalFertilizer(mode)).flatMap(([, types]) => types);
+        if (isAutomationOn('fertilizer_multi_season') && normalLandTypes.length) {
             try {
                 const latest = fertilizerSnapshot ?? (await getAllLands())?.lands;
                 const latestLands = Array.isArray(latest) ? latest : [];
                 fertilizerSnapshot = latestLands;
                 let targets = getNormalFertilizerTargetsFromLands(latestLands);
-                // 先按施肥土地范围过滤，避免范围外地块每轮都触发"检测到但目标为空"的无效调用。
-                // 过滤规则与 runFertilizerByConfig 内部一致：勾满全部类型视为不限制；确认不了土地类型时跳过本轮。
-                const selectedLandTypes = normalizeFertilizerLandTypes(getAutomation().fertilizer_land_types);
-                if (selectedLandTypes.length > 0 && selectedLandTypes.length < ALL_FERTILIZER_LAND_TYPES.length) {
+                if (normalLandTypes.length < ALL_FERTILIZER_LAND_TYPES.length) {
                     const landTypeById = new Map<number, string>();
                     for (const land of latestLands) {
                         if (!land) continue;
@@ -511,7 +505,7 @@ async function runFarmOperation(
                         landTypeById.set(landId, getLandTypeByLevel(land.level));
                     }
                     targets = landTypeById.size > 0
-                        ? filterLandIdsByTypes(targets, landTypeById, selectedLandTypes)
+                        ? filterLandIdsByTypes(targets, landTypeById, normalLandTypes)
                         : [];
                 }
                 if (targets.length > 0) {
@@ -536,9 +530,9 @@ async function runFarmOperation(
                 if (propagateErrors) throw e;
             }
         }
-        if (fertilizerConfig === 'smart' || isRipeningOnlyMode(fertilizerConfig)) {
+        if (groups.some(([mode]) => usesRipeningFertilizer(mode))) {
             try {
-                const count = await runRipeningFertilizer(getAutomation(), fertilizerSnapshot, propagateErrors);
+                const count = await runRipeningFertilizer(automation, fertilizerSnapshot, propagateErrors);
                 if (count > 0) {
                     actions.push(`催熟${count}`);
                     counts.fertilize += count;
@@ -630,6 +624,7 @@ function stopFarmCheckLoop(): void {
 
 function refreshFarmCheckLoop(delayMs: number = 200): void {
     if (!farmLoopRunning) return;
+    startFertilizerBuyCheckTimer();
     if (farmScheduler.has('farm_plant_continue')) {
         farmScheduler.clear('farm_plant_continue');
         schedulePlantContinuation(farmLoopGeneration, automaticPlantPacing, delayMs);
@@ -638,32 +633,40 @@ function refreshFarmCheckLoop(delayMs: number = 200): void {
 }
 
 // ============ 化肥自动购买定时检测 ============
+const fertilizerBuyTypes = ['organic', 'normal'] as const;
+type FertilizerBuyType = typeof fertilizerBuyTypes[number];
+const fertilizerBuyTimers = new Map<FertilizerBuyType, { intervalMinutes: number }>();
+
 function startFertilizerBuyCheckTimer(): void {
-    farmScheduler.clear('fertilizer_buy_check');
+    for (const type of fertilizerBuyTypes) {
+        const task = `fertilizer_buy_check_${type}`;
+        if (!isAutomationOn(`fertilizer_buy_${type}`)) {
+            farmScheduler.clear(task);
+            fertilizerBuyTimers.delete(type);
+            continue;
+        }
+        const intervalMinutes: number = type === 'organic'
+            ? getFertilizerBuyCheckIntervalMinutes() : getFertilizerBuyNormalCheckIntervalMinutes();
+        if (fertilizerBuyTimers.get(type)?.intervalMinutes === intervalMinutes && farmScheduler.has(task)) continue;
 
-    // 检查是否有开启的化肥购买功能
-    if (!isAutomationOn('fertilizer_buy_organic') && !isAutomationOn('fertilizer_buy_normal')) {
-        return;
+        const timer = { intervalMinutes };
+        fertilizerBuyTimers.set(type, timer);
+        farmScheduler.setIntervalTask(task, intervalMinutes * 60_000, async () => {
+            await runExclusiveAutomationTask(task, async () => {
+                if (fertilizerBuyTimers.get(type) !== timer) return;
+                await checkFertilizerBuyOnce(type);
+            });
+        });
+
+        log('农场', `${type === 'organic' ? '有机' : '无机'}化肥自动购买检测定时器已启动，间隔 ${intervalMinutes} 分钟`, {
+            module: 'farm', event: '购买化肥计时器', result: 'start', type, intervalMinutes,
+        });
     }
-
-    // 设置定时检测
-    const intervalMinutes: number = getFertilizerBuyCheckIntervalMinutes();
-    const intervalMs: number = intervalMinutes * 60 * 1000;
-
-    farmScheduler.setIntervalTask('fertilizer_buy_check', intervalMs, () => {
-        runExclusiveAutomationTask('fertilizer_buy_check', checkFertilizerBuyOnce).catch(() => null);
-    });
-
-    log('农场', `化肥自动购买检测定时器已启动，间隔 ${intervalMinutes} 分钟`, {
-        module: 'farm',
-        event: '购买化肥计时器',
-        result: 'start',
-        intervalMinutes,
-    });
 }
 
 function stopFertilizerBuyCheckTimer(): void {
-    farmScheduler.clear('fertilizer_buy_check');
+    fertilizerBuyTimers.clear();
+    for (const type of fertilizerBuyTypes) farmScheduler.clear(`fertilizer_buy_check_${type}`);
     log('农场', '化肥自动购买检测定时器已停止', {
         module: 'farm',
         event: '购买化肥计时器',
@@ -671,15 +674,15 @@ function stopFertilizerBuyCheckTimer(): void {
     });
 }
 
-async function checkFertilizerBuyOnce(): Promise<void> {
-    if (!isAutomationOn('fertilizer_buy_organic') && !isAutomationOn('fertilizer_buy_normal')) {
-        return;
-    }
+async function checkFertilizerBuyOnce(type?: FertilizerBuyType): Promise<void> {
+    const buyOrganic = type !== 'normal' && isAutomationOn('fertilizer_buy_organic');
+    const buyNormal = type !== 'organic' && isAutomationOn('fertilizer_buy_normal');
+    if (!buyOrganic && !buyNormal) return;
 
     try {
         const options = {
-            buyOrganic: isAutomationOn('fertilizer_buy_organic'),
-            buyNormal: isAutomationOn('fertilizer_buy_normal'),
+            buyOrganic,
+            buyNormal,
             organicCount: getFertilizerBuyOrganicCount(),
             organicThresholdHours: getFertilizerBuyOrganicThresholdHours(),
             normalCount: getFertilizerBuyNormalCount(),

@@ -32,7 +32,7 @@ const systemSettingsMenuItem: MenuItem = {
   name: 'SystemSettings',
   label: '系统设置',
   icon: 'i-carbon-settings-services',
-  component: () => import('@/views/Settings.vue'),
+  component: () => import('@/views/SystemSettings.vue'),
 }
 
 export const menuRoutes: MenuItem[] = [
@@ -49,7 +49,7 @@ export const menuRoutes: MenuItem[] = [
     name: 'pets',
     label: '宠物',
     icon: 'i-carbon-dog-walker',
-    component: () => import('@/components/PetPanel.vue'),
+    component: () => import('@/views/Pets.vue'),
   },
   {
     path: 'illustrated',

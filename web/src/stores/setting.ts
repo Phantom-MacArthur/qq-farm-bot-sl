@@ -2,14 +2,19 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 
-type RanchFeedStage = 'any' | 'longest' | 'to_production' | 'near_harvest'
+export type RanchFeedStage = 'any' | 'longest' | 'to_production' | 'near_harvest'
 
 export interface AutomationConfig {
+  planting_enabled?: boolean
+  fertilizer_enabled?: boolean
+  ranch_production_enabled?: boolean
+  ranch_facilities_enabled?: boolean
+  friends_enabled?: boolean
+  activity_enabled?: boolean
   ranch_harvest?: boolean
   ranch_produce?: boolean
   ranch_buy?: boolean
   ranch_upgrade?: boolean
-  ranch_activate_shed?: boolean
   ranch_sell?: boolean
   ranch_market_organic?: boolean
   ranch_market_organic_poop?: boolean
@@ -24,6 +29,7 @@ export interface AutomationConfig {
   ranch_feed_organic_stage?: RanchFeedStage
   ranch_clean?: boolean
   ranch_stroke?: boolean
+  ranch_friend_patrol?: boolean
   ranch_friend_steal?: boolean
   ranch_friend_clean?: boolean
   ranch_friend_mosquito?: boolean
@@ -31,7 +37,10 @@ export interface AutomationConfig {
   ranch_illustrated?: boolean
   ranch_share?: boolean
   ranch_daily_benefit?: boolean
+  ranch_coupon_gift_buy?: boolean
   ranch_check_minutes?: number
+  ranch_check_min_seconds?: number
+  ranch_check_max_seconds?: number
   ranch_strategy?: string
   ranch_bag_fallback?: string
   ranch_coop_animal?: number
@@ -45,10 +54,21 @@ export interface AutomationConfig {
   friend?: boolean
   friend_auto_accept?: boolean
   task?: boolean
+  farm_email_rewards?: boolean
+  farm_free_gifts?: boolean
+  farm_daily_share?: boolean
+  farm_illustrated?: boolean
+  farm_vip_gift?: boolean
+  farm_month_card_gift?: boolean
+  muge_claim_celebration?: boolean
+  muge_claim_friends?: boolean
+  muge_claim_handbook?: boolean
+  muge_claim_personality?: boolean
   sell?: boolean
   fertilizer?: string
   fertilizer_multi_season?: boolean
   fertilizer_land_types?: string[]
+  fertilizer_land_strategies?: Record<string, string>
   fertilizer_smart_seconds?: number
   friend_steal?: boolean
   friend_help?: boolean
@@ -135,6 +155,7 @@ export interface SettingsState {
   fertilizerBuyNormalCount: number
   fertilizerBuyNormalThresholdHours: number
   fertilizerBuyCheckIntervalMinutes: number
+  fertilizerBuyNormalCheckIntervalMinutes: number
   emailClaimHour: number
   autoAcceptFriendMinLevel: number
   autoAcceptRequireOwnLevel: boolean
@@ -157,6 +178,7 @@ type SaveableSettingsKey
     | 'fertilizerBuyNormalCount'
     | 'fertilizerBuyNormalThresholdHours'
     | 'fertilizerBuyCheckIntervalMinutes'
+    | 'fertilizerBuyNormalCheckIntervalMinutes'
     | 'emailClaimHour'
     | 'autoAcceptFriendMinLevel'
     | 'autoAcceptRequireOwnLevel'
@@ -180,6 +202,7 @@ const SAVEABLE_SETTINGS_KEYS: SaveableSettingsKey[] = [
   'fertilizerBuyNormalCount',
   'fertilizerBuyNormalThresholdHours',
   'fertilizerBuyCheckIntervalMinutes',
+  'fertilizerBuyNormalCheckIntervalMinutes',
   'emailClaimHour',
   'autoAcceptFriendMinLevel',
   'autoAcceptRequireOwnLevel',
@@ -219,6 +242,7 @@ function createDefaultSettings(): SettingsState {
     fertilizerBuyNormalCount: 10,
     fertilizerBuyNormalThresholdHours: 10,
     fertilizerBuyCheckIntervalMinutes: 30,
+    fertilizerBuyNormalCheckIntervalMinutes: 30,
     emailClaimHour: 10,
     autoAcceptFriendMinLevel: 0,
     autoAcceptRequireOwnLevel: false,
@@ -290,6 +314,7 @@ export const useSettingStore = defineStore('setting', () => {
       fertilizerBuyNormalCount: data.fertilizerBuyNormalCount ?? defaults.fertilizerBuyNormalCount,
       fertilizerBuyNormalThresholdHours: data.fertilizerBuyNormalThresholdHours ?? defaults.fertilizerBuyNormalThresholdHours,
       fertilizerBuyCheckIntervalMinutes: data.fertilizerBuyCheckIntervalMinutes ?? defaults.fertilizerBuyCheckIntervalMinutes,
+      fertilizerBuyNormalCheckIntervalMinutes: data.fertilizerBuyNormalCheckIntervalMinutes ?? data.fertilizerBuyCheckIntervalMinutes ?? defaults.fertilizerBuyNormalCheckIntervalMinutes,
       emailClaimHour: data.emailClaimHour ?? defaults.emailClaimHour,
       autoAcceptFriendMinLevel: data.autoAcceptFriendMinLevel ?? defaults.autoAcceptFriendMinLevel,
       autoAcceptRequireOwnLevel: data.autoAcceptRequireOwnLevel ?? defaults.autoAcceptRequireOwnLevel,
@@ -299,6 +324,13 @@ export const useSettingStore = defineStore('setting', () => {
   function applySavedSettings(payload: SettingsSavePayload, data: any) {
     const normalized = data && typeof data === 'object' ? data : {}
     for (const key of SAVEABLE_SETTINGS_KEYS) {
+      if (key === 'automation' || key === 'intervals') {
+        if (Object.prototype.hasOwnProperty.call(normalized, key))
+          settings.value[key] = cloneValue(normalized[key])
+        else if (Object.prototype.hasOwnProperty.call(payload, key))
+          Object.assign(settings.value[key], cloneValue(payload[key]))
+        continue
+      }
       if (Object.prototype.hasOwnProperty.call(payload, key))
         (settings.value as any)[key] = cloneValue(payload[key])
       if (Object.prototype.hasOwnProperty.call(normalized, key))

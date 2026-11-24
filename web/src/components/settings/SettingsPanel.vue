@@ -18,12 +18,14 @@
 </template>
 
 <style scoped>
-/* 外壳、出血到卡片边缘的底色带、16px 间距全部对齐 .account-panel / .account-toolbar。 */
 .settings-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
+  gap: var(--ui-settings-space);
+  --inset-top: var(--ui-settings-space);
+  --inset-right: var(--ui-settings-space);
+  --inset-bottom: var(--ui-settings-space);
+  --inset-left: var(--ui-settings-space);
   /* 半透的 --glass-card 叠在页面底色上会让卡片之间的空隙发灰，而内层卡片是双层叠加、
      反而更白，所以面板铺成不透明表面色，空隙与卡片就是同一个白底。 */
   background: var(--ui-surface-solid) !important;
@@ -35,6 +37,11 @@
 /* 标题栏的出血/留白/分隔线/底色/吸顶/控件统一高度全部走全局 .panel-titlebar，
    这里只保留与模板默认（wrap 换行）不同的布局差异：窄屏横向滚动而不是换行。 */
 .settings-panel__toolbar {
+  margin-inline: calc(-1 * var(--ui-settings-space));
+  --inset-top: var(--ui-settings-space);
+  --inset-right: var(--ui-settings-space);
+  --inset-bottom: var(--ui-settings-space);
+  --inset-left: var(--ui-settings-space);
   flex-wrap: nowrap;
   overflow-x: auto;
   overflow-y: hidden;

@@ -56,9 +56,8 @@ const route = useRoute()
   overflow: hidden;
   margin: 0;
   color: var(--ui-ink);
-  font-size: var(--ui-font-size-large-15);
-  font-weight: var(--fw-700);
-  /* 28px 行盒在 48px 标题栏内居中后，文字上缘恰好落在侧栏「收起边栏」按钮的上沿（12px） */
+  font-size: 20px;
+  font-weight: 400;
   line-height: 1.4;
   text-overflow: ellipsis;
   white-space: nowrap;

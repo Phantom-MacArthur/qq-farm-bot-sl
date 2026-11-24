@@ -11,14 +11,16 @@ const srcPath = fileURLToPath(srcDir)
 const style = readFileSync(new URL('style.css', srcDir), 'utf8')
 
 /**
- * 允许直接出现 renew 图标的文件：都不是「刷新数据的按钮」。
+ * 允许直接出现 renew 图标的文件：模板本身、状态图标和活动内的专用控件。
  * 想在这个列表外新增刷新按钮，请改用 components/ui/RefreshButton.vue，
  * 否则各页又会各写一套 gap / 圆角 / 转圈，改样式时漏改。
  */
 const RENEW_ICON_EXCEPTIONS = new Map([
   ['components/ui/RefreshButton.vue', '刷新按钮模板本身'],
   ['components/activity/gameplays/qixi/QixiActivityView.vue', '七夕页主题内的行内图标键（刷新好友）'],
-  ['views/activity-center/AutumnActivityPage.vue', '空状态里的文字链「重新加载」'],
+  ['components/activity/center/AutumnActivityPage.vue', '空状态里的文字链「重新加载」'],
+  ['components/activity/center/MugePage.vue', '牧歌活动任务卡内的专用刷新控件'],
+  ['components/PanelStatusBanner.vue', '新版就绪时重新载入面板'],
   ['views/SolarCalendar.vue', '空状态里的加载中占位图标'],
 ])
 
@@ -75,18 +77,22 @@ test('every refresh button goes through the template', () => {
     .filter(relative => !RENEW_ICON_EXCEPTIONS.has(relative))
     .filter(relative => /i-carbon-renew/.test(readFileSync(new URL(relative, srcDir), 'utf8')))
   assert.deepEqual(offenders, [], '这些文件绕过了 RefreshButton 模板，请改用 <RefreshButton>')
+  const muge = readFileSync(new URL('components/activity/center/MugePage.vue', srcDir), 'utf8')
+  assert.equal([...muge.matchAll(/<NButton[^>]*:disabled="busy \|\| !currentAccountId"[^>]*aria-label="刷新活动"[^>]*@click="store\.request\(\)"/g)].length, 2)
+  const update = readFileSync(new URL('components/PanelStatusBanner.vue', srcDir), 'utf8')
+  assert.match(update, /@click="appUpdateStore\.applyPendingUpdate\(\)"[^]*?i-carbon-renew/)
 })
 
-test('好友三个页签复用全局标题栏，并为无按钮的黑名单保留统一行高', () => {
+test('好友三个页签复用全局标题栏，统计行高与标题栏控件一致', () => {
   const source = readFileSync(new URL('views/Friends.vue', srcDir), 'utf8')
   const headers = [...source.matchAll(/<header class="friends-head\b[\s\S]*?<\/header>/g)]
   assert.equal(headers.length, 1, '三个页签应共用一个标题栏，避免重复样式')
   const header = headers[0][0]
-  assert.match(header, /class="friends-head panel-titlebar shrink-0"/)
+  assert.match(header, /class="friends-head panel-titlebar shrink-0\b[^"]*"/)
   assert.match(header, /activeTab === 'friends'/)
   assert.match(header, /activeTab === 'blacklist'/)
   assert.match(header, /activeTab === 'visitors'/)
-  assert.match(source, /\.friends-head__summary\s*\{[^}]*min-height: var\(--ui-toolbar-control-height\);/)
+  assert.match(source, /\.friends-head__summary\s*\{[^}]*min-height: var\(--ui-content-titlebar-control-height-34\);/)
   assert.match(source, /\.friends-head,\s*\.friends-toolbar\s*\{[^}]*flex-wrap: nowrap;/)
   assert.doesNotMatch(header, /icon-only/, '标题栏刷新按钮保留图标与文案')
 })
@@ -98,32 +104,32 @@ test('访客筛选和刷新归入统一标题栏，保留原事件并防止不�
   assert.match(header, /<RefreshButton\s+title="刷新最近访客"/)
   assert.match(header, /:disabled="!currentAccountId \|\| !currentAccountRunning \|\| interactLoading"/)
   assert.match(header, /@click="refreshInteractRecords"/)
-  assert.match(header, /@click="handleRefreshFriends"/)
+  assert.match(header, /<RefreshButton\s+title="刷新好友列表"[^>]*@click="refreshFriendsAndExpandedLands"/)
+  assert.match(source, /async function refreshFriendsAndExpandedLands\(\)[^]*?await handleRefreshFriends\(\)[^]*?await refreshFriendLands\(gid\)/)
   assert.equal((source.match(/v-model="interactFilter"/g) || []).length, 1)
   assert.equal((header.match(/@click="refreshInteractRecords"/g) || []).length, 1)
   assert.match(source, /<OfflineState v-else-if="activeTab === 'visitors'[^"\n]+interactError[^"\n]*" title="请求超时">\s*<template #action>\s*<RefreshButton label="重新加载访客记录" @click="refreshInteractRecords"/)
 })
 
-test('搜索筛选排序与刷新高度共用style.css中的35px令牌', () => {
-  assert.match(style, /:root\s*\{[^}]*--ui-toolbar-control-height: 35px;/)
+test('搜索筛选排序与刷新复用标题栏 34px 和内容区 30px 的高度令牌', () => {
+  assert.match(style, /:root\s*\{[^}]*--ui-content-titlebar-control-height-34: 34px;[^}]*--ui-content-item-control-height-30: 30px;/)
   const css = style.replace(/\s+/g, ' ')
-  assert.match(css, /:where\(\.panel-titlebar, \.book-toolbar, \.log-filters, \.toolbar-filters\) :is\(\.n-input:not\(\.n-input--textarea\), \.n-base-selection, \.n-button\)/)
-  assert.match(css, /:where\(\.friends-toolbar \.n-button-group, \.toolbar-filters\) \.n-button/)
+  assert.match(css, /:is\(\.panel-titlebar, \.book-toolbar, \.log-filters, \.toolbar-filters, \.toolbar-control, \.friends-toolbar\) :is\(\.n-button, \.n-input:not\(\.n-input--textarea\), \.n-base-selection\),[^{}]+\{ --n-height: var\(--ui-content-titlebar-control-height-34\) !important;/)
+  assert.match(css, /:is\(\.n-button:not\(\.bag-item__action-tiny\), \.n-input:not\(\.n-input--textarea\), \.n-base-selection\) \{ --n-height: var\(--ui-content-item-control-height-30\) !important;/)
   assert.doesNotMatch(css, /\.mall-filters__chips/, '已移除的筛选组不应留在高度规则中')
-  assert.match(css, /\.catalog-sort\s*\{\s*--n-height: var\(--ui-toolbar-control-height\) !important;/)
-  assert.match(css, /\.panel-refresh\s*\{[^}]*--n-height: var\(--ui-toolbar-control-height\) !important;/)
-  assert.doesNotMatch(css, /(?:^|\})\s*\.n-button\s*\{[^}]*--n-height:/, '不能改变所有普通操作按钮')
+  assert.doesNotMatch(css, /\.(?:catalog-sort|panel-refresh)\s*\{[^}]*--n-height:/, '排序和刷新复用所处区域的高度')
 })
 
-test('内容适配宽度模板集中在style.css，实际控件不参与宽度计算', () => {
-  assert.match(style, /\.toolbar-fit \{[^}]*display: inline-grid;[^}]*width: max-content;[^}]*height: var\(--ui-toolbar-control-height\);/)
+test('内容适配宽度由测量层决定，搜索和下拉保留各自的控件布局', () => {
+  assert.match(style, /\.toolbar-fit \{[^}]*display: inline-grid;[^}]*width: max-content;[^}]*height: var\(--ui-content-item-control-height-30\) !important;/)
   assert.match(style, /\.toolbar-fit__measure \{[^}]*visibility: hidden;[^}]*pointer-events: none;/, '测量层只占位，不可见也不可交互')
   assert.match(style, /\.toolbar-fit__measure > span,\s*\.toolbar-sort__labels > span \{\s*grid-area: 1 \/ 1;/, '候选文案叠放同一格，网格自然取最长宽度')
   assert.match(style, /\.toolbar-fit > \.toolbar-fit__control \{[^}]*position: absolute;[^}]*inset: 0;/, '实际控件绝对定位覆盖在测量层上')
+  assert.match(style, /\.toolbar-fit--select > \.toolbar-fit__control \{[^}]*position: relative;[^}]*grid-area: 1 \/ 1;/, '下拉控件与测量层同格，保留可点击区域')
   assert.match(style, /\.toolbar-fit--search \.toolbar-fit__measure \{[^}]*var\(--ui-toolbar-control-icon-size\)/, '搜索宽度包含搜索图标')
   assert.match(style, /\.toolbar-fit--select \.toolbar-fit__measure \{[^}]*var\(--ui-toolbar-control-icon-size\)/, '筛选宽度包含下拉箭头')
   assert.match(style, /\.toolbar-sort \{[^}]*--n-width: max-content !important;/)
-  assert.match(style, /\.panel-refresh:not\(\.panel-refresh--icon-only\) \{[^}]*width: max-content !important;[^}]*min-width: 0 !important;/, '文本刷新键只按图标与文案撑开')
+  assert.match(style, /\.panel-refresh:not\(\.panel-refresh--icon-only\),\s*\.control-fit-content \{[^}]*width: max-content !important;[^}]*min-width: 0 !important;/, '文本刷新键只按图标与文案撑开')
 })
 
 test('搜索框按默认文案定宽，不随输入内容伸缩', () => {
@@ -172,25 +178,27 @@ test('图鉴删除30px试用覆盖，不再单独调整普通操作按钮', () =
   assert.doesNotMatch(source, /--illustrated-toolbar-control-height|--n-height|book-overview__actions/)
 })
 
-test('纯图标刷新按钮宽高同步为35px，保持正圆', () => {
+test('纯图标刷新按钮的宽度跟随所在区域的高度，保持正圆', () => {
   const component = readFileSync(new URL('components/ui/RefreshButton.vue', srcDir), 'utf8')
   assert.match(component, /:class="\{ 'panel-refresh--icon-only': iconOnly \}"/)
-  assert.match(style, /\.panel-refresh--icon-only\s*\{\s*--n-width: var\(--ui-toolbar-control-height\) !important;/)
+  assert.match(component, /:circle="iconOnly"/)
+  assert.match(style, /\.n-button--circle\s*\{\s*--n-width: var\(--ui-content-item-control-height-30\) !important;/)
+  assert.match(style, /:is\(\.panel-titlebar,[^)]+\)\s+\.n-button--circle\s*\{\s*--n-width: var\(--ui-content-titlebar-control-height-34\) !important;/)
 })
 
 test('个人页背包、任务与宠物页一致，刷新键放在右对齐的操作组末尾', () => {
   assert.match(style, /\.page-toolbar__actions \{[^}]*margin-left: auto;/)
-  for (const file of ['components/BagPanel.vue', 'components/TaskPanel.vue']) {
+  for (const file of ['components/farm/FarmBagPanel.vue', 'components/farm/FarmTaskPanel.vue']) {
     const source = readFileSync(new URL(file, srcDir), 'utf8')
     const actions = source.match(/<div class="page-toolbar__actions\b[^"]*">([\s\S]*?)\n {8}<\/div>/)?.[1] || ''
     assert.match(actions, /<RefreshButton[\s\S]*\/>\s*$/, `${file} 的刷新键应位于右侧操作组末尾`)
   }
-  const bag = readFileSync(new URL('components/BagPanel.vue', srcDir), 'utf8')
+  const bag = readFileSync(new URL('components/farm/FarmBagPanel.vue', srcDir), 'utf8')
   assert.doesNotMatch(bag, /bag-refresh-row|bag-selection-toggle/, '背包不再保留左侧刷新的自定义排布')
 })
 
 test('背包仿图鉴道具页：标题栏用搜索框与分类下拉，去掉分类按钮行', () => {
-  const bag = readFileSync(new URL('components/BagPanel.vue', srcDir), 'utf8')
+  const bag = readFileSync(new URL('components/farm/FarmBagPanel.vue', srcDir), 'utf8')
   const toolbar = bag.match(/<div class="bag-toolbar panel-titlebar[^"]*">([\s\S]*?)<div class="page-toolbar__actions/)?.[1] || ''
   assert.match(toolbar, /<BaseInput v-model="searchKeyword" type="search" clearable placeholder="输入名称搜索" \/>/)
   assert.match(toolbar, /<BaseSelect v-model="selectedCategory" :options="CATEGORY_OPTIONS" fit-width/)
@@ -205,28 +213,34 @@ test('背包仿图鉴道具页：标题栏用搜索框与分类下拉，去掉�
 })
 
 test('背包离线时保留标题栏，只在内容区提示账号未运行', () => {
-  const bag = readFileSync(new URL('components/BagPanel.vue', srcDir), 'utf8')
-  const template = bag.match(/<template>\r?\n {2}<div class="personal-panel">([\s\S]*?)<div class="bag-toolbar/)?.[1]
+  const bag = readFileSync(new URL('components/farm/FarmBagPanel.vue', srcDir), 'utf8')
+  const template = bag.match(/<template>\s*<div class="panel-fill">([\s\S]*?)<div class="bag-toolbar/)?.[1]
   assert.ok(template, '应能定位到标题栏之前的模板片段')
   assert.doesNotMatch(template, /v-if|v-else|EmptyState/, '标题栏之前不能有状态分支把它整个替换掉')
-  assert.match(bag, /请先选择账号[^]*?<OfflineState v-else-if="isOffline" \/>[^]*?获取数据失败/)
+  assert.match(bag, /class="panel-scroll-body"[^]*?请先选择账号[^]*?<OfflineState v-else-if="isOffline" \/>[^]*?获取数据失败/)
 })
 
 test('背包卡片精简：去掉编号/UID、等级与可否出售文案，底栏操作在左、数量在右', () => {
-  const bag = readFileSync(new URL('components/BagPanel.vue', srcDir), 'utf8')
+  const card = readFileSync(new URL('components/ui/BagItemCard.vue', srcDir), 'utf8')
   const warehouse = readFileSync(new URL('../../core/src/services/warehouse.ts', srcDir), 'utf8')
-  assert.doesNotMatch(bag, /bag-item__ids|UID \{\{|item\.level|'可出售'|'不可出售'|is-sellable/)
+  for (const file of ['components/farm/FarmBagPanel.vue', 'components/ranch/RanchBagPanel.vue']) {
+    const bag = readFileSync(new URL(file, srcDir), 'utf8')
+    assert.match(bag, /<BagItemCard\s+v-for=/, `${file} 复用背包卡片`)
+    assert.doesNotMatch(bag, /bag-item__ids|UID \{\{|item\.level|'可出售'|'不可出售'|is-sellable/)
+  }
+  assert.doesNotMatch(card, /bag-item__ids|UID \{\{|item\.level|'可出售'|'不可出售'|is-sellable/)
   assert.doesNotMatch(warehouse, /level: info \? \(Number\(info\.level\)/, '背包接口不再下发仅供卡片显示的等级')
-  const foot = bag.match(/<footer class="bag-item__foot">([\s\S]*?)<\/footer>/)?.[1] || ''
+  const foot = card.match(/<footer class="bag-item__foot\b[^"]*">([\s\S]*?)<\/footer>/)?.[1] || ''
   assert.ok(foot.includes('bag-item__ops') && foot.indexOf('bag-item__ops') < foot.indexOf('bag-item__qty'), '操作在前、数量在后')
-  assert.match(foot, /<template v-else>×\{\{ formatNumber\(item\.count\) \}\}<\/template>/, '× 与数量同字号')
-  assert.match(bag, /\.bag-item__qty \{[^}]*margin-left: auto;[^}]*font-size: 13px;[^}]*font-weight: var\(--fw-400\);/, '数量用 13px 常规体')
-  assert.match(bag, /\.bag-item__name \{[^}]*font-size: 13px;[^}]*font-weight: var\(--fw-400\);/)
-  assert.match(bag, /\.bag-grid \{[^}]*minmax\(112px, 1fr\)/)
+  assert.match(foot, /\{\{ duration \|\| `×\$\{quantity\}` \}\}/, '× 与数量同字号')
+  assert.match(card, /\.bag-item__qty \{[^}]*margin-inline-start: auto;[^}]*font-size: var\(--ui-font-size-small-13\);/, '数量用 13px 并靠右')
+  assert.match(card, /\.bag-item__name \{[^}]*font-size: var\(--ui-font-size-small-13\);/)
+  assert.match(card, /\.bag-item :deep\(\*\) \{[^}]*font-weight: var\(--fw-400\)/)
+  assert.match(card, /\.bag-item-grid \{[^}]*minmax\(min\(100%, 112px\), 1fr\)/)
 })
 
 test('任务页：成长任务并入列表，一行一项并标出奖励与右侧状态，微信账号隐藏 QQ 专属任务', () => {
-  const panel = readFileSync(new URL('components/TaskPanel.vue', srcDir), 'utf8')
+  const panel = readFileSync(new URL('components/farm/FarmTaskPanel.vue', srcDir), 'utf8')
   const overview = readFileSync(new URL('components/DailyOverview.vue', srcDir), 'utf8')
   assert.doesNotMatch(panel, /task-growth-section|成长任务列表/, '不再单独渲染成长任务卡片')
   assert.doesNotMatch(overview, /每日礼包 & 任务|grid-cols-3/, '去掉标题与三列卡片')
@@ -240,7 +254,7 @@ test('任务页：成长任务并入列表，一行一项并标出奖励与右�
 })
 
 test('任务页：未选账号与明确离线分开显示，真实错误保留重试', () => {
-  const panel = readFileSync(new URL('components/TaskPanel.vue', srcDir), 'utf8')
+  const panel = readFileSync(new URL('components/farm/FarmTaskPanel.vue', srcDir), 'utf8')
   const overview = readFileSync(new URL('components/DailyOverview.vue', srcDir), 'utf8')
   assert.equal([...panel.matchAll(/<OfflineState\b/g)].length, 1)
   assert.match(panel, /请先选择账号[^]*?<OfflineState v-else-if="isOffline" \/>/)
@@ -269,8 +283,9 @@ test('宠物管理：可购买的未拥有宠物显示购买入口并刷新购�
   assert.match(pet, /pet-row__price[^]*?formatCompactAmount\(petDisplayPrice\(pet\)!\.count\)/)
   const dialog = readFileSync(new URL('components/commerce/PurchaseDialog.vue', srcDir), 'utf8')
   assert.match(dialog, /v-if="!hideRewards"[^]*?每份包含/)
-  assert.match(dialog, /formatCompactAmount\(goods\.price\.count\)/)
-  assert.match(dialog, /formatCompactAmount\(totalCost\)/)
+  assert.match(pet, /<PurchaseDialog[^]*?:show-currency-name="true"[^]*?@confirm="purchasePet"/)
+  assert.match(dialog, /showCurrencyName \? formatCompactAmount\(Number\(goods\.price\.count\)\) : fullAmount\(goods\.price\.count\)/)
+  assert.match(dialog, /showCurrencyName \? formatCompactAmount\(Number\(totalCost\)\) : fullAmount\(totalCost\)/)
   assert.match(dialog, /<Teleport to="body">\s*<div v-if="open && goods" class="purchase-mask"/, '购买遮罩必须挂载到 body，避免被页面滚动遮罩裁切')
   assert.match(pet, /offer\.goods\.price\.id === expectedPrice\.id && offer\.goods\.price\.count === expectedPrice\.count/)
   assert.match(pet, /商店报价与游戏内价格不一致，未发起购买/)
@@ -278,7 +293,7 @@ test('宠物管理：可购买的未拥有宠物显示购买入口并刷新购�
   assert.match(pet, /宠物商店：\{\{ petOfferError \}\}/)
   assert.match(pet, /当前商店未返回牧羊犬、斑点狗或柯基的商品/)
   assert.match(pet, /function hasPurchaseEntry\(pet: PetInfo\)[^]*?shopPetIds\.has\(pet\.id\)/)
-  assert.match(pet, /function dogActionLabel\(pet: PetInfo\)[^]*?hasPurchaseEntry\(pet\) \? '购买' : '未获得'/)
+  assert.match(pet, /function dogActionLabel\(pet: PetInfo\)[^]*?hasPurchaseEntry\(pet\) \? '购买' : '限定'/)
   assert.match(pet, /function dogStatusLabel\(pet: PetInfo\)[^]*?purchasableOffer\(pet\) \? '可购买' : hasPurchaseEntry\(pet\) \? '待查询商品' : '未获得'/)
   assert.match(pet, /function isPetLocked\(pet: PetInfo\)[^]*?!hasPurchaseEntry\(pet\)/)
   assert.match(pet, /if \(!pet\.owned && !pet\.activatable\) \{[^]*?await loadPetOffers\(accountId\)[^]*?if \(offer\)\s*selectedOffer\.value = \{/)
@@ -288,7 +303,7 @@ test('宠物管理：可购买的未拥有宠物显示购买入口并刷新购�
   assert.match(pet, /await Promise\.all\(\[petStore\.fetchPetInfo\(accountId\), bagStore\.fetchBag\(accountId\), loadPetOffers\(accountId\)\]\)/)
 })
 
-test('离线控件模板：断网图标、状态文字和共享批量启动的刷新按钮', () => {
+test('离线控件模板：断网图标、状态文字和只重连当前账号的刷新按钮', () => {
   for (const selector of ['.offline-state', '.offline-state__badge', '.offline-state__icon', '.offline-state__title'])
     assert.match(style, new RegExp(`${selector.replace('.', '\\.')} \\{`), `style.css 必须定义 ${selector}`)
   const block = style.match(/\.offline-state \{[^}]*\}/)?.[0] || ''
@@ -297,8 +312,8 @@ test('离线控件模板：断网图标、状态文字和共享批量启动的�
   assert.match(component, /class="offline-state"/)
   assert.match(component, /i-carbon-connection-signal-off/)
   assert.match(component, /\{\{ title \?\? '账号未运行' \}\}<\/strong>\s*<slot name="action">\s*<RefreshButton\s+label="重新加载账号信息"/)
-  assert.match(component, /:disabled="accountStore\.bulkRunning"/)
-  assert.match(component, /@click="accountStore\.startAllAccounts\(\)"/)
+  assert.match(component, /:disabled="accountStore\.bulkRunning \|\| !accountStore\.currentAccountId"/)
+  assert.match(component, /@click="accountStore\.reloadCurrentAccount\(\)"/)
   const settings = readFileSync(new URL('views/Settings.vue', srcDir), 'utf8')
   assert.match(settings, /@click="accountStore\.startAllAccounts\(\)"[^]*?>全部启动</)
   assert.doesNotMatch(component, /<style/, '不在组件里重复样式')
@@ -311,14 +326,14 @@ test('离线提示一律用 OfflineState，不再用 EmptyState 拼接', () => {
       && /connection-signal-off|账号未登录|title="账号未运行"/.test(source))
     .map(([rel]) => rel)
   assert.deepEqual(offenders, [])
-  const pages = ['components/FarmPanel.vue', 'components/BagPanel.vue', 'components/PetPanel.vue', 'components/IllustratedPanel.vue', 'components/CollectionsPanel.vue', 'views/Friends.vue', 'views/SolarCalendar.vue', 'views/activity-center/ActivityDirectoryPage.vue']
+  const pages = ['components/farm/FarmPanel.vue', 'components/farm/FarmBagPanel.vue', 'components/PetPanel.vue', 'components/IllustratedPanel.vue', 'components/CollectionsPanel.vue', 'views/Friends.vue', 'views/SolarCalendar.vue', 'components/activity/center/ActivityDirectoryPage.vue']
   for (const page of pages)
     assert.match(readFileSync(new URL(page, srcDir), 'utf8'), /<OfflineState\b/, `${page} 应使用 OfflineState`)
 })
 
-test('今日统计离线时只显示居中的重新加载按钮', () => {
+test('概览离线时在账号卡提供重连，农牧场进度仍然显示', () => {
   const dashboard = readFileSync(new URL('views/Dashboard.vue', srcDir), 'utf8')
-  assert.match(dashboard, /今日统计<\/span>\s*<\/h3>\s*<div v-if="isOffline" class="flex justify-center py-\[12px\]">\s*<RefreshButton\s+label="重新加载账号信息"[^>]*@click="accountStore\.startAllAccounts\(\)"\s*\/>\s*<\/div>\s*<div v-else/)
+  assert.match(dashboard, /<section class="ov-card ov-account\b[^]*?<div v-if="isOffline" class="ov-account__head">\s*<RefreshButton\s+label="重新加载账号信息"[^>]*:disabled="accountStore\.bulkRunning \|\| !currentAccountId"[^>]*@click="accountStore\.reloadCurrentAccount\(\)"\s*\/>\s*<\/div>\s*<template v-for="row in experienceRows"/)
 })
 
 test('重新上线：只在同一账号离线→在线时执行一次当前页的刷新键', () => {
@@ -330,16 +345,16 @@ test('重新上线：只在同一账号离线→在线时执行一次当前页�
     ['components/catalog/ItemsCatalog.vue', 'refreshItems'],
     ['components/commerce/MallCatalogPanel.vue', 'load'],
     ['components/commerce/MysteryShopPanel.vue', 'load'],
-    ['components/activity/ShareRewardActivity.vue', '() => request()'],
+    ['components/activity/center/ShareRewardActivity.vue', '() => request()'],
     ['views/SolarCalendar.vue', 'manualRefresh'],
-    ['views/activity-center/ActivityDirectoryPage.vue', '() => load(true)'],
-    ['views/activity-center/PetDiaryPage.vue', 'load'],
-    ['views/activity-center/MilkTeaPage.vue', '() => request()'],
-    ['views/activity-center/AutumnActivityPage.vue', '() => request()'],
-    ['views/activity-center/CharityActivityPage.vue', 'refreshActivity'],
-    ['views/activity-center/QingMeiActivityPage.vue', 'refreshActivity'],
-    ['views/activity-center/QixiActivityPage.vue', 'refreshActivity'],
-    ['views/activity-center/WeatherActivityPage.vue', 'refreshActivity'],
+    ['components/activity/center/ActivityDirectoryPage.vue', '() => load(true)'],
+    ['components/activity/center/PetDiaryPage.vue', 'load'],
+    ['components/activity/center/MilkTeaPage.vue', '() => request()'],
+    ['components/activity/center/AutumnActivityPage.vue', '() => request()'],
+    ['components/activity/center/CharityActivityPage.vue', 'refreshActivity'],
+    ['components/activity/center/QingMeiActivityPage.vue', 'refreshActivity'],
+    ['components/activity/center/QixiActivityPage.vue', 'refreshActivity'],
+    ['components/activity/center/WeatherActivityPage.vue', 'refreshActivity'],
   ])
   for (const [page, handler] of pages)
     assert.ok(readFileSync(new URL(page, srcDir), 'utf8').includes(`useReconnectRefresh(${handler})`), `${page} 上线时应执行 ${handler}`)
@@ -352,9 +367,9 @@ test('重新上线：只在同一账号离线→在线时执行一次当前页�
 
 test('账号数据面板明确离线时显示提示，确认上线后重读不依赖旧错误', () => {
   for (const [page, reload] of [
-    ['components/FarmPanel.vue', /next === 'online'\)\s*void refreshFarmData\(\)/],
-    ['components/BagPanel.vue', /next === 'online'\) \{\s*imageErrors\.value = \{\}\s*void bagStore\.fetchBag\(id\)/],
-    ['components/TaskPanel.vue', /next === 'online'\)\s*void refresh\(\)/],
+    ['components/farm/FarmPanel.vue', /next === 'online'\)\s*void refreshFarmData\(\)/],
+    ['components/farm/FarmBagPanel.vue', /next === 'online'\) \{\s*imageErrors\.value = \{\}\s*void bagStore\.fetchBag\(id\)/],
+    ['components/farm/FarmTaskPanel.vue', /next === 'online'\)\s*void refresh\(\)/],
     ['components/PetPanel.vue', /next === 'online'\)\s*\{\s*void petStore\.fetchPetInfo\(id\)\s*void loadPetOffers\(id\)/],
     ['components/IllustratedPanel.vue', /watch\(\[currentAccountId, isConnected\][^]*?void refresh\(\)/],
     ['components/CollectionsPanel.vue', /watch\(\[currentAccountId, isConnected\][^]*?void refresh\(\)/],
@@ -369,13 +384,13 @@ test('账号数据面板明确离线时显示提示，确认上线后重读不�
   assert.match(friends, /watch\(currentAccountId, \(\) => \{\s*expandedFriends\.value\.clear\(\)/)
 })
 
-test('土地和图鉴读取失败复用默认离线提示，不重复读取失败的土地', () => {
+test('土地和图鉴读取失败提供反馈，后台轮询跳过读取失败的土地', () => {
   const read = file => readFileSync(new URL(file, srcDir), 'utf8')
-  const farm = read('components/FarmPanel.vue')
+  const farm = read('components/farm/FarmPanel.vue')
   const friends = read('views/Friends.vue')
   const illustrated = read('components/IllustratedPanel.vue')
   assert.match(farm, /<OfflineState v-else-if="error" \/>/)
-  assert.match(illustrated, /<OfflineState v-else-if="error" \/>/)
+  assert.match(illustrated, /<OfflineState v-else-if="isOffline" \/>[^]*?<EmptyState v-else-if="error"[^>]*title="图鉴加载失败"[^>]*>\s*<NButton secondary @click="refresh">重试<\/NButton>/)
   assert.match(friends, /<OfflineState v-else-if="friendLandsError\[friend\.gid\]" class="offline-state--inline" \/>/)
   assert.match(style, /\.offline-state:not\(\.offline-state--inline\)/)
   assert.match(farm, /useIntervalFn\(\(\) => refreshFarmData\(!error\.value\), 60000\)/)
@@ -404,9 +419,9 @@ test('商城：仅明确离线时显示统一提示，读取失败单独重试',
 
 test('活动离线时保留子菜单和标题栏，离线提示上下各留 12px', () => {
   const read = file => readFileSync(new URL(file, srcDir), 'utf8')
-  assert.match(read('views/ActivityCenter.vue'), /<ActivityDirectoryPage\s+v-if="!selectedActivity \|\| isOffline"\s+:offline="isOffline"/)
-  const directory = read('views/activity-center/ActivityDirectoryPage.vue')
-  assert.match(directory, /<PageTabs\b[^]*?<\/PageTabs>[^]*?class="activity-toolbar panel-titlebar panel-titlebar--flush"[^]*?class="panel-scroll-body">\s*<OfflineState v-if="offline" \/>/)
+  assert.match(read('components/activity/center/ActivityCenterContent.vue'), /<ActivityDirectoryPage\s+v-if="!selectedActivity \|\| isOffline"\s+:offline="isOffline"/)
+  const directory = read('components/activity/center/ActivityDirectoryPage.vue')
+  assert.match(directory, /<PageTabs\b[^]*?<\/PageTabs>[^]*?class="activity-toolbar panel-titlebar panel-titlebar--flush\b[^"]*"[^]*?class="panel-scroll-body">\s*<OfflineState v-if="offline" \/>/)
   assert.match(directory, /:disabled="!currentAccountId \|\| offline"/)
   assert.match(read('style.css'), /\.offline-state\s*\{[^}]*padding:\s*12px 20px;/)
   const friends = read('views/Friends.vue')
@@ -424,12 +439,13 @@ test('节令、概览、设置和生涯：离线只替换依赖连接的内容',
   const solar = read('views/SolarCalendar.vue')
   assert.equal([...solar.matchAll(/<OfflineState\b/g)].length, 1)
   assert.match(solar, /<PageTabs[^>]+seasonId.*?<\/PageTabs>/s)
-  assert.match(solar, /<section v-if="currentAccountId && \(isOffline \|\| calendarData\)"[^>]*>\s*<header v-if="isOffline \|\| season" class="panel-titlebar panel-titlebar--flush"[^>]*>.*?seasonTabs\.find\(entry => entry\.id === seasonId\)\?\.name.*?<\/header>\s*<div v-if="isOffline" class="panel-scroll-body[^>]*>\s*<OfflineState \/>/s)
+  assert.match(solar, /<section v-if="currentAccountId && \(isOffline \|\| calendarData\)"[^>]*>.*?<header v-if="isOffline \|\| season" class="panel-titlebar panel-titlebar--flush\b[^"]*"[^>]*>.*?seasonTabs\.find\(entry => entry\.id === seasonId\)\?\.name.*?<\/header>\s*<div v-if="isOffline" class="panel-scroll-body[^>]*>\s*<OfflineState \/>/s)
   assert.match(solar, /v-else-if="!isOffline && \(error \|\| !calendarData\)".*?@click="manualRefresh"/s)
   assert.doesNotMatch(read('views/Dashboard.vue'), /账号未运行/)
   const settings = read('views/Settings.vue')
   assert.match(settings, /v-else-if="seedOptionsError"[^]*?@click="fetchSeedOptions\(currentAccountId\)"/)
-  assert.match(settings, /v-else-if="bagSeedsError"[^]*?@click="fetchBagSeeds\(\)"/)
+  assert.match(settings, /<FarmSeedPriorityDialog[^]*?:error="bagSeedsError"[^]*?@refresh="fetchBagSeeds\(\)"/)
+  assert.match(read('components/settings/FarmSeedPriorityDialog.vue'), /v-else-if="error"[^]*?@click="emit\('refresh'\)"/)
   assert.match(settings, /@click="strategyPreviewVisible = true"/)
   const menu = read('components/TopAccountMenu.vue')
   assert.match(menu, /:is-offline="isOffline"[^]*?@refresh="loadCareer"/)

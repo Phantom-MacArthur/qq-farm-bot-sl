@@ -17,7 +17,7 @@ const config = defineModel<AutoCodeRefreshConfig>('config', { required: true })
 </script>
 
 <template>
-  <div class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-4">
+  <div class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-3">
     <div class="panel-titlebar mb-4 justify-between margin-shell"><span class="margin-content">
       <span class="text-sm text-gray-500 dark:text-gray-400">仅带内置登录凭据的微信扫码账号可用</span>
       <BaseButton
@@ -27,7 +27,7 @@ const config = defineModel<AutoCodeRefreshConfig>('config', { required: true })
         :disabled="loading"
         @click="emit('save')"
       >
-        保存刷新设置
+        保存
       </BaseButton>
     </span></div>
 

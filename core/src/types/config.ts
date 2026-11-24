@@ -1,3 +1,4 @@
+import type { AUTOMATION_MODULE_DEFAULTS, FARM_DAILY_DEFAULTS, MugeRewardKey } from '../config/automation-modules';
 import type { RanchAutomationConfig } from '../config/ranch-automation';
 export {};
 export type PlantingStrategy =
@@ -7,15 +8,16 @@ export type PlantingStrategy =
   | 'max_fert_exp'
   | 'max_profit'
   | 'max_fert_profit'
-  | 'bag_priority';
+  | 'bag_priority'
+  | 'illustrated';
 
-export type BagSeedFallbackStrategy = Exclude<PlantingStrategy, 'bag_priority'>;
+export type BagSeedFallbackStrategy = Exclude<PlantingStrategy, 'illustrated'>;
 
 export type FertilizerMode = 'both' | 'normal' | 'organic' | 'smart' | 'none' | 'normal_ripen' | 'organic_ripen';
 
 export type FertilizerLandType = 'blue-crystal' | 'purple-gold' | 'gold' | 'black' | 'red' | 'normal';
 
-export interface AutomationConfig extends RanchAutomationConfig {
+export interface AutomationConfig extends RanchAutomationConfig, Record<keyof typeof AUTOMATION_MODULE_DEFAULTS | keyof typeof FARM_DAILY_DEFAULTS | MugeRewardKey, boolean> {
   farm: boolean;
   farm_harvest_tiangong: boolean;
   farm_push: boolean;
@@ -43,6 +45,7 @@ export interface AutomationConfig extends RanchAutomationConfig {
   fertilizer: FertilizerMode;
   fertilizer_multi_season: boolean;
   fertilizer_land_types: FertilizerLandType[];
+  fertilizer_land_strategies: Partial<Record<FertilizerLandType, FertilizerMode>>;
   fertilizer_smart_seconds: number;
   skip_own_weed_bug: boolean;
   show_manual_fertilizer: boolean;
@@ -87,6 +90,7 @@ export interface AccountConfig {
   fertilizerBuyNormalCount: number;
   fertilizerBuyNormalThresholdHours: number;
   fertilizerBuyCheckIntervalMinutes: number;
+  fertilizerBuyNormalCheckIntervalMinutes: number;
   /** 已废弃：邮箱改为默认周期检查（登录/刷新 code 立即 + 冷却轮询），仅为兼容旧配置保留。 */
   emailClaimHour: number;
   bagSeedPriority: number[];

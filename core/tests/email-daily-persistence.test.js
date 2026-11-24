@@ -189,11 +189,13 @@ test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重
     const filename = path.resolve(__dirname, '../dist/core/worker.js');
     let tick;
     let otherRoutines = 0;
+    let shareRuns = 0;
+    const automation = {};
     const noop = () => {};
     const modules = {
         'node:worker_threads': {},
         '../config/config': { CONFIG: { timeZone: 'Asia/Shanghai' } },
-        '../models/store': { getAutomation: () => ({}), applyConfigSnapshot: value => value },
+        '../models/store': { getAutomation: () => automation, applyConfigSnapshot: value => value },
         '../services/email': email,
         '../services/status': { setRecordGoldExpHook: noop },
         '../services/automation-lock': require('../dist/services/automation-lock'),
@@ -202,7 +204,7 @@ test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重
             tick = fn;
         } }) },
         '../services/warehouse': { openCharitySettlementGiftPacksSilently: async () => { otherRoutines += 1; } },
-        '../services/share': { checkDailyShareStatus: noop },
+        '../services/share': { checkDailyShareStatus: () => { shareRuns += 1; } },
         '../services/monthcard': { performDailyMonthCardGift: noop },
         '../services/mall': { buyFreeGifts: noop },
         '../services/qqvip': { performDailyVipGift: noop },
@@ -242,4 +244,12 @@ test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重
     tick();
     await flush();
     assert.equal(h.methods.length, 4, '跨日检查后的同日轮询不会重请');
+
+    automation.farm_email_rewards = false;
+    h.clock.now = Date.parse('2026-11-10T16:00:00Z');
+    tick();
+    await flush();
+    assert.equal(h.methods.length, 4, '关闭邮箱后跨日也不会检查邮箱');
+    assert.equal(otherRoutines, 2, '邮箱附带的礼包检查也暂停');
+    assert.equal(shareRuns, 3, '分享礼包仍独立运行');
 });

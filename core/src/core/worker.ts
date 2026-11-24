@@ -1,4 +1,4 @@
-export {};
+import { getFertilizerStrategyGroups, usesImmediateOrganicFertilizer } from '../config/fertilizer-strategy';
 /**
  * 子进程 Worker - 负责运行单个账号的挂机逻辑
  */
@@ -13,11 +13,13 @@ const { checkFriends, startFriendCheckLoop, stopFriendCheckLoop, refreshFriendCh
 const { getInteractRecords } = require('../services/interact');
 const { processInviteCodes } = require('../services/invite');
 const { autoBuyFertilizer, checkAndBuyFertilizerBoth, buyFreeGifts, getFreeGiftDailyState, autoBuyCouponGifts, COUPON_GIFT_CHECK_INTERVAL_MS } = require('../services/mall');
+const { autoBuyRanchCouponGifts } = require('../services/ranch/coupon-gift');
 const { performDailyMonthCardGift, getMonthCardDailyState } = require('../services/monthcard');
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { runExclusiveAutomationTask } = require('../services/automation-lock');
 const { isMysteryShopWatchEnabled, mysteryShopConfigChanged, checkMysteryShopTick, resetMysteryShopPending } = require('../services/mystery-shop-auto');
 const ranchAutomation = require('../services/ranch/automation');
+const { FARM_DAILY_DEFAULTS, MUGE_REWARD_KEYS } = require('../config/automation-modules');
 const { isRanchMarketEnabled, RANCH_MARKET_SWITCH_BY_CURRENCY } = require('../config/ranch-automation');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
@@ -164,6 +166,24 @@ function onRanchBookReward(kind: 'normal' | 'giant', available: boolean): void {
     if (ranchAutomation.noteBookReward(kind, available) && loginReady && getAutomation().ranch_illustrated) scheduleUnifiedNextTick();
 }
 
+async function runFarmIllustratedRewards(): Promise<void> {
+    const generation = runtimeGeneration;
+    const canContinue = () => loginReady && generation === runtimeGeneration && getAutomation().farm_illustrated === true;
+    if (canContinue()) {
+        await runWithRequestClass('farm', () => require('../services/farm-illustrated-rewards').claimFarmIllustratedRewards(canContinue));
+    }
+}
+
+function scheduleFarmIllustratedRewards(): void {
+    if (!loginReady || getAutomation().farm_illustrated !== true) return;
+    workerScheduler.setTimeoutTask('farm_illustrated_rewards', 1000, () =>
+        runExclusiveAutomationTask('farm_illustrated_rewards', runFarmIllustratedRewards, { detached: true }));
+}
+
+function onFarmBookReward(notify: { normal_reward_available: boolean; premium_reward_available: boolean }): void {
+    if (notify.normal_reward_available || notify.premium_reward_available) scheduleFarmIllustratedRewards();
+}
+
 function onRanchFacilitiesChanged(facilities: any[]): void {
     if (!loginReady || !getAutomation().ranch_activate_shed) return;
     if (ranchAutomation.noteRanchFacilities(facilities)) scheduleUnifiedNextTick();
@@ -191,6 +211,7 @@ function runRanchRoutine(detached = false): Promise<void> {
         await runWithRequestClass('friend', () => ranchAutomation.run({
             farmDeadline: () => Math.min(nextFarmRunAt, friendTaskRunning ? Date.now() : nextFriendRunAt),
             canContinue: () => loginReady && generation === runtimeGeneration && isGatewayHealthyForBusiness(getGatewayLoad()),
+            nextFriendIntervalMs,
         }));
     }, { detached }).finally(() => {
         ranchRoutineQueued = false;
@@ -226,15 +247,18 @@ async function runDailyRoutines(force: boolean = false, options: { forceEmail?: 
     if (!loginReady) return;
     try {
         // 邮箱是周期检查任务：登录/刷新 code 上线（forceEmail）立即查，跨日重跑仍受服务层冷却限制。
-        await checkAndClaimEmails(options.forceEmail === true);
-        await openCharitySettlementGiftPacksSilently();
-        await checkDailyShareStatus(force);
-        await performDailyMonthCardGift(force);
-        await buyFreeGifts(force);
-        await performDailyVipGift(force);
+        if (getAutomation().farm_email_rewards !== false) {
+            await checkAndClaimEmails(options.forceEmail === true);
+            if (getAutomation().farm_email_rewards !== false) await openCharitySettlementGiftPacksSilently();
+        }
+        if (getAutomation().farm_daily_share !== false) await checkDailyShareStatus(force);
+        if (getAutomation().farm_month_card_gift !== false) await performDailyMonthCardGift(force);
+        if (getAutomation().farm_free_gifts !== false) await buyFreeGifts(force);
+        if (getAutomation().farm_vip_gift !== false) await performDailyVipGift(force);
     } catch (e: any) {
         log('系统', `每日任务调度失败: ${e.message}`, { module: 'system', event: '每日任务', result: 'error' });
     }
+    await runFarmIllustratedRewards();
 }
 
 function stopDailyRoutineTimer(): void {
@@ -294,15 +318,16 @@ function randomIntervalMs(minMs: number, maxMs: number): number {
     return sec * 1000;
 }
 
+function nextFriendIntervalMs(): number {
+    return randomIntervalMs(workerConfig.friendCheckIntervalMin || 12000, workerConfig.friendCheckIntervalMax || 15000);
+}
+
 function resetUnifiedSchedule(): void {
     const farmMs = randomIntervalMs(
         CONFIG.farmCheckIntervalMin || CONFIG.farmCheckInterval || 2000,
         CONFIG.farmCheckIntervalMax || CONFIG.farmCheckInterval || 2000
     );
-    const friendMs = randomIntervalMs(
-        workerConfig.friendCheckIntervalMin || 12000,
-        workerConfig.friendCheckIntervalMax || 15000
-    );
+    const friendMs = nextFriendIntervalMs();
     const now = Date.now();
     nextFarmRunAt = now + farmMs;
     nextFriendRunAt = now + friendMs;
@@ -374,7 +399,7 @@ async function runFarmTick(auto: any): Promise<void> {
         await runWithRequestClass('farm', async () => {
             if (auto.farm) await checkFarm();
             if (auto.task) await checkAndClaimTasks();
-            if (auto.email !== false) await openCharitySettlementGiftPacksSilently();
+            if (getAutomation().farm_email_rewards !== false) await openCharitySettlementGiftPacksSilently();
             if (auto.fertilizer_gift) await openFertilizerGiftPacksSilently();
         });
     } catch {
@@ -390,10 +415,7 @@ async function runFarmTick(auto: any): Promise<void> {
 async function runFriendTick(auto: any): Promise<void> {
     if (friendTaskRunning) return;
     const generation = runtimeGeneration;
-    const friendMs = randomIntervalMs(
-        workerConfig.friendCheckIntervalMin || 12000,
-        workerConfig.friendCheckIntervalMax || 15000
-    );
+    const friendMs = nextFriendIntervalMs();
     // friend 总开关仍控制好友任务总入口；关闭时也要推进到期时间，避免调度器每秒空转。
     if (!auto.friend) {
         nextFriendRunAt = Date.now() + friendMs;
@@ -545,7 +567,7 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
 
             if (!loginReady || !canContinue()) return;
             try {
-                await checkAndClaimTasks();
+                if (getAutomation().task !== false) await checkAndClaimTasks();
             } catch (e: any) {
                 log('系统', `登录后领取任务失败: ${e.message}`, { module: 'system', event: '启动序列', result: 'error' });
             }
@@ -558,33 +580,69 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
         log('系统', `登录启动序列执行失败: ${e.message}`, { module: 'system', event: '启动序列', result: 'error' });
     }
 }
-function stopCouponGiftTimer(): void {
-    workerScheduler.clear('coupon_gift_initial');
-    workerScheduler.clear('coupon_gift_interval');
-}
+const COUPON_GIFT_SWITCHES = ['mall_coupon_gift_buy', 'ranch_coupon_gift_buy'] as const;
+type CouponGiftSwitch = typeof COUPON_GIFT_SWITCHES[number];
 
 function startBusinessLoops(): void {
     startFarmCheckLoop({ externalScheduler: true });
     startFriendCheckLoop({ externalScheduler: true });
     startUnifiedScheduler();
     startDailyRoutineTimer(false);
-    startCouponGiftTimer();
+    for (const key of COUPON_GIFT_SWITCHES) startCouponGiftTimer(key);
+    startMugeRewardTimer();
 }
 
-function runCouponGiftTick(): Promise<void> {
-    if (!loginReady) return Promise.resolve();
-    return autoBuyCouponGifts();
+let mugeRewardsRunning = false;
+
+function startMugeRewardTimer(): void {
+    workerScheduler.clear('muge_reward_initial');
+    workerScheduler.clear('muge_reward_interval');
+    if (!loginReady || !MUGE_REWARD_KEYS.some((key: string) => getAutomation()[key] === true)) return;
+    workerScheduler.setTimeoutTask('muge_reward_initial', 1500, runMugeRewardTick);
+    workerScheduler.setIntervalTask('muge_reward_interval', 5 * 60_000, runMugeRewardTick);
 }
 
-function startCouponGiftTimer(): void {
-    stopCouponGiftTimer();
-    if (!loginReady || getAutomation().mall_coupon_gift_buy !== true) return;
-    workerScheduler.setTimeoutTask('coupon_gift_initial', 3000, () => {
-        runExclusiveAutomationTask('mall_coupon_gift', runCouponGiftTick).catch(() => null);
-    });
-    workerScheduler.setIntervalTask('coupon_gift_interval', COUPON_GIFT_CHECK_INTERVAL_MS, () => {
-        runExclusiveAutomationTask('mall_coupon_gift', runCouponGiftTick).catch(() => null);
-    });
+async function runMugeRewardTick(): Promise<void> {
+    const generation = runtimeGeneration;
+    const enabled = (key: string) => loginReady && generation === runtimeGeneration && getAutomation()[key] === true;
+    if (mugeRewardsRunning || !MUGE_REWARD_KEYS.some(enabled)) return;
+    mugeRewardsRunning = true;
+    try {
+        await runExclusiveAutomationTask('muge_rewards', () => runWithRequestClass('farm', () =>
+            require('../services/muge-activity').runMugeAutoRewards(enabled, (_key: string, rewards: any[]) => {
+                const summary = rewards.map(item => `${item.name} ×${item.count}`).join('、');
+                log('活动', `牧歌初启奖励已领取：${summary}`, { module: 'activity', event: '牧歌初启', result: 'ok' });
+            })), { detached: true });
+    } catch (error: any) {
+        logWarn('活动', `牧歌初启自动领取失败：${error.message}`, { module: 'activity', event: '牧歌初启', result: 'error' });
+    } finally {
+        mugeRewardsRunning = false;
+    }
+}
+
+function startCouponGiftTimer(key: CouponGiftSwitch): void {
+    const initialTask = `${key}_initial`;
+    const intervalTask = `${key}_interval`;
+    workerScheduler.clear(initialTask);
+    workerScheduler.clear(intervalTask);
+    const generation = runtimeGeneration;
+    const enabled = () => loginReady && generation === runtimeGeneration && getAutomation()[key] === true;
+    if (!enabled()) return;
+
+    const tick = () => runExclusiveAutomationTask(key, async () => {
+        if (!enabled()) return;
+        if (key === 'mall_coupon_gift_buy') {
+            await autoBuyCouponGifts();
+        } else {
+            try {
+                await autoBuyRanchCouponGifts(enabled);
+            } catch (err: any) {
+                logWarn('牧场', `点券限时礼包检查或购买失败：${err.message}`, { module: 'ranch', event: '点券限时礼包自动购买', result: 'error' });
+            }
+        }
+    }, { detached: true });
+    workerScheduler.setTimeoutTask(initialTask, 3000, tick);
+    workerScheduler.setIntervalTask(intervalTask, COUPON_GIFT_CHECK_INTERVAL_MS, tick);
 }
 
 
@@ -597,6 +655,7 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
 
     const prevAuto = getAutomation();
     const accountId = process.env.FARM_ACCOUNT_ID || '';
+    const prevStealDelay = snapshot?.stealDelaySeconds !== undefined ? getConfigSnapshot(accountId).stealDelaySeconds : undefined;
     if (snapshot && snapshot.systemTimeZone !== undefined) {
         updateRuntimeConfig({ timeZone: snapshot.systemTimeZone });
     }
@@ -617,7 +676,8 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
     const nextRanchAuto = getAutomation();
     const ranchChanged = Object.keys(nextRanchAuto).some(key => key.startsWith('ranch_')
         && JSON.stringify(nextRanchAuto[key]) !== JSON.stringify(prevAuto[key]));
-    if (ranchChanged) ranchAutomation.resetSchedule();
+    const stealDelayChanged = prevStealDelay !== undefined && getConfigSnapshot(accountId).stealDelaySeconds !== prevStealDelay;
+    if (ranchChanged || stealDelayChanged) ranchAutomation.resetSchedule();
     if (rev > appliedConfigRevision) appliedConfigRevision = rev;
 
     // 优先使用本次下发的间隔，避免 worker 内部 store 漂移导致回退默认值
@@ -625,7 +685,12 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
         ? snapshot.intervals
         : null;
     if (incomingIntervals) {
+        const previousMin = workerConfig.friendCheckIntervalMin;
+        const previousMax = workerConfig.friendCheckIntervalMax;
         applyIntervalsToRuntime(incomingIntervals);
+        if (workerConfig.friendCheckIntervalMin !== previousMin || workerConfig.friendCheckIntervalMax !== previousMax) {
+            ranchAutomation.resetFriendSchedule();
+        }
     }
 
     if (loginReady) {
@@ -637,10 +702,10 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
         if (hasAutomationPayload) {
             const nextAuto = getAutomation();
 
-            const prevFertilizerMode = String(prevAuto && prevAuto.fertilizer ? prevAuto.fertilizer : '').toLowerCase();
-            const nextFertilizerMode = String(nextAuto && nextAuto.fertilizer ? nextAuto.fertilizer : '').toLowerCase();
-            const fertilizerChanged = prevFertilizerMode !== nextFertilizerMode;
-            if (fertilizerChanged && (nextFertilizerMode === 'both' || nextFertilizerMode === 'organic' || nextFertilizerMode === 'smart')) {
+            const previousGroups = [...getFertilizerStrategyGroups(prevAuto ?? {})];
+            const nextGroups = [...getFertilizerStrategyGroups(nextAuto)];
+            const fertilizerChanged = JSON.stringify(previousGroups) !== JSON.stringify(nextGroups);
+            if (fertilizerChanged && nextGroups.some(([mode]) => usesImmediateOrganicFertilizer(mode))) {
                 workerScheduler.setTimeoutTask('fertilizer_immediate_after_save', 600, async () => {
                     if (!loginReady) return;
                     try {
@@ -663,7 +728,14 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
                     resetMysteryShopPending();
                 }
             }
-            startCouponGiftTimer();
+            for (const key of COUPON_GIFT_SWITCHES) {
+                if (nextAuto[key] !== prevAuto[key]) startCouponGiftTimer(key);
+            }
+            if (MUGE_REWARD_KEYS.some((key: string) => nextAuto[key] !== prevAuto[key])) startMugeRewardTimer();
+            if (Object.keys(FARM_DAILY_DEFAULTS).some(key => prevAuto[key] === false && nextAuto[key] === true)) {
+                workerScheduler.setTimeoutTask('daily_routines_after_save', 600, () =>
+                    runExclusiveAutomationTask('daily_routines', () => runDailyRoutines()).catch(() => null));
+            }
         }
         scheduleUnifiedNextTick();
     }
@@ -759,6 +831,8 @@ async function startBot(config: any): Promise<void> {
     };
     networkEvents.on('disconnected', onDisconnected);
     networkEvents.on('kickout', onKickout);
+    networkEvents.off('illustratedRewardRedDot', onFarmBookReward);
+    networkEvents.on('illustratedRewardRedDot', onFarmBookReward);
     networkEvents.off('ranchBookReward', onRanchBookReward);
     networkEvents.on('ranchBookReward', onRanchBookReward);
     networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
@@ -941,6 +1015,7 @@ function detachRuntimeListeners(): void {
     }
     networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
     networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+    networkEvents.off('illustratedRewardRedDot', onFarmBookReward);
     networkEvents.off('ranchBookReward', onRanchBookReward);
     networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
     if (onDogSkillGiftPending) {
@@ -1055,7 +1130,7 @@ async function handleApiCall(msg: any): Promise<void> {
                     result = await require('../services/illustrated').clearIllustratedNew(args[0]);
                     break;
                 case 'getRanchActivityDirectorySnapshot':
-                    result = await require('../services/ranch/activity-directory').getRanchActivityDirectorySnapshot();
+                    result = await require('../services/activity-center').getRanchActivityDirectorySnapshot();
                     break;
                 case 'getMugeActivity':
                     result = await require('../services/muge-activity').getMugeActivity(args[0]);
@@ -1077,6 +1152,7 @@ async function handleApiCall(msg: any): Promise<void> {
                 break;
             case 'operateCollections':
                 result = await require('../services/collections').operateCollections(args[0], args[1]);
+                if (args[0] === 'upgrade') scheduleFarmIllustratedRewards();
                 break;
             case 'claimIllustratedRewards':
                 result = await require('../services/illustrated').claimIllustratedRewards(args[0]);
@@ -1449,11 +1525,10 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 claimableCount: Number(task.claimableCount || 0),
                 rewards: Array.isArray(task.rewards) ? task.rewards : [],
             },
-            // 以下功能默认启用，enabled 固定为 true
             {
                 key: 'email_rewards',
                 label: '邮箱奖励',
-                enabled: true,
+                enabled: auto.farm_email_rewards !== false,
                 doneToday: email.doneToday,
                 lastAt: email.lastCheckAt,
                 nextAt: email.nextCheckAt,
@@ -1461,11 +1536,11 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 result: email.result,
                 lastError: email.lastError,
             },
-            { key: 'mall_free_gifts', label: '商城免费礼包', enabled: true, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0), rewards: free.rewards || [] },
+            { key: 'mall_free_gifts', label: '商城免费礼包', enabled: auto.farm_free_gifts !== false, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0), rewards: free.rewards || [] },
             {
                 key: 'daily_share',
                 label: '分享礼包',
-                enabled: true,
+                enabled: auto.farm_daily_share !== false,
                 mode: 'auto_claim',
                 doneToday: !!share.doneToday,
                 checkedToday: !!share.checkedToday,
@@ -1477,7 +1552,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
             {
                 key: 'vip_daily_gift',
                 label: '会员礼包',
-                enabled: true,
+                enabled: auto.farm_vip_gift !== false,
                 doneToday: !!vip.doneToday,
                 lastAt: Math.max(Number(vip.lastClaimAt || 0), Number(vip.lastCheckAt || 0)),
                 isVip: typeof vip.isVip === 'boolean' ? vip.isVip : null,
@@ -1490,7 +1565,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
             {
                 key: 'month_card_gift',
                 label: '月卡礼包',
-                enabled: true,
+                enabled: auto.farm_month_card_gift !== false,
                 doneToday: !!month.doneToday,
                 lastAt: Number(month.lastClaimAt || month.lastCheckAt || 0),
                 // null 表示服务器返回了月卡条目但无法确认是否开通，不能当成 false

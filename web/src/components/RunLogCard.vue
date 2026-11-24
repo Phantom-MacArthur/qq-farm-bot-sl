@@ -5,7 +5,7 @@ import RunLogPanel from '@/components/RunLogPanel.vue'
 <template>
   <!-- 牧场面板的日志卡片：复用统一日志视图，默认筛选牧场模块 -->
   <div class="dash-logs flex flex-1 flex-col gap-6 md:w-3/4">
-    <div class="dash-logs__card flex flex-1 flex-col farm-card rounded-2xl bg-white p-5 shadow-md md:overflow-hidden dark:bg-gray-800">
+    <div class="dash-logs__card flex flex-1 flex-col page-card-surface panel-scroll-layout">
       <RunLogPanel
         default-module="ranch"
         :level-in-signature="true"
@@ -16,6 +16,7 @@ import RunLogPanel from '@/components/RunLogPanel.vue'
 </template>
 
 <style scoped>
+.dash-logs__card { min-height: 0; overflow: clip; padding: 0; }
 @media (min-width: 768px) {
   .dash-logs {
     position: relative;

@@ -722,6 +722,7 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
 interface VisitResult {
     acted: boolean;
     entered: boolean;
+    stealReadyAt?: number;
     status?: 'helped' | 'skipped_exp_limit' | 'protect_dog_bypass' | 'no_action' | 'enter_failed';
     protectDogBypass?: boolean;
 }
@@ -732,6 +733,7 @@ export interface VisitFriendOptions {
     allowHelp?: boolean;
     allowBad?: boolean;
     ignoreExpLimit?: boolean;
+    stealDelayMs?: number;
 }
 
 /**
@@ -793,6 +795,7 @@ export async function visitFriend(
         return { acted: false, entered: false };
     }
 
+    const enteredAt = Date.now();
     const lands: any[] = enterReply.lands || [];
     if (lands.length === 0) {
         await leaveFriendFarm(gid);
@@ -830,7 +833,12 @@ export async function visitFriend(
     }
 
     // 2. 偷菜操作
-    if (stealEnabled && status.stealable.length > 0) {
+    let stealReadyAt: number | undefined;
+    if (stealEnabled && status.stealable.length > 0 && options.stealDelayMs) {
+        const readyAt = enteredAt + options.stealDelayMs;
+        if (Date.now() < readyAt) stealReadyAt = readyAt;
+    }
+    if (!stealReadyAt && stealEnabled && isAutomationOn('friend_steal') && status.stealable.length > 0) {
         const targetLands: number[] = status.stealable;
 
         let ok: number = 0;
@@ -892,7 +900,7 @@ export async function visitFriend(
     }
 
     await leaveFriendFarm(gid);
-    return { acted: actions.length > 0, entered: true };
+    return { acted: actions.length > 0, entered: true, stealReadyAt };
 }
 
 // ============ 缓存管理 ============

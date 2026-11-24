@@ -69,10 +69,11 @@ async function withFriendVisit(hostGid: unknown, run: (entry: any, host: string)
     });
 }
 
-function visit(hostGid: unknown, run: (entry: any, ranches: any[], host: string) => Promise<any>): Promise<any> {
+function visit(hostGid: unknown, run: (entry: any, ranches: any[], host: string, enteredAt: number) => Promise<any>): Promise<any> {
     return withFriendVisit(hostGid, async (entry, host) => {
+        const enteredAt = Date.now();
         const detail = await rpc('animals', { host_gid: host });
-        return run(entry, detail.ranches, host);
+        return run(entry, detail.ranches, host, enteredAt);
     });
 }
 
@@ -281,6 +282,7 @@ type FriendInteraction = { action: 'stroke'; ranchId: string; animalId: number }
 
 export interface FriendPatrolProgress {
     stealChecked?: boolean;
+    stealReadyAt?: number;
     cleanChecked?: boolean;
     pending?: FriendInteraction[];
 }
@@ -292,8 +294,9 @@ async function automateFriend(
     shouldYield: (acted: boolean) => boolean = () => false,
     onOutcome?: (outcome: any, nickname: string) => void,
     progress: FriendPatrolProgress = {},
+    stealDelayMs = 0,
 ): Promise<any> {
-    return visit(hostGid, async (entry, ranches, host) => {
+    return visit(hostGid, async (entry, ranches, host, enteredAt) => {
         const results: any[] = [];
         const nickname = entry.basic.name.trim();
         const times: Record<string, number> = {};
@@ -328,7 +331,13 @@ async function automateFriend(
         if (!progress.stealChecked) {
             if (enabled('steal')) {
                 const plan = quote(host, ranches);
-                if (!plan.skipped) await act(plan, () => commitSteal(host, ranches, plan));
+                if (!plan.skipped) {
+                    progress.stealReadyAt ??= enteredAt + stealDelayMs;
+                    if (Date.now() >= progress.stealReadyAt) {
+                        await act(plan, () => commitSteal(host, ranches, plan));
+                        progress.stealReadyAt = undefined;
+                    }
+                }
             }
             progress.stealChecked = true;
         }
@@ -343,7 +352,7 @@ async function automateFriend(
             }
             progress.cleanChecked = true;
         }
-        if (!enabled('stroke') && !enabled('putMosquito')) return { results, times };
+        if (!enabled('stroke') && !enabled('putMosquito')) return { results, times, stealReadyAt: progress.stealReadyAt };
         if (!progress.pending) {
             if (cleaned) {
                 if (pause()) return { results, times, yielded: true };
@@ -384,7 +393,7 @@ async function automateFriend(
             }
             pending.shift();
         }
-        return { results, times };
+        return { results, times, stealReadyAt: progress.stealReadyAt };
     });
 }
 

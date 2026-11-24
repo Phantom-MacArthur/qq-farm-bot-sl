@@ -82,6 +82,7 @@ textarea * {
   --ui-toolbar-width-slack: 2px;
   --ui-radius-card: 14px;
   --ui-dialog-scroll-gap: 12px;
+  --ui-settings-space: 12px;
   --ui-dialog-scroll-inset: 8px;
   --ui-shadow-sm: 0 1px 2px rgba(45, 66, 52, 0.04), 0 6px 20px rgba(45, 66, 52, 0.05);
   --ui-shadow-md: 0 12px 32px rgba(55, 75, 61, 0.1);

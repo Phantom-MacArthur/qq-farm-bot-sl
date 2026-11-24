@@ -1,0 +1,103 @@
+.settings-dialog {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface-solid);
+  box-shadow: var(--ui-shadow-sm);
+  color: var(--ui-ink);
+  font-size: var(--ui-font-size-small-13);
+  font-weight: var(--fw-400);
+}
+
+.settings-dialog--padded,
+.settings-dialog__body,
+.settings-dialog__header,
+.settings-dialog__footer,
+.settings-group {
+  padding: var(--ui-settings-space);
+}
+
+.settings-dialog__header,
+.settings-dialog__footer {
+  flex-shrink: 0;
+  border-color: var(--ui-border);
+}
+
+.settings-dialog__footer {
+  background: var(--ui-surface-soft);
+}
+
+.settings-dialog__status {
+  background: var(--ui-surface-soft);
+}
+
+.settings-dialog__close {
+  display: grid;
+  width: var(--ui-content-item-control-height-30);
+  height: var(--ui-content-item-control-height-30);
+  flex: none;
+  place-items: center;
+  border-radius: var(--ui-radius-control);
+  color: var(--ui-muted);
+}
+
+.settings-dialog__close:hover:not(:disabled) {
+  background: var(--ui-surface-soft);
+}
+
+.settings-dialog__title {
+  color: var(--ui-ink);
+  font-size: var(--ui-font-size-large-15);
+  font-weight: var(--fw-600);
+  line-height: 1.4;
+}
+
+.settings-group__title {
+  color: var(--ui-ink);
+  font-size: var(--ui-font-size-medium-14);
+  font-weight: var(--fw-500);
+  line-height: 1.4;
+}
+
+.settings-dialog :is(.base-field__label, .base-switch__label) {
+  font-size: var(--ui-font-size-small-13);
+  font-weight: var(--fw-400);
+}
+
+.settings-dialog .base-switch__label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: start;
+}
+
+.settings-group {
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+}
+
+.settings-note,
+.settings-error {
+  font-size: var(--ui-font-size-tiny-12);
+  font-weight: var(--fw-400);
+}
+
+.settings-note {
+  color: var(--ui-muted);
+}
+
+.settings-error {
+  color: var(--ui-danger);
+}
+
+.settings-preview {
+  display: flex;
+  height: var(--ui-content-item-control-height-30);
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  padding-inline: var(--ui-settings-space);
+  border: 1px dashed var(--ui-border-strong);
+  border-radius: 6px;
+  background: var(--ui-surface-soft);
+  color: var(--ui-muted);
+  font-size: var(--ui-font-size-small-13);
+}

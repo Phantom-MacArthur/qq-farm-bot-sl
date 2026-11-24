@@ -20,8 +20,7 @@ const BATCH_VERBS: Record<AccountBatchKind, string> = {
 }
 
 /**
- * “离线”沿用卡片启动/停止按钮的同一套语义：worker 进程不在就是可启动。
- * online 只表示 worker 已上报上线，进程还在但没连上的账号仍要被“全部停止”停掉。
+ * running 表示 worker 进程是否存在，online 表示是否连上游戏。
  */
 function isStopped(account: Account) {
   return account.running !== true
@@ -30,7 +29,7 @@ function isStopped(account: Account) {
 /**
  * 按动作挑选批量目标；传入 selectedIds 时只在选中范围内挑，
  * 因此多选里的“启动/停止/清理”与全局按钮共用同一套前置判断。
- * 清理只允许已停止的账号，运行中的必须先停止，避免误删正在跑的任务。
+ * 启动包括已停止账号和仍在运行的断线账号；清理只允许已停止的账号。
  */
 export function pickAccountBatchTargets(
   accounts: Account[],

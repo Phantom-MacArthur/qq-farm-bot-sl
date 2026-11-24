@@ -36,10 +36,15 @@ window.addEventListener('unhandledrejection', (event) => {
 })
 
 window.onerror = (message, _source, _lineno, _colno, error) => {
+  // 浏览器会将本帧未派发的尺寸通知延后处理，不应作为系统故障提示。
+  const errorMessage = getApiErrorMessage(error || message, String(message))
+  if (errorMessage.includes('ResizeObserver loop'))
+    return true
+
   console.error('Global Error:', message, error)
   if (String(message).includes('Script error'))
     return
-  toast.error(`系统错误: ${getApiErrorMessage(error || message, String(message))}`)
+  toast.error(`系统错误: ${errorMessage}`)
 }
 
 app.mount('#app')

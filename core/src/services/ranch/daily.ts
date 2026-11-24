@@ -16,7 +16,7 @@ const gameDate = () => dailyShare.getState().dateKey;
 
 /** 失败后的重试间隔；每日任务完成进度随时变化，按较长间隔复查可领奖励，避免频繁切换场景。 */
 const RETRY_MS = 10 * 60 * 1000;
-const taskCheckMs = () => getAutomation().ranch_check_minutes * 60 * 1000;
+const taskCheckMs = () => require('../../config/ranch-automation').getRanchPatrolIntervalMs(getAutomation());
 
 interface RoutineState {
     dateKey: string;

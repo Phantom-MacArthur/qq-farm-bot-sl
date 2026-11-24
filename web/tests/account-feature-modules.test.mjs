@@ -15,12 +15,17 @@ const module = { exports: {} }
 new Function('require', 'module', 'exports', outputText)(require, module, module.exports)
 const {
   FEATURE_MODULES,
-  MODULE_SAVE_PARTS,
+  MODULE_GATE_KEYS,
+  MUGE_REWARD_OPTIONS,
   MYSTERY_SHOP_CURRENCIES,
   applyAllowedMysteryShopCurrency,
   applyModuleEnabled,
   getAllowedMysteryShopCurrency,
+  getModuleAutomation,
+  getSharedFriendAction,
   isModuleEnabled,
+  setSharedFriendAction,
+  wereActivityRewardSettingsSaved,
 } = module.exports
 
 function createContext(automationOverrides = {}, strategyOverrides = {}, automationTopOverrides = {}) {
@@ -47,89 +52,51 @@ function createContext(automationOverrides = {}, strategyOverrides = {}, automat
   }
 }
 
-test('module keys are unique and every module declares its save parts', () => {
-  const keys = FEATURE_MODULES.map(item => item.key)
-  assert.equal(new Set(keys).size, keys.length)
-  for (const key of keys)
-    assert.ok(Array.isArray(MODULE_SAVE_PARTS[key]) && MODULE_SAVE_PARTS[key].length > 0, `${key} 缺少保存分组`)
-})
-
-test('module switch state reflects the switches the backend actually reads', () => {
-  const off = createContext()
-  for (const info of FEATURE_MODULES)
-    assert.equal(isModuleEnabled(info.key, off), false, `${info.key} 默认应为关闭`)
-
-  const on = createContext({
-    farm: true,
-    fertilizer: 'normal',
-    friend: true,
-    friend_steal: true,
-    task: true,
+test('each card pauses and resumes without changing its configured actions', () => {
+  const ctx = createContext({
+    farm: true, fertilizer: 'smart', fertilizer_buy_normal: true, land_upgrade: false,
+    friend: false, ranch_friend_steal: true, ranch_buy: false,
+    ranch_feed_organic: true, ranch_feed_organic_stage: 'near_harvest',
+    task: true, mystery_shop_auto_buy: false, ranch_daily_benefit: true,
   })
-  for (const info of FEATURE_MODULES)
-    assert.equal(isModuleEnabled(info.key, on), true, `${info.key} 开启后应为开启`)
+  const automation = ctx.automation.automation
+  const before = { ...automation }
+  assert.equal(FEATURE_MODULES.length, 6)
+  for (const { key } of FEATURE_MODULES) {
+    assert.equal(isModuleEnabled(key, ctx), true)
+    applyModuleEnabled(key, false, ctx)
+    assert.equal(isModuleEnabled(key, ctx), false)
+    assert.deepEqual(getModuleAutomation(key, automation, true), { [MODULE_GATE_KEYS[key]]: false })
+    applyModuleEnabled(key, true, ctx)
+    assert.equal(isModuleEnabled(key, ctx), true)
+  }
+  assert.deepEqual(automation, { ...before, ...Object.fromEntries(Object.values(MODULE_GATE_KEYS).map(gate => [gate, true])) })
 })
 
-test('the merchant card is gone and its auto-buy switch feeds the activity module', () => {
-  assert.equal(FEATURE_MODULES.some(info => info.key === 'merchant'), false)
-  assert.equal(isModuleEnabled('activity', createContext({ mystery_shop_auto_buy: true })), true)
+test('card saves only include that card’s actions and options', () => {
+  const automation = {
+    ranch_production_enabled: false, ranch_strategy: 'bag_priority', ranch_coop_cub_priority: [1],
+    ranch_facilities_enabled: true, ranch_feed_organic_stage: 'near_harvest', ranch_grass_threshold_percent: 25,
+    friend: false, ranch_friend_steal: true, task: true, ranch_task: false, fertilizer: 'smart',
+    farm_email_rewards: false, farm_daily_share: true, farm_illustrated: true, ranch_market_organic_poop: false,
+  }
+  assert.deepEqual(getModuleAutomation('ranchProduction', automation), {
+    ranch_production_enabled: false, ranch_strategy: 'bag_priority', ranch_coop_cub_priority: [1],
+  })
+  assert.deepEqual(getModuleAutomation('ranchFacilities', automation), {
+    ranch_facilities_enabled: true, ranch_feed_organic_stage: 'near_harvest', ranch_grass_threshold_percent: 25,
+  })
+  assert.deepEqual(getModuleAutomation('friends', automation), { friend: false, ranch_friend_steal: true })
+  assert.deepEqual(getModuleAutomation('activity', automation), {
+    task: true, ranch_task: false, farm_email_rewards: false, farm_daily_share: true, farm_illustrated: true, ranch_market_organic_poop: false,
+  })
 })
 
-test('steal is a switch inside the friends module, not its own card', () => {
-  assert.equal(FEATURE_MODULES.some(info => info.key === 'steal'), false)
-  // 偷菜开关（automation）和偷菜延迟（strategy）都靠保存好友模块写回
-  assert.deepEqual(MODULE_SAVE_PARTS.friends, ['strategy', 'automation'])
-})
-
-test('closing the friends card leaves the steal switch alone', () => {
-  // 后端好友任务入口只看 friend 总开关，子开关保留原值便于重新开启
-  const ctx = createContext({ friend: true, friend_steal: true })
-  applyModuleEnabled('friends', false, ctx)
-  assert.equal(ctx.automation.automation.friend, false)
-  assert.equal(ctx.automation.automation.friend_steal, true)
-  assert.equal(isModuleEnabled('friends', ctx), false)
-})
-
-test('turning fertilizer off forces the strategy to none and stops land upgrades', () => {
-  const ctx = createContext({ fertilizer: 'smart', land_upgrade: true })
-  assert.equal(isModuleEnabled('fertilizer', ctx), true)
-  applyModuleEnabled('fertilizer', false, ctx)
-  assert.equal(ctx.automation.automation.fertilizer, 'none')
-  assert.equal(ctx.automation.automation.land_upgrade, false)
-  assert.equal(isModuleEnabled('fertilizer', ctx), false)
-})
-
-test('turning fertilizer back on restores a real strategy instead of leaving none', () => {
-  const ctx = createContext({ fertilizer: 'none' })
-  applyModuleEnabled('fertilizer', true, ctx)
-  assert.notEqual(ctx.automation.automation.fertilizer, 'none')
-  assert.equal(isModuleEnabled('fertilizer', ctx), true)
-})
-
-test('turning the activity module off also stops the merchant auto buy and its notification', () => {
-  const ctx = createContext({ mystery_shop_auto_buy: true, mystery_shop_purchase_notify: true })
-  assert.equal(isModuleEnabled('activity', ctx), true)
-  applyModuleEnabled('activity', false, ctx)
-  assert.equal(ctx.automation.automation.mystery_shop_auto_buy, false)
-  assert.equal(ctx.automation.automation.mystery_shop_purchase_notify, false)
-  assert.equal(isModuleEnabled('activity', ctx), false)
-})
-
-test('turning the activity module off also stops the coupon gift purchase', () => {
-  const ctx = createContext({ task: true, mall_coupon_gift_buy: true })
-  assert.equal(isModuleEnabled('activity', ctx), true)
-  applyModuleEnabled('activity', false, ctx)
-  assert.equal(ctx.automation.automation.task, false)
-  assert.equal(ctx.automation.automation.mall_coupon_gift_buy, false)
-  assert.equal(isModuleEnabled('activity', ctx), false)
-})
-
-test('planting module toggle only touches the farm switch', () => {
-  const ctx = createContext({ farm: false, sell: true, friend: true })
-  applyModuleEnabled('planting', true, ctx)
-  assert.equal(ctx.automation.automation.farm, true)
-  assert.equal(ctx.automation.automation.sell, true)
-  assert.equal(ctx.automation.automation.friend, true)
+test('ranch production saves the second-based patrol range without the legacy minute field', () => {
+  const result = getModuleAutomation('ranchProduction', {
+    ranch_check_minutes: 5, ranch_check_min_seconds: 10, ranch_check_max_seconds: 20,
+  })
+  assert.deepEqual(result, { ranch_check_min_seconds: 10, ranch_check_max_seconds: 20 })
 })
 
 test('merchant currency maps the single select onto the four backend booleans', () => {
@@ -145,8 +112,60 @@ test('merchant currency maps the single select onto the four backend booleans', 
     assert.equal(a[currency.key], false)
 })
 
+test('activity card saves each coupon gift switch independently of free gifts', () => {
+  const actions = {
+    mall_coupon_gift_buy: true,
+    ranch_coupon_gift_buy: false,
+    farm_free_gifts: false,
+    ranch_daily_benefit: true,
+  }
+  assert.deepEqual(getModuleAutomation('activity', actions), actions)
+})
+
+test('activity card saves all four Muge reward choices', () => {
+  const settings = {
+    muge_claim_celebration: true,
+    muge_claim_friends: false,
+    muge_claim_handbook: true,
+    muge_claim_personality: false,
+  }
+  assert.deepEqual(MUGE_REWARD_OPTIONS.map(option => option.key), Object.keys(settings))
+  assert.deepEqual(getModuleAutomation('activity', settings), settings)
+})
+
+test('a backend must echo the requested reward settings before the activity draft closes', () => {
+  const changes = { muge_claim_friends: true, muge_claim_handbook: false, farm_illustrated: true }
+  assert.equal(wereActivityRewardSettingsSaved(changes, { task: true, ...changes }), true)
+  assert.equal(wereActivityRewardSettingsSaved(changes, { task: true }), false)
+  assert.equal(wereActivityRewardSettingsSaved(changes, { ...changes, muge_claim_friends: false }), false)
+  assert.equal(wereActivityRewardSettingsSaved(changes, { muge_claim_friends: true, muge_claim_handbook: false }), false)
+  assert.equal(wereActivityRewardSettingsSaved({ activity_enabled: false }, undefined), true)
+})
+
+test('legacy friend choices stay intact until a shared action is changed', () => {
+  const automation = { friend: false, friend_help: true, ranch_friend_clean: false, friend_bad: false, ranch_friend_mosquito: true }
+  assert.equal(getSharedFriendAction('patrol', automation), 'mixed')
+  assert.equal(getSharedFriendAction('help', automation), 'mixed')
+  assert.equal(getSharedFriendAction('mischief', automation), 'mixed')
+  assert.equal(getModuleAutomation('friends', automation).ranch_friend_clean, false)
+
+  setSharedFriendAction('patrol', false, automation)
+  setSharedFriendAction('help', true, automation)
+  setSharedFriendAction('mischief', false, automation)
+  const fields = getModuleAutomation('friends', automation)
+  assert.deepEqual(fields, {
+    friend: false, ranch_friend_patrol: false,
+    friend_help: true, ranch_friend_clean: true,
+    friend_bad: false, ranch_friend_mosquito: false,
+  })
+})
+
 test('every module card has a bundled icon so the UI never falls back to a blank image', () => {
   for (const info of FEATURE_MODULES) {
+    if (!info.image) {
+      assert.match(info.icon || '', /^i-carbon-/)
+      continue
+    }
     const relative = info.image.replace(/^\//, '')
     const file = new URL(`../public/${relative}`, import.meta.url)
     assert.ok(existsSync(file), `缺少模块图标 ${info.image}`)

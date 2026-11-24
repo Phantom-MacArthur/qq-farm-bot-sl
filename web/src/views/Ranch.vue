@@ -21,7 +21,7 @@ const RanchTaskPanel = defineAsyncComponent(() => import('@/components/ranch/Ran
 const RanchBookPanel = defineAsyncComponent(() => import('@/components/ranch/RanchBookPanel.vue'))
 const RanchMallPanel = defineAsyncComponent(() => import('@/components/ranch/RanchMallPanel.vue'))
 const RanchFriendsPanel = defineAsyncComponent(() => import('@/components/ranch/RanchFriendsPanel.vue'))
-const RanchActivityPanel = defineAsyncComponent(() => import('@/components/ranch/RanchActivityPanel.vue'))
+const ActivityCenterContent = defineAsyncComponent(() => import('@/components/activity/center/ActivityCenterContent.vue'))
 
 // 与农场对应页面使用同样的分区：个人（牧场/设施/背包/任务）、图鉴、商城等。
 const SECTIONS: Record<Section, Tab[]> = {
@@ -41,7 +41,7 @@ const SECTIONS: Record<Section, Tab[]> = {
     { key: 'cans', label: '礼包商城', icon: 'i-carbon-shopping-cart', panel: RanchMallPanel, props: { tab: 'cans' } },
   ],
   friends: [{ key: 'friends', label: '好友', icon: 'i-carbon-user-multiple', panel: RanchFriendsPanel }],
-  activity: [{ key: 'activity', label: '活动', icon: 'i-carbon-gift', panel: RanchActivityPanel }],
+  activity: [{ key: 'activity', label: '活动', icon: 'i-carbon-gift', panel: ActivityCenterContent, props: { space: 'ranch' } }],
 }
 
 const route = useRoute()

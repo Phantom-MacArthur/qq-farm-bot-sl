@@ -18,6 +18,8 @@ const probabilities = config('MutantPublicity');
 
 const CATEGORY = 1;
 const DISPLAY_SLOT = 1;
+const categoryRewards = rewardConfig.filter((row: any) => Number(row.category) === CATEGORY)
+    .sort((a: any, b: any) => a.score - b.score);
 let mutationTail: Promise<void> = Promise.resolve();
 const rarityNames = ['', '普通', '稀有', '珍品', '天工'];
 const quantity = (value: any): string => value == null ? '0' : String(value);
@@ -98,11 +100,10 @@ function normalizeCollections(reply: any): any {
                 description: row.desc || '', requirements: conditionText(row.unlock_condition_ids), mutationRules: mutationRules(row.series_id), items,
                 activatedCount: items.filter((item: any) => item.activated).length, totalCount: items.length };
         });
-    const milestones = rewardConfig.filter((row: any) => Number(row.category) === CATEGORY)
-        .sort((a: any, b: any) => a.score - b.score).map((row: any) => ({
-            level: row.level, score: row.score, claimed: row.score <= claimedScore, reached: row.score <= score,
-            rewards: rewards(row.rewards), buffs: buffs.filter((buff: any) => buff.source_type === '藏品属性' && Number(buff.source_param) === row.level).map(buffDto),
-        }));
+    const milestones = categoryRewards.map((row: any) => ({
+        level: row.level, score: row.score, claimed: row.score <= claimedScore, reached: row.score <= score,
+        rewards: rewards(row.rewards), buffs: buffs.filter((buff: any) => buff.source_type === '藏品属性' && Number(buff.source_param) === row.level).map(buffDto),
+    }));
     const currentBuffs = new Map<string, any>();
     for (const milestone of milestones.filter((row: any) => row.claimed)) {
         for (const buff of milestone.buffs) currentBuffs.set(buff.name, buff);
@@ -193,12 +194,12 @@ async function prepareCollectionUpgrade(input: any): Promise<any> {
         expected: { starLevel: level, costs: item.nextStarCosts.map((cost: any) => ({ itemId: cost.itemId, count: cost.count })) } };
 }
 
-async function sendCollectionMutation(method: string, input: any): Promise<any> {
+async function sendCollectionMutation(method: string, input: any, beforeSend?: () => Error | null): Promise<any> {
     const { types } = require('../utils/proto');
     const { sendMsgAsync } = require('../utils/network');
     pendingSnapshot = null;
     const body = types[`${method}Request`].encode(input).finish();
-    const reply = await sendMsgAsync('gamepb.collectionpb.CollectionService', method, body);
+    const reply = await sendMsgAsync('gamepb.collectionpb.CollectionService', method, body, beforeSend && { beforeSend });
     return types[`${method}Reply`].decode(reply.body);
 }
 
@@ -235,17 +236,21 @@ async function upgradeCollection(input: any): Promise<any> {
     });
 }
 
-async function claimCollectionRewards(): Promise<any> {
+async function claimCollectionRewards(automation?: { canContinue: () => boolean }): Promise<any> {
     return serializeMutation(async () => {
+        if (automation && !automation.canContinue()) return null;
         const raw = await readCollectionsReply();
-        const snapshot = normalizeCollections(raw);
-        const eligible = snapshot.milestones.filter((row: any) => row.reached && !row.claimed);
-        if (!eligible.length) return { snapshot, skipped: true };
-        const reply = await sendCollectionMutation('ClaimCollectionReward', { category: CATEGORY });
-        if (reply.current_score < snapshot.score || reply.claimed_reward_score < eligible.at(-1).score || reply.claimed_reward_score > reply.current_score) unconfirmed();
-        const detail = raw.details.find((detail: any) => detail.category === CATEGORY);
+        const detail = (raw.details || []).find((detail: any) => detail.category === CATEGORY);
+        const eligible = detail && categoryRewards.filter((row: any) => row.score <= detail.current_score && row.score > detail.claimed_reward_score).at(-1);
+        if (!eligible) return automation ? null : { snapshot: normalizeCollections(raw), skipped: true };
+        const reply = await sendCollectionMutation('ClaimCollectionReward', { category: CATEGORY }, automation && (
+            () => automation.canContinue() ? null : new Error('藏品图鉴奖励自动领取已暂停')
+        ));
+        if (reply.current_score < detail.current_score || reply.claimed_reward_score < eligible.score || reply.claimed_reward_score > reply.current_score) unconfirmed();
+        const result = { claimedScores: reply.claimed_scores, rewards: (reply.total_rewards || []).map((item: any) => ({ id: Number(item.id), name: getItemById(Number(item.id))?.name || `物品${item.id}`, count: quantity(item.count) })) };
+        if (automation) return result;
         Object.assign(detail, { current_score: reply.current_score, claimed_reward_score: reply.claimed_reward_score });
-        return { snapshot: normalizeCollections(raw), claimedScores: reply.claimed_scores, rewards: (reply.total_rewards || []).map((item: any) => ({ id: Number(item.id), name: getItemById(Number(item.id))?.name || `物品${item.id}`, count: quantity(item.count) })) };
+        return { ...result, snapshot: normalizeCollections(raw) };
     });
 }
 

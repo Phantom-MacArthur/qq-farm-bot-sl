@@ -1,4 +1,6 @@
+import { effectiveAutomation } from '../../config/automation-modules';
 import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, FertilizerLandType, IntervalConfig, PlantingStrategy, QuietHoursConfig } from '../../types/config';
+import { normalizeFertilizerLandStrategies } from '../../config/fertilizer-strategy';
 export {};
 
 const sharedState = require('./shared-state');
@@ -82,10 +84,14 @@ function ensureAccountConfig(accountId: unknown, options: { persist?: boolean } 
     return cloneAccountConfig(globalConfig.accountConfigs[id]);
 }
 
-function getAutomation(accountId?: unknown): AutomationConfig {
+function getSavedAutomation(accountId?: unknown): AutomationConfig {
     const automation = { ...getAccountConfigSnapshot(accountId).automation };
     automation.fertilizer_land_types = normalizeFertilizerLandTypes(automation.fertilizer_land_types);
     return automation;
+}
+
+function getAutomation(accountId?: unknown): AutomationConfig {
+    return effectiveAutomation(getSavedAutomation(accountId));
 }
 
 function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof globalConfig.ui } {
@@ -109,6 +115,7 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         fertilizerBuyNormalCount: Math.max(0, Math.min(10000, Number(cfg.fertilizerBuyNormalCount) || 0)),
         fertilizerBuyNormalThresholdHours: Math.max(0, Math.min(990, Number(cfg.fertilizerBuyNormalThresholdHours) || 0)),
         fertilizerBuyCheckIntervalMinutes: Math.max(1, Math.min(1440, Number(cfg.fertilizerBuyCheckIntervalMinutes) || 30)),
+        fertilizerBuyNormalCheckIntervalMinutes: cfg.fertilizerBuyNormalCheckIntervalMinutes,
         emailClaimHour: normalizeEmailClaimHour(cfg.emailClaimHour, sharedState.DEFAULT_ACCOUNT_CONFIG.emailClaimHour),
         bagSeedPriority: [...(cfg.bagSeedPriority || [])],
         bagSeedMultiLandReservationEnabled: !!cfg.bagSeedMultiLandReservationEnabled,
@@ -142,6 +149,8 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
                 next.automation.fertilizer = normalizeFertilizerMode(v, next.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 (next.automation as any)[k] = normalizeFertilizerLandTypes(v, next.automation.fertilizer_land_types);
+            } else if (k === 'fertilizer_land_strategies') {
+                next.automation.fertilizer_land_strategies = normalizeFertilizerLandStrategies(v);
             } else if (k.startsWith('ranch_')) {
                 (next.automation as any)[k] = normalizeRanchSetting(k, v);
             } else if (k === 'fertilizer_smart_seconds') {
@@ -238,6 +247,10 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
         next.fertilizerBuyCheckIntervalMinutes = Math.max(1, Math.min(1440, Number(cfg.fertilizerBuyCheckIntervalMinutes) || 30));
     }
 
+    if (cfg.fertilizerBuyNormalCheckIntervalMinutes !== undefined && cfg.fertilizerBuyNormalCheckIntervalMinutes !== null) {
+        next.fertilizerBuyNormalCheckIntervalMinutes = Math.max(1, Math.min(1440, Number(cfg.fertilizerBuyNormalCheckIntervalMinutes) || 30));
+    }
+
     if (cfg.emailClaimHour !== undefined) {
         next.emailClaimHour = normalizeEmailClaimHour(cfg.emailClaimHour, next.emailClaimHour);
     }
@@ -281,7 +294,7 @@ function setAutomation(key: string, value: unknown, accountId?: unknown): Return
 }
 
 function isAutomationOn(key: string, accountId?: unknown): boolean {
-    return !!(getAccountConfigSnapshot(accountId).automation as any)[key];
+    return !!(getAutomation(accountId) as any)[key];
 }
 
 function getPreferredSeed(accountId?: unknown): number {
@@ -445,6 +458,10 @@ function getFertilizerBuyCheckIntervalMinutes(accountId?: unknown): number {
     return Math.max(1, Math.min(1440, Number(getAccountConfigSnapshot(accountId).fertilizerBuyCheckIntervalMinutes) || 30));
 }
 
+function getFertilizerBuyNormalCheckIntervalMinutes(accountId?: unknown): number {
+    return getAccountConfigSnapshot(accountId).fertilizerBuyNormalCheckIntervalMinutes;
+}
+
 function getAutoAcceptFriendMinLevel(accountId?: unknown): number {
     return normalizeAutoAcceptFriendMinLevel(getAccountConfigSnapshot(accountId).autoAcceptFriendMinLevel);
 }
@@ -465,6 +482,7 @@ module.exports = {
     getConfigSnapshot,
     applyConfigSnapshot,
     getAutomation,
+    getSavedAutomation,
     setAutomation,
     isAutomationOn,
     getPreferredSeed,
@@ -494,6 +512,7 @@ module.exports = {
     getFertilizerBuyNormalCount,
     getFertilizerBuyNormalThresholdHours,
     getFertilizerBuyCheckIntervalMinutes,
+    getFertilizerBuyNormalCheckIntervalMinutes,
     getAutoAcceptFriendMinLevel,
     getAutoAcceptRequireOwnLevel,
     getDefaultAccountConfig,

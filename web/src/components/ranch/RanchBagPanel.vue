@@ -6,6 +6,7 @@ import { computed, ref, watch } from 'vue'
 import { formatCount, formatDuration, useRanchActions, useRanchLoader } from '@/components/ranch/ranch-shared'
 import RanchAmountDialog from '@/components/ranch/RanchAmountDialog.vue'
 import RanchGate from '@/components/ranch/RanchGate.vue'
+import BagItemCard from '@/components/ui/BagItemCard.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
@@ -23,7 +24,13 @@ const CATEGORIES: Array<{ value: Category, label: string, icon: string }> = [
   { value: 'can', label: '罐头', icon: 'i-carbon-flash' },
   { value: 'other', label: '其他', icon: 'i-carbon-box' },
 ]
-const SHORT: Record<Exclude<Category, 'all'>, string> = { product: '产物', coop: '窝', shed: '棚', can: '罐头', other: '道具' }
+const CATEGORY_APPEARANCE = {
+  product: { categoryLabel: '产物', categoryTone: 'danger' },
+  coop: { categoryLabel: '窝幼崽', categoryTone: 'primary' },
+  shed: { categoryLabel: '棚幼崽', categoryTone: 'warning' },
+  can: { categoryLabel: '罐头', categoryTone: 'blue' },
+  other: { categoryLabel: '道具', categoryTone: 'neutral' },
+} as const
 const RANK: Record<Exclude<Category, 'all'>, number> = { product: 0, coop: 1, shed: 2, can: 3, other: 4 }
 /** 设施类型：窝 6、棚 7，放养时只列出适用的设施。 */
 const PEN_TYPE: Record<string, number> = { 窝: 6, 棚: 7 }
@@ -37,8 +44,6 @@ const items = computed<any[]>(() => state.value?.bag || [])
 const pens = computed<any[]>(() => (state.value?.facilities || []).filter((f: any) => f.ranch && f.state !== 2))
 const category = ref<Category>('all')
 const failed = ref<Record<string, boolean>>({})
-const batchLockMode = ref(false)
-const selectedUids = ref<string[]>([])
 
 function categoryOf(item: any): Exclude<Category, 'all'> {
   if (item.can)
@@ -103,6 +108,7 @@ interface BagAction {
   label: string
   title: string
   submit: string
+  primary?: boolean
 }
 
 function actionsFor(item: any): BagAction[] {
@@ -110,9 +116,9 @@ function actionsFor(item: any): BagAction[] {
     return []
   const actions: BagAction[] = []
   if (item.can)
-    actions.push({ key: 'useCan', label: '添加', title: '添加到罐头桶', submit: '添加到罐头桶' })
+    actions.push({ key: 'useCan', label: '添加', title: '添加到罐头桶', submit: '添加到罐头桶', primary: true })
   else if (item.animalId)
-    actions.push({ key: 'place', label: '放养', title: `放养${item.name}`, submit: '放养' })
+    actions.push({ key: 'place', label: '放养', title: `放养${item.name}`, submit: '放养', primary: true })
   if (item.canSell)
     actions.push({ key: 'sell', label: '出售', title: `出售${item.name}`, submit: '下一步' })
   return actions
@@ -165,11 +171,6 @@ function caption(item: any) {
 }
 watch(category, () => {
   failed.value = {}
-  selectedUids.value = []
-})
-watch(currentAccountId, () => {
-  batchLockMode.value = false
-  selectedUids.value = []
 })
 </script>
 
@@ -209,42 +210,32 @@ watch(currentAccountId, () => {
           </div>
         </div>
         <EmptyState v-if="!filtered.length" bare title="这个分类暂无物品" icon="i-carbon-box" />
-        <div v-else class="bag-grid">
-          <article v-for="item in filtered" :key="item.uid" class="bag-item page-card-surface margin-shell" :class="{ 'bag-item--selected': selected.includes(String(item.uid)) }"><span class="margin-content">
-            <input v-if="batchAction" class="bag-item__check" type="checkbox" :aria-label="item.name" :disabled="!eligible(item) || disabled || (selected.length >= 50 && !selected.includes(String(item.uid)))" :checked="selected.includes(String(item.uid))" @change="toggleItem(item)">
-            <div class="bag-item__thumb">
-              <img v-if="item.image && !failed[item.uid]" :src="item.image" :alt="item.name" loading="lazy" @error="failed[item.uid] = true">
-              <span v-else class="bag-item__fallback">{{ (item.name || '物').slice(0, 1) }}</span>
-              <span v-if="item.locked" class="bag-item__lock" title="已锁定"><span class="i-carbon-locked" /></span>
-            </div>
-            <strong class="bag-item__name" :title="item.name">{{ item.name }}</strong>
-            <div class="bag-item__meta">
-              <span class="bag-type" :class="`bag-type--${categoryOf(item)}`">{{ SHORT[categoryOf(item)] }}</span>
+        <div v-else class="bag-item-grid" role="region" aria-label="牧场背包物品列表">
+          <BagItemCard
+            v-for="item in filtered"
+            :key="item.uid"
+            v-bind="CATEGORY_APPEARANCE[categoryOf(item)]"
+            :name="item.name || `物品${item.id}`"
+            :image="item.image"
+            :image-failed="failed[item.uid]"
+            :locked="item.locked"
+            :quantity="formatCount(item.count)"
+            :actions="actionsFor(item)"
+            :actions-disabled="disabled"
+            :selecting="!!batchAction"
+            :selectable="eligible(item)"
+            :selection-disabled="disabled || (selected.length >= 50 && !selected.includes(String(item.uid)))"
+            :selected="selected.includes(String(item.uid))"
+            @action="open(item, $event)"
+            @toggle="toggleItem(item)"
+            @image-error="failed[item.uid] = true"
+          >
+            <template #meta>
               <span v-if="item.giantCub" class="is-giant">巨大</span>
-              <span v-if="item.product?.weightX10">{{ (item.product.weightX10 / 100).toFixed(2).replace(/\.?0+$/, '') }}kg</span>
+              <span v-if="item.product?.weightX10" title="重量">{{ (item.product.weightX10 / 100).toFixed(2).replace(/\.?0+$/, '') }}kg</span>
               <span v-if="item.sellPrices?.[0]" title="单价">{{ formatCount(item.sellPrices[0].count) }}{{ item.sellPrices[0].name }}</span>
-              <span v-if="item.locked" class="is-locked">已锁定</span>
-            </div>
-            <footer class="bag-item__foot divider-top margin-shell"><span class="margin-content">
-              <span class="bag-item__qty"><small>×</small>{{ formatCount(item.count) }}</span>
-              <div v-if="!batchAction" class="bag-item__actions">
-                <NButton
-                  v-for="action in actionsFor(item)"
-                  :key="action.key"
-                  attr-type="button"
-                  size="tiny"
-                  :type="action.key === 'sell' ? 'default' : 'primary'"
-                  secondary
-                  :disabled="disabled"
-                  :aria-label="action.title"
-                  :title="action.title"
-                  @click="open(item, action)"
-                >
-                  {{ action.label }}
-                </NButton>
-              </div>
-            </span></footer>
-          </span></article>
+            </template>
+          </BagItemCard>
         </div>
       </RanchGate>
     </div>
@@ -289,192 +280,17 @@ watch(currentAccountId, () => {
   gap: 8px;
   margin: 12px;
 }
-.bag-item__check {
-  position: absolute;
-  inset: 8px 8px auto auto;
-  accent-color: var(--ui-primary);
-}
-.bag-item--selected {
-  outline: 2px solid var(--ui-primary);
-  outline-offset: -2px;
-}
-.bag-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
-  grid-auto-rows: 1fr;
-  gap: 12px;
+.bag-item-grid {
   margin: 12px;
 }
 
-.bag-item {
-  position: relative;
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  --inset-top: 12px; --inset-right: 0; --inset-bottom: 10px; --inset-left: 0;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-card);
-  box-shadow:
-    inset 0 1px 0 var(--glass-highlight),
-    var(--ui-shadow-sm);
-  text-align: center;
-}
-
-.bag-item__thumb {
-  position: relative;
-  display: grid;
-  width: 56px;
-  height: 56px;
-  margin-bottom: 8px;
-  place-items: center;
-  border-radius: 18px;
-}
-
-.bag-item__thumb img {
-  max-width: 56px;
-  max-height: 56px;
-  object-fit: contain;
-}
-
-.bag-item__fallback {
-  color: var(--ui-subtle);
-  font-size: var(--ui-font-size-large-15);
-  font-weight: var(--fw-700);
-}
-
-.bag-item__lock {
-  position: absolute;
-  top: -6px;
-  left: -6px;
-  display: grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border-radius: 999px;
-  color: #fff;
-  background: var(--ui-warning-fill);
-  box-shadow: 0 0 0 2px var(--ui-surface-strong);
-  font-size: var(--ui-content-item-font-height-tiny-12);
-}
-
-.bag-item__name {
-  width: 100%;
-  overflow: hidden;
-  color: var(--ui-ink);
-  font-size: var(--ui-font-size-medium-14);
-  font-weight: var(--fw-400);
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.bag-item__meta {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  gap: 4px 8px;
-  color: var(--ui-muted);
-  font-size: var(--ui-content-item-font-height-tiny-12);
-  line-height: 18px;
-  font-variant-numeric: tabular-nums;
-}
-
-.bag-item__meta .is-giant {
-  color: #b07a0c;
-  font-weight: var(--fw-400);
-}
-
-.bag-item__meta .is-locked {
+.is-giant {
   color: var(--ui-warning);
-  font-weight: var(--fw-600);
-}
-
-.bag-type {
-  padding: 0 6px;
-  border-radius: 5px;
-  font-weight: var(--fw-600);
-}
-
-.bag-type--product {
-  color: var(--ui-danger);
-  background: var(--ui-danger-soft);
-}
-
-.bag-type--coop {
-  color: var(--ui-primary);
-  background: var(--ui-primary-soft);
-}
-
-.bag-type--shed {
-  color: var(--ui-warning);
-  background: var(--ui-warning-soft);
-}
-
-.bag-type--can {
-  color: var(--ui-blue);
-  background: var(--ui-blue-soft);
-}
-
-.bag-type--other {
-  color: var(--ui-muted);
-  background: var(--ui-surface-soft);
-}
-
-.bag-item__foot {
-  display: flex;
-  width: 100%;
-  min-height: 30px;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-top: auto;
-  --inset-top: 10px;
-  --inset-left: 8px; --inset-right: 8px;
-}
-
-.bag-item__actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
-  gap: 4px;
-  margin-inline-start: auto;
-}
-
-.bag-item__qty {
-  order: 1;
-  margin-inline-start: auto;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--ui-ink);
-  font-size: var(--ui-font-size-large-15);
-  font-weight: var(--fw-700);
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.bag-item__qty small {
-  margin-right: 1px;
-  color: var(--ui-muted);
-  font-size: var(--ui-content-item-font-height-tiny-12);
-  font-weight: var(--fw-600);
 }
 
 .bag-hint {
   margin: 0;
   color: var(--ui-warning);
   font-size: var(--ui-content-item-font-height-tiny-12);
-}
-
-@media (max-width: 520px) {
-  .bag-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 10px;
-  }
 }
 </style>

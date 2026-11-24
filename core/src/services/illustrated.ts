@@ -129,6 +129,7 @@ async function buildIllustratedSnapshot(): Promise<any> {
     const mutantLevels = await getIllustratedLevels(2);
     const crop = normalizeBook(1, cropList, cropLevels);
     const seeds = await getAvailableSeeds();
+    const { isCatalogLoaded, isSeedInCatalog } = require('./seed-price-cache');
     const seedById = new Map(seeds.map((seed: any) => [toNum(seed.seedId), seed]));
     const localSeeds = new Map(getAllSeeds().map((seed: any) => [toNum(seed.seedId), seed]));
     crop.items = crop.items.map((item: any) => {
@@ -137,7 +138,7 @@ async function buildIllustratedSnapshot(): Promise<any> {
         const seedId = toNum(plant && plant.seed_id) || itemId;
         const shopSeed: any = seedById.get(seedId);
         const localSeed: any = localSeeds.get(seedId);
-        return { ...item, seedId, shopSeed: shopSeed || (localSeed ? { ...localSeed, goodsId: 0, price: null, unknownMeta: true, requiresUnlockCard: false } : null) };
+        return { ...item, seedId, limited: isCatalogLoaded() && !isSeedInCatalog(seedId), shopSeed: shopSeed || (localSeed ? { ...localSeed, goodsId: 0, price: null, unknownMeta: true, requiresUnlockCard: false } : null) };
     });
     return {
         crop,
@@ -158,16 +159,23 @@ function getIllustratedSnapshot(): Promise<any> {
 }
 
 let claimTail: Promise<any> = Promise.resolve();
-function claimIllustratedRewards(type: number) {
+function claimIllustratedRewards(type: number, automation?: { canContinue: () => boolean }) {
     const request = claimTail.then(async () => {
         if (type !== 1 && type !== 2) throw new Error('图鉴类型无效');
+        if (automation && !automation.canContinue()) return null;
         const levels = await getIllustratedLevels(type);
-        if (!(levels.level_list || []).some((v: any) => v.can_claim && !v.claimed)) throw new Error('暂无可领取奖励');
+        if (!(levels.level_list || []).some((v: any) => v.can_claim && !v.claimed)) {
+            if (automation) return null;
+            throw new Error('暂无可领取奖励');
+        }
         const body = types.ClaimAllRewardsV2Request.encode({ type }).finish();
-        const reply = await sendMsgAsync(SERVICE, 'ClaimAllRewardsV2', body);
+        const reply = await sendMsgAsync(SERVICE, 'ClaimAllRewardsV2', body, automation && {
+            beforeSend: () => automation.canContinue() ? null : new Error('图鉴奖励自动领取已暂停'),
+        });
         const decoded = types.ClaimAllRewardsV2Reply.decode(reply.body);
         if (!decoded.claimed_level_ids?.length) throw new Error('领取结果未确认，请刷新图鉴后查看');
         const result = { rewards: (decoded.total_rewards || []).map(rewardDto).filter(Boolean), claimedLevels: decoded.claimed_level_ids };
+        if (automation) return result;
         if (pendingSnapshot) await pendingSnapshot.catch(() => {});
         try { return { ...result, snapshot: await getIllustratedSnapshot() }; }
         catch { return { ...result, snapshot: null, refreshRequired: true }; }
@@ -188,6 +196,8 @@ async function clearIllustratedNew(fruitIds: number[]): Promise<{ cleared: numbe
 }
 
 module.exports = {
+    // 自动补图鉴只读取普通列表，不额外请求变异图鉴和奖励等级。
+    getNormalIllustratedList: () => getIllustratedList(1),
     getIllustratedSnapshot,
     claimIllustratedRewards,
     clearIllustratedNew,

@@ -958,11 +958,11 @@ onBeforeUnmount(() => {
           </NRadioGroup>
 
           <div class="flex justify-end gap-2 pt-4">
-            <BaseButton variant="outline" @click="close">
-              取消
-            </BaseButton>
             <BaseButton variant="primary" :loading="loading" @click="submitManual">
               {{ editData ? '保存' : '添加' }}
+            </BaseButton>
+            <BaseButton variant="outline" @click="close">
+              取消
             </BaseButton>
           </div>
         </div>

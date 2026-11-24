@@ -448,7 +448,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const strategy = id ? store.getPlantingStrategy(id) : null;
             const preferredSeed = id ? store.getPreferredSeed(id) : null;
             const friendQuietHours = id ? store.getFriendQuietHours(id) : null;
-            const automation = id ? store.getAutomation(id) : {};
+            const automation = id ? store.getSavedAutomation(id) : {};
             const stealDelaySeconds = id && (typeof store.getStealDelaySeconds === 'function') ? store.getStealDelaySeconds(id) : 0;
             const plantDelaySeconds = id && (typeof store.getPlantDelaySeconds === 'function') ? store.getPlantDelaySeconds(id) : 0;
             const fertilizerBuyOrganicCount = id && (typeof store.getFertilizerBuyOrganicCount === 'function') ? store.getFertilizerBuyOrganicCount(id) : 0;
@@ -456,6 +456,8 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const fertilizerBuyNormalCount = id && (typeof store.getFertilizerBuyNormalCount === 'function') ? store.getFertilizerBuyNormalCount(id) : 0;
             const fertilizerBuyNormalThresholdHours = id && (typeof store.getFertilizerBuyNormalThresholdHours === 'function') ? store.getFertilizerBuyNormalThresholdHours(id) : 10;
             const fertilizerBuyCheckIntervalMinutes = id && (typeof store.getFertilizerBuyCheckIntervalMinutes === 'function') ? store.getFertilizerBuyCheckIntervalMinutes(id) : 30;
+            const fertilizerBuyNormalCheckIntervalMinutes = id && typeof store.getFertilizerBuyNormalCheckIntervalMinutes === 'function'
+                ? store.getFertilizerBuyNormalCheckIntervalMinutes(id) : fertilizerBuyCheckIntervalMinutes;
             const bagSeedPriority = id && (typeof store.getBagSeedPriority === 'function') ? store.getBagSeedPriority(id) : [];
             const bagSeedMultiLandReservationEnabled = id && (typeof store.getBagSeedMultiLandReservationEnabled === 'function') ? store.getBagSeedMultiLandReservationEnabled(id) : false;
             const bagSeedLandTypes = id && (typeof store.getBagSeedLandTypes === 'function') ? store.getBagSeedLandTypes(id) : {};
@@ -467,7 +469,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 ? store.getOfflineReminder(id)
                 : (store.getOfflineReminderDefault ? store.getOfflineReminderDefault() : null)
                     || { channel: 'wxpusher', endpoint: '', token: '', secret: '', wxPusherUid: '', channelCredentials: {}, title: '', msg: '农场下线' };
-            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, bagSeedPriority, bagSeedMultiLandReservationEnabled, bagSeedLandTypes, bagSeedFallbackStrategy, autoAcceptFriendMinLevel, autoAcceptRequireOwnLevel, ui, offlineReminder } });
+            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, fertilizerBuyNormalCheckIntervalMinutes, bagSeedPriority, bagSeedMultiLandReservationEnabled, bagSeedLandTypes, bagSeedFallbackStrategy, autoAcceptFriendMinLevel, autoAcceptRequireOwnLevel, ui, offlineReminder } });
         } catch (e: any) {
             handleApiError(res, e);
         }

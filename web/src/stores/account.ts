@@ -274,12 +274,13 @@ export const useAccountStore = defineStore('account', () => {
         if (kind === 'stop')
           return toAccountBatchOutcome(await stopAccount(id), '停止后进程未退出')
         const account = accounts.value.find(acc => String(acc.id) === id)
-        // 有凭证的微信账号先取新 Code，取码接口同时会重启 worker。
+        // 已断线的 worker 需要先确认退出，再发起启动。
         if (account?.running && account.online === false) {
           const stopped = await stopAccount(id)
           if (!stopped.ok || !stopped.confirmed)
-            return toAccountBatchOutcome(stopped, '????????')
+            return toAccountBatchOutcome(stopped, '停止后进程未退出')
         }
+        // 有凭证的微信账号先取新 Code，取码接口同时会重启 worker。
         return shouldRefreshCodeBeforeStart(account)
           ? settingStore.runAutoCodeRefresh(id)
           : startAccount(id)

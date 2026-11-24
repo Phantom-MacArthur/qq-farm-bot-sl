@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { NTab } from 'naive-ui/es/tabs'
 import { ref, watch } from 'vue'
-import BagPanel from '@/components/BagPanel.vue'
-import FarmPanel from '@/components/FarmPanel.vue'
+import FarmBagPanel from '@/components/farm/FarmBagPanel.vue'
+import FarmPanel from '@/components/farm/FarmPanel.vue'
+import FarmTaskPanel from '@/components/farm/FarmTaskPanel.vue'
 import PageTabs from '@/components/PageTabs.vue'
-import TaskPanel from '@/components/TaskPanel.vue'
 
 type FarmTab = 'farm' | 'bag' | 'task'
 
@@ -12,8 +12,8 @@ const currentTab = ref<FarmTab>('farm')
 
 const tabPanels: Record<FarmTab, any> = {
   farm: FarmPanel,
-  bag: BagPanel,
-  task: TaskPanel,
+  bag: FarmBagPanel,
+  task: FarmTaskPanel,
 }
 
 const visitedTabs = ref<FarmTab[]>(['farm'])

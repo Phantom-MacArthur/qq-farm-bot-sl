@@ -77,7 +77,8 @@ function startAdminServer(dataProvider: any): void {
         res.setHeader('Pragma', 'no-cache');
     };
     const serveDynamicWeb = (req: any, res: any, next: any) => {
-        if (req.path.startsWith('/api') || req.path.startsWith('/game-config') || req.path.startsWith('/socket.io')) return next();
+        if (req.path.startsWith('/api') || req.path.startsWith('/socket.io')) return next();
+        // Frontend builds also contain /game-config icons. Missing files fall through to core resources.
         const dirs = resolveActiveWebDirs();
         for (const cached of staticMiddlewareCache.keys()) {
             if (!dirs.includes(cached)) staticMiddlewareCache.delete(cached);

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { NButton } from 'naive-ui/es/button'
 import { NCheckbox, NCheckboxGroup } from 'naive-ui/es/checkbox'
 import { NPopover } from 'naive-ui/es/popover'
 import { computed, ref, watch } from 'vue'
@@ -60,23 +61,20 @@ function handleLandTypesChange(value: (string | number)[]) {
 
 <template>
   <div
-    class="flex flex-col gap-2 border rounded-lg bg-gray-50 p-2.5 transition-colors dark:bg-gray-800"
-    :class="dragging
-      ? 'border-[var(--theme-primary)] opacity-60 ring-2 ring-[var(--theme-primary)]'
-      : 'border-gray-200 dark:border-gray-700'"
+    class="seed-priority-card"
+    :class="{ 'opacity-60': dragging }"
     draggable="true"
     @dragstart="emit('dragStart', $event)"
     @dragend="emit('dragEnd')"
     @dragover.prevent="emit('dragOver', $event)"
     @drop="emit('drop', $event)"
   >
-    <!-- 序号行：左序号、中种子等级（等级: xx）、右置顶 -->
-    <div class="flex items-center justify-between gap-1 whitespace-nowrap">
-      <span class="text-xs text-gray-500 tabular-nums">#{{ index + 1 }}</span>
-      <span class="text-xs text-gray-500 tabular-nums">等级: {{ seed.requiredLevel }}</span>
-      <button
-        type="button"
-        class="grid h-[var(--ui-content-item-control-height-30)] w-7 shrink-0 cursor-pointer place-items-center rounded text-[var(--theme-primary)] disabled:cursor-default hover:bg-gray-200 disabled:text-gray-400 disabled:opacity-40 dark:hover:bg-gray-700"
+    <div class="seed-priority-card__meta flex items-center justify-between gap-0.5 whitespace-nowrap">
+      <span>#{{ index + 1 }}</span>
+      <span class="min-w-0 truncate" :title="`等级 ${seed.requiredLevel}`">Lv.{{ seed.requiredLevel }}</span>
+      <NButton
+        quaternary circle size="tiny"
+        class="bag-item__action-tiny seed-priority-card__top"
         :disabled="index === 0"
         :aria-label="`置顶${seed.name}`"
         :title="index === 0 ? '已置顶' : '置顶'"
@@ -85,34 +83,33 @@ function handleLandTypesChange(value: (string | number)[]) {
         <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="h-4 w-4">
           <path d="M5 4h14M12 20V8m-5 5 5-5 5 5" />
         </svg>
-      </button>
+      </NButton>
     </div>
 
     <!-- 主体：居中展示图标、名称与库存 -->
-    <div class="flex flex-col items-center gap-1">
-      <div class="grid h-10 w-10 place-items-center overflow-hidden">
+    <div class="flex min-w-0 flex-col items-center gap-px">
+      <div class="grid h-7 w-7 place-items-center overflow-hidden">
         <img
           v-if="seed.image && !imageFailed"
           :src="seed.image"
           :alt="`${seed.name}种子`"
-          class="h-10 w-10 object-contain"
+          class="h-7 w-7 object-contain"
           loading="lazy"
           draggable="false"
           @error="imageFailed = true"
         >
         <span v-else class="i-carbon-sprout text-2xl text-gray-400" />
       </div>
-      <div class="w-full truncate text-center text-sm font-medium" :title="seed.name">
+      <div class="w-full truncate text-center text-[13px] leading-4 font-medium" :title="seed.name">
         {{ seed.name }}
       </div>
-      <div class="flex items-center justify-center gap-1.5 text-xs text-gray-500">
-        <span>库存 {{ seed.count }}</span>
-        <span class="rounded-md bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 ring-1 ring-emerald-300/70 font-bold dark:bg-emerald-500/15 dark:text-emerald-300 dark:ring-emerald-500/30">{{ seed.plantSize }}x{{ seed.plantSize }}</span>
+      <div class="seed-priority-card__meta w-full flex items-center justify-center gap-1 leading-4">
+        <span class="min-w-0 truncate" :title="`库存 ${seed.count}`">×{{ seed.count }}</span>
+        <span class="shrink-0 rounded bg-emerald-100 px-1 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300">{{ seed.plantSize }}×{{ seed.plantSize }}</span>
       </div>
     </div>
 
-    <!-- 土地限制（本分支特有）：整行可点开浮动下拉（teleport，不改卡片高度），说明文本置于弹窗底部 -->
-    <div class="border-t border-gray-100 pt-2 dark:border-gray-700" @mousedown.stop>
+    <div class="seed-priority-card__restriction" @mousedown.stop>
       <NPopover
         trigger="click"
         placement="top"
@@ -120,9 +117,16 @@ function handleLandTypesChange(value: (string | number)[]) {
         @update:show="editing = $event"
       >
         <template #trigger>
-          <div class="w-full flex cursor-pointer items-center gap-1.5">
-            <span class="min-w-0 flex-1 truncate text-left text-xs text-emerald-600 font-bold dark:text-emerald-400">土地：{{ restrictionLabel }}</span>
-          </div>
+          <button
+            type="button"
+            class="seed-priority-card__land-button text-emerald-700 dark:text-emerald-400"
+            :aria-expanded="editing"
+            :aria-label="`${seed.name}的适用土地：${restrictionLabel}`"
+            :title="`点击选择土地（当前：${restrictionLabel}）`"
+          >
+            <span class="min-w-0 truncate">土地：{{ restrictionLabel }}</span>
+            <span class="i-carbon-chevron-down shrink-0" aria-hidden="true" />
+          </button>
         </template>
         <div class="w-44">
           <NCheckboxGroup
@@ -140,7 +144,7 @@ function handleLandTypesChange(value: (string | number)[]) {
               </NCheckbox>
             </div>
           </NCheckboxGroup>
-          <p class="mt-2 border-t border-gray-100 pt-1.5 text-[11px] text-gray-400 dark:border-gray-700 dark:text-gray-500">
+          <p class="mt-2 text-[11px] text-[var(--ui-muted)]">
             不勾或勾满即为不限制。
           </p>
         </div>
@@ -148,3 +152,60 @@ function handleLandTypesChange(value: (string | number)[]) {
     </div>
   </div>
 </template>
+
+<style scoped>
+.seed-priority-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 3px 4px;
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  background: var(--ui-surface-soft);
+  cursor: grab;
+}
+
+.seed-priority-card__meta {
+  color: var(--ui-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.seed-priority-card__top {
+  --n-height: 20px !important;
+  --n-width: 20px !important;
+  flex-shrink: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.seed-priority-card__restriction {
+  margin-top: auto;
+}
+
+.seed-priority-card__land-button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--ui-primary-soft);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 16px;
+  text-align: start;
+}
+
+.seed-priority-card__land-button:hover,
+.seed-priority-card__land-button[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--ui-primary) 12%, var(--ui-primary-soft));
+}
+
+.seed-priority-card__land-button:focus-visible {
+  outline: 1px solid currentColor;
+  outline-offset: 1px;
+}
+</style>

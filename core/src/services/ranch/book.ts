@@ -1,6 +1,7 @@
 import mutationRules from '../../gameConfig/ranch/MCMutantInfo.json';
 import tiers from '../../gameConfig/ranch/MCRanchWeightTier.json';
 import illustratedConfig from '../../gameConfig/Illustrated.json';
+import { getAnimalRequiredLevel } from '../../config/ranch-animals';
 
 export {};
 
@@ -35,10 +36,14 @@ async function getBook(): Promise<any> {
         animals: [...normal.list].sort((a: any, b: any) => (illustratedSort.get(a.fruit_id) ?? a.fruit_id) - (illustratedSort.get(b.fruit_id) ?? b.fruit_id)).map((entry: any) => {
             const item = itemDto({ id: entry.fruit_id, count: 1 });
             const giantId = giantProducts.get(item.id);
+            const animal: any = [...animalMap.values()].find((row: any) => row.product_item.id === item.id);
             const giantItem = giantId ? itemDto({ id: giantId, count: 1 }) : null;
             if (giantItem && giantItem.image === item.image) giantItem.image = '';
             return {
                 ...item, rarity: entry.rarity, layer: entry.layer, unlocked: entry.unlocked, progress: entry.progress,
+                animalId: animal?.id ?? null, animalName: animal?.name ?? item.name,
+                husbandryType: animal?.husbandry_type ?? null,
+                requiredLevel: animal ? getAnimalRequiredLevel(animal.cub_item_id) : null,
                 giantItem,
                 giant: entry.giant ? { unlocked: entry.giant.unlocked, tier: entry.giant.tier,
                     tierName: tiers.find(row => row.tier === entry.giant.tier)?.tier_name || '',
@@ -134,4 +139,4 @@ async function claimBook(plan: any): Promise<{ rewards: any[]; completed: number
     return { rewards, completed: plan.count };
 }
 
-module.exports = { getBook, prepareBookClaim, claimBook, clearGiantBookNew };
+module.exports = { getBook, readNormalBook, prepareBookClaim, claimBook, clearGiantBookNew };

@@ -1,4 +1,5 @@
 import { getRanchFriendList } from './friend-roster';
+import { getAnimalRequiredLevel } from '../../config/ranch-animals';
 
 export {};
 
@@ -160,6 +161,7 @@ function inventory(raw: any): any[] {
             canSell: salePrices(item).length > 0,
             can: canMap.get(Number(item.id)) || null, animalId: animal?.id || null, giantCub: !!animal?.giantCubItemId,
             husbandryType: animal?.husbandry_type ?? null,
+            requiredLevel: animal ? getAnimalRequiredLevel(animal.cub_item_id) : null,
             product: item.item_detail?.ranch_product ? {
                 weightX10: item.item_detail.ranch_product.weight_x10, tier: item.item_detail.ranch_product.tier,
                 priceRate: quantity(item.item_detail.ranch_product.price_rate),
@@ -200,7 +202,7 @@ async function catalog(raw: any, shopId: number): Promise<any> {
             price: { ...itemDto({ id: currencyId, count: discounted ? good.discount_price : good.price }), balance: currencyId ? balance(raw.bag, currencyId).total : null },
             available: valid && good.unlocked && !good.owned && (Number(good.limit_count) === 0 || Number(good.bought_num) < Number(good.limit_count)),
             maxCount: cfg?.one_buy_count || 1, remaining: Number(good.limit_count) > 0 ? Number(good.limit_count) - Number(good.bought_num) : null,
-            requiredLevel: good.conds.find((condition: any) => condition.type === 3)?.param?.toString() || null,
+            requiredLevel: cfg?.conds?.match(/:(\d+)$/)?.[1] || good.conds.find((condition: any) => condition.type === 3)?.param?.toString() || null,
             animal: [...animalMap.values()].find(row => row.cub_item_id === Number(good.item_id)) || null,
         };
     }) };
@@ -232,12 +234,17 @@ async function market(raw: any): Promise<any> {
     };
 }
 
-async function ranchMallCatalog(raw: any, slotType = 6, cansOnly = false): Promise<any> {
+async function readRanchMallGoods(slotType: number): Promise<any[]> {
     if (![6, 7].includes(slotType)) throw error('INVALID_ARGUMENT', '未知牧场商城');
     const reply = await rpc('canShop', { slot_type: slotType, is_manual_open: true, global_scene_id: 2 });
+    return reply.goods_list;
+}
+
+async function ranchMallCatalog(raw: any, slotType = 6, cansOnly = false): Promise<any> {
+    const catalog = await readRanchMallGoods(slotType);
     const now = getServerTimeSec();
     const goods: any[] = [];
-    for (const good of reply.goods_list) {
+    for (const good of catalog) {
         if (!good.reward_items.length || good.reward_items.some((item: any) =>
             !canMap.has(Number(item.id)) && (cansOnly || Number(item.id) !== 1006))) continue;
         const promotion = Number(good.discount_price) > 0 && Number(good.promotion_start_time) <= now && now < Number(good.promotion_end_time);
@@ -338,4 +345,4 @@ async function resourceBalances(keys: string[]): Promise<any[]> {
     });
 }
 
-module.exports = { getState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };
+module.exports = { getState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, readRanchMallGoods, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };

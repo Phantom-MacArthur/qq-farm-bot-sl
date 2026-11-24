@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useResizeObserver } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
-import { computed, nextTick, provide, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import Sidebar from '@/components/Sidebar.vue'
@@ -13,6 +13,7 @@ const { activityDetailOpen, layoutMinWidth } = storeToRefs(useAppStore())
 // 页头固定在滚动区之外；活动详情自带标题栏，打开时隐藏通用页头。
 const activityDetail = computed(() => ['activity-center', 'ranch-activity-center'].includes(String(route.name)) && activityDetailOpen.value)
 const showPageHeader = computed(() => !route.meta.fullBleed && !activityDetail.value)
+const compactSettings = computed(() => route.name === 'Settings' || route.name === 'SystemSettings')
 const scrolled = ref(false)
 const scrollEl = ref<HTMLElement | null>(null)
 const pageTabsTarget = ref<HTMLElement | null>(null)
@@ -23,8 +24,13 @@ function measureScrollbar() {
   if (!el)
     return
   // 页头右边缘与滚动区对齐：经典滚动条占位时让出它的宽度。
-  el.parentElement?.style.setProperty('--scrollbar-w', `${Math.max(0, el.offsetWidth - el.clientWidth)}px`)
-  el.style.setProperty('--page-bottom-inset', `${Math.max(0, document.documentElement.clientHeight - el.getBoundingClientRect().bottom)}px`)
+  const scrollbarWidth = `${Math.max(0, el.offsetWidth - el.clientWidth)}px`
+  const bottomInset = `${Math.max(0, document.documentElement.clientHeight - el.getBoundingClientRect().bottom)}px`
+  const parent = el.parentElement
+  if (parent && parent.style.getPropertyValue('--scrollbar-w') !== scrollbarWidth)
+    parent.style.setProperty('--scrollbar-w', scrollbarWidth)
+  if (el.style.getPropertyValue('--page-bottom-inset') !== bottomInset)
+    el.style.setProperty('--page-bottom-inset', bottomInset)
 }
 
 function onPageScroll(event: Event) {
@@ -38,7 +44,18 @@ watch(() => route.fullPath, async () => {
   scrollEl.value?.scrollTo({ top: 0 })
   measureScrollbar()
 }, { immediate: true })
-useResizeObserver(scrollEl, measureScrollbar)
+// 尺寸回调只安排测量；写入布局变量推迟到下一帧，避免观察通知期间改变被观察区域。
+let scrollbarFrame: number | undefined
+useResizeObserver(scrollEl, () => {
+  scrollbarFrame ??= requestAnimationFrame(() => {
+    scrollbarFrame = undefined
+    measureScrollbar()
+  })
+})
+onBeforeUnmount(() => {
+  if (scrollbarFrame !== undefined)
+    cancelAnimationFrame(scrollbarFrame)
+})
 </script>
 
 <template>
@@ -46,7 +63,7 @@ useResizeObserver(scrollEl, measureScrollbar)
     <Sidebar />
 
     <main class="app-main relative h-full min-h-0 min-w-0 flex flex-1 flex-col overflow-hidden">
-      <div class="app-content min-h-0 flex flex-1 flex-col overflow-hidden" :class="{ 'is-scrolled': scrolled }">
+      <div class="app-content min-h-0 flex flex-1 flex-col overflow-hidden" :class="{ 'is-scrolled': scrolled, 'app-content--settings': compactSettings }">
         <div v-if="showPageHeader" class="page-header-bar">
           <div class="page-header-content">
             <PageHeader />
@@ -99,6 +116,10 @@ useResizeObserver(scrollEl, measureScrollbar)
   --page-pad-end: max(0px, calc(var(--page-pad) - var(--scrollbar-w, 0px)));
   /* 吸顶偏移与 .page-scroll > * 的 margin-block-start 一致：吸顶后工具栏与子菜单保持原间距。 */
   --sticky-top: 12px;
+}
+
+.app-content.app-content--settings {
+  --page-pad: var(--ui-settings-space);
 }
 
 .page-header-bar {

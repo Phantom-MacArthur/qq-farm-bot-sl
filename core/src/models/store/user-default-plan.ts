@@ -28,6 +28,7 @@ function pickDefaultPlanConfig(raw: unknown): Record<string, any> {
         fertilizerBuyNormalCount: cfg.fertilizerBuyNormalCount,
         fertilizerBuyNormalThresholdHours: cfg.fertilizerBuyNormalThresholdHours,
         fertilizerBuyCheckIntervalMinutes: cfg.fertilizerBuyCheckIntervalMinutes,
+        fertilizerBuyNormalCheckIntervalMinutes: cfg.fertilizerBuyNormalCheckIntervalMinutes,
         emailClaimHour: cfg.emailClaimHour,
         bagSeedFallbackStrategy: cfg.bagSeedFallbackStrategy,
         autoAcceptFriendMinLevel: cfg.autoAcceptFriendMinLevel,

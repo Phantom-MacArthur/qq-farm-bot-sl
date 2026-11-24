@@ -57,31 +57,6 @@ async function reportClientProgress(taskId: number, progress: number): Promise<a
     return types.ClientReportProgressReply.decode(replyBody);
 }
 
-async function claimAllIllustratedRewards(): Promise<any> {
-    if (!types.ClaimAllRewardsV2Request || !types.ClaimAllRewardsV2Reply) {
-        return { items: [], bonus_items: [] };
-    }
-    const body: Uint8Array = types.ClaimAllRewardsV2Request.encode(types.ClaimAllRewardsV2Request.create({
-        type: 1,
-    })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.illustratedpb.IllustratedService', 'ClaimAllRewardsV2', body);
-    return types.ClaimAllRewardsV2Reply.decode(replyBody);
-}
-
-async function getTicketBalanceFromBag(): Promise<number> {
-    try {
-        const { getBag, getBagItems } = require('./warehouse');
-        const rep: any = await getBag();
-        const items: any[] = getBagItems(rep);
-        for (const it of (items || [])) {
-            if (toNum(it && it.id) === 1002) return Math.max(0, toNum(it && it.count));
-        }
-        return 0;
-    } catch {
-        return 0;
-    }
-}
-
 // ============ 任务分析 ============
 
 function formatTask(t: any, category: string = 'main'): any {
@@ -219,33 +194,6 @@ async function checkAndClaimActives(actives: any[]): Promise<{ scanned: number; 
         }
     }
     return { scanned, claimed, errors };
-}
-
-async function checkAndClaimIllustratedRewards(): Promise<boolean> {
-    try {
-        const beforeTicket: number = await getTicketBalanceFromBag();
-        const reply: any = await claimAllIllustratedRewards();
-        const items: any[] = [
-            ...(Array.isArray(reply && reply.total_rewards) ? reply.total_rewards : []),
-        ];
-        if (items.length > 0) recordFarmReward('illustrated_rewards', describeRewardItems(items), '图鉴奖励');
-        const afterTicket: number = await getTicketBalanceFromBag();
-        const gainTicket: number = Math.max(0, afterTicket - beforeTicket);
-        if (gainTicket < 200) return false;
-
-        log('任务', `领取成功: 点券${gainTicket}`, {
-            module: 'task',
-            event: '图鉴奖励',
-            result: 'ok',
-            scope: 'illustrated',
-            count: items.length,
-        });
-        taskClaimDoneDateKey = getSystemDateKey();
-        taskClaimLastAt = Date.now();
-        return true;
-    } catch {
-        return false;
-    }
 }
 
 // ============ 客户端上报类成长任务 ============
@@ -415,10 +363,8 @@ async function claimTasksFromList(claimable: any[]): Promise<void> {
 function initTaskSystem(): void {
     cleanupTaskSystem();
     networkEvents.on('taskInfoNotify', onTaskInfoNotify);
-    taskScheduler.setTimeoutTask('task_init_bootstrap', 4000, () => require('./automation-lock').runExclusiveAutomationTask('task_init', async () => {
-        await checkAndClaimTasks();
-        if (isAutomationOn('task')) await checkAndClaimIllustratedRewards();
-    }, { detached: true }));
+    taskScheduler.setTimeoutTask('task_init_bootstrap', 4000, () =>
+        require('./automation-lock').runExclusiveAutomationTask('task_init', checkAndClaimTasks, { detached: true }));
 }
 
 function cleanupTaskSystem(): void {

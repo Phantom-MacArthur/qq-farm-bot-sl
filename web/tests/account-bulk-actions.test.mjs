@@ -31,7 +31,7 @@ const accounts = [
 ]
 
 test('批量目标按卡片启动/停止按钮的同一套语义挑选', () => {
-  assert.deepEqual(pickAccountBatchTargets(accounts, 'start'), ['2', '3'])
+  assert.deepEqual(pickAccountBatchTargets(accounts, 'start'), ['2', '3', '4'])
   assert.deepEqual(pickAccountBatchTargets(accounts, 'stop'), ['1', '4'])
   // 清理只允许已停止的账号，运行中的必须先停止才不会被误删
   assert.deepEqual(pickAccountBatchTargets(accounts, 'cleanup'), ['2', '3'])
@@ -39,7 +39,7 @@ test('批量目标按卡片启动/停止按钮的同一套语义挑选', () => {
 })
 
 test('选中范围过滤让多选按钮与全局按钮共用前置判断', () => {
-  assert.deepEqual(pickAccountBatchTargets(accounts, 'start', ['2', '4']), ['2'])
+  assert.deepEqual(pickAccountBatchTargets(accounts, 'start', ['2', '4']), ['2', '4'])
   assert.deepEqual(pickAccountBatchTargets(accounts, 'stop', new Set(['2', '4'])), ['4'])
   assert.deepEqual(pickAccountBatchTargets(accounts, 'cleanup', ['1']), [])
   // 未知 id 不会混进批次
@@ -57,7 +57,7 @@ test('只有带持久化凭证的微信账号需要刷新 Code', () => {
   const targets = pickAccountBatchTargets(accounts, 'start')
   assert.deepEqual(
     targets.map(id => shouldRefreshCodeBeforeStart(accounts.find(item => item.id === id))),
-    [true, false],
+    [true, false, false],
   )
 })
 

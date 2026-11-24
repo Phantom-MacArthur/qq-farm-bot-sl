@@ -110,16 +110,19 @@ function getLogLevel(log: any): LogLevel {
   const result = String(log?.meta?.result || '')
   if (log?.tag === '错误' || result === 'error' || result === 'failed')
     return 'error'
-  if (log?.isWarn || log?.tag === '警告' || result === 'defer' || result === 'skip')
+  if (log?.isWarn || log?.tag === '警告')
+    return 'warn'
+  // 施肥库存不足、无可施地块等跳过属于正常应答；显式警告仍保留警告等级。
+  if (result === 'skip' && log?.meta?.module === 'farm'
+    && ['施肥', '常规施肥', '多季节施肥'].includes(log?.meta?.event))
+    return 'info'
+  if (result === 'defer' || result === 'skip')
     return 'warn'
   if (['ok', 'success', 'done', 'resume', 'resumed'].includes(result))
     return 'success'
   return 'info'
 }
 
-function isRanchLog(log: any) {
-  return log.meta?.module === 'ranch' || String(log.meta?.event || '').startsWith('ranch_') || log.tag === '牧场'
-}
 function getEventLabel(event?: string) {
   const key = event || ''
   return eventLabelMap[key] || (/[\u3400-\u9FFF]/u.test(key) ? key : '')
@@ -404,18 +407,18 @@ function formatLogTime(timeStr: string) {
 </script>
 
 <template>
-  <div class="run-log-panel flex min-h-0 flex-1 flex-col">
-    <div class="run-log-header mb-4 flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-      <h3 class="run-log-heading flex shrink-0 items-center gap-2 whitespace-nowrap text-lg font-bold">
+  <div class="run-log-panel panel-scroll-layout">
+    <div class="run-log-header panel-titlebar panel-titlebar--flush margin-shell"><span class="margin-content">
+      <h3 class="run-log-heading flex shrink-0 items-center gap-2 whitespace-nowrap">
         <span class="i-carbon-document" /> <span>运行日志</span>
       </h3>
 
       <div class="run-log-filters">
-        <BaseSelect v-model="filter.module" :options="modules" @change="onLogFilterChange" />
-        <BaseSelect v-model="filter.submodule" :options="submoduleOptions" @change="onLogFilterChange" />
-        <BaseSelect v-model="filter.event" :options="events" @change="onLogFilterChange" />
-        <BaseSelect v-model="filter.level" :options="levels" @change="onLogFilterChange" />
-        <BaseInput v-model="filter.keyword" placeholder="关键词" clearable @keyup.enter="onLogSearchTrigger" @clear="onLogSearchTrigger" />
+        <BaseSelect v-model="filter.module" fit-width :options="modules" @change="onLogFilterChange" />
+        <BaseSelect v-model="filter.submodule" fit-width :options="submoduleOptions" @change="onLogFilterChange" />
+        <BaseSelect v-model="filter.event" fit-width :options="events" @change="onLogFilterChange" />
+        <BaseSelect v-model="filter.level" fit-width :options="levels" @change="onLogFilterChange" />
+        <BaseInput v-model="filter.keyword" type="search" placeholder="关键词" clearable @keyup.enter="onLogSearchTrigger" @clear="onLogSearchTrigger" />
         <div class="run-log-filters__buttons">
           <BaseButton variant="primary" class="run-log-filters__icon" title="搜索日志" aria-label="搜索日志" @click="onLogSearchTrigger">
             <span class="i-carbon-search" />
@@ -425,7 +428,7 @@ function formatLogTime(timeStr: string) {
           </BaseButton>
         </div>
       </div>
-    </div>
+    </span></div>
 
     <div v-if="activeFilterChips.length" class="run-log-chips">
       <span class="text-gray-400">筛选中</span>
@@ -436,11 +439,11 @@ function formatLogTime(timeStr: string) {
     </div>
 
     <div class="run-log-list" :class="listClass">
-      <div ref="logContainer" class="run-log-scroll" @scroll="onLogScroll">
+      <div ref="logContainer" class="run-log-scroll panel-scroll-body" @scroll="onLogScroll">
         <div v-if="!allLogs.length" class="py-8 text-center text-gray-400">暂无日志</div>
         <template v-for="(group, index) in logGroups" :key="group.uid">
           <div v-if="showDateDivider(index)" class="run-log-date">{{ dateLabel(group.dateKey) }}</div>
-          <div class="log-row" :class="[`log-row--${group.level}`, { 'log-row--ranch': isRanchLog(group.log) }]">
+          <div class="log-row">
             <span class="log-row__time">{{ formatLogTime(group.log.time) }}</span>
             <span class="log-row__tag">{{ getModulePath(group.log) }}</span>
             <span class="log-row__body">
@@ -468,37 +471,35 @@ function formatLogTime(timeStr: string) {
 </template>
 
 <style scoped>
-.run-log-filters { display: grid; min-width: 0; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-.run-log-filters__buttons { display: flex; grid-column: 1 / -1; justify-content: flex-end; gap: 8px; }
-.run-log-filters__icon { width: 38px; min-width: 38px; height: 38px; padding: 0 !important; }
-@media (min-width: 640px) {
-  .run-log-filters { grid-template-columns: repeat(5, minmax(0, 8rem)) auto; align-items: center; }
-  .run-log-filters__buttons { grid-column: auto; }
+/* ???????????????????? */
+.run-log-panel { flex: 1 1 0; min-height: 0; overflow: clip; }
+.run-log-header { position: relative; top: auto; flex: none; }
+.run-log-header > .margin-content { flex-direction: row; flex-wrap: wrap; }
+.run-log-heading { margin: 0; color: var(--ui-ink); font-weight: var(--fw-600); }
+.run-log-filters { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 8px; margin-left: auto; }
+.run-log-filters__buttons { display: flex; align-items: center; gap: 8px; }
+.run-log-filters__icon { width: var(--ui-content-titlebar-control-height-34); min-width: var(--ui-content-titlebar-control-height-34); padding: 0 !important; }
+@media (max-width: 640px) {
+  .run-log-filters { width: 100%; margin-left: 0; }
 }
-.run-log-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; font-size: 12px; }
+.run-log-chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 16px; border-bottom: 1px solid var(--ui-border); font-size: 12px; }
 .run-log-chip { border-radius: 9999px; padding: 3px 9px; font-size: 12px; background: color-mix(in srgb, var(--ui-primary) 12%, transparent); color: var(--ui-primary); }
 .run-log-chip-clear { margin-left: 4px; font-size: 12px; color: var(--ui-primary); }
-.run-log-scroll { min-height: 0; height: 100%; overflow-y: auto; padding: 6px; border-radius: var(--ui-radius-control); background: var(--ui-surface-soft); font-size: 13px; line-height: 1.55; }
-.run-log-list { position: relative; min-height: 0; }
+.run-log-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; background: var(--ui-surface); font-size: var(--ui-content-item-font-height-tiny-12); line-height: 1.55; }
+.run-log-list { position: relative; display: flex; flex: 1 1 0; flex-direction: column; min-height: 120px; overflow: clip; contain: size; }
 .run-log-date { padding: 6px 10px 4px; color: var(--ui-subtle); font-size: 11px; font-weight: 600; }
-.log-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 5px 8px 5px 10px; border-left: 3px solid transparent; border-radius: 6px; content-visibility: auto; contain-intrinsic-size: auto 28px; }
+.log-row { display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: baseline; gap: 10px; padding: 5px 8px 5px 10px; content-visibility: auto; contain-intrinsic-size: auto 28px; }
 .log-row + .log-row { margin-top: 2px; }
 .log-row__time { color: var(--ui-subtle); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px; white-space: nowrap; user-select: none; }
 .log-row__tag { min-width: 2.5em; color: var(--ui-muted); font-size: 12px; font-weight: var(--fw-600); white-space: nowrap; }
 .log-row__body { min-width: 0; color: var(--ui-ink); overflow-wrap: anywhere; }
 .log-row__event { margin-right: 6px; color: var(--ui-muted); font-size: 12px; }
 .log-row__event::after { margin-left: 6px; color: var(--ui-subtle); content: '·'; }
-.log-row__repeat { display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 999px; background: var(--ui-surface-strong); color: var(--ui-muted); font-size: 11px; white-space: nowrap; cursor: pointer; }
+.log-row__repeat { display: inline-block; margin-left: 8px; padding: 0 6px; border-radius: 999px; color: var(--ui-muted); font-size: 11px; white-space: nowrap; cursor: pointer; }
 .log-row__repeat:hover { color: var(--ui-primary); }
-.run-log-expanded { margin: 0 8px 6px 40px; padding: 6px 8px; border-radius: 6px; background: color-mix(in srgb, var(--ui-surface-strong) 60%, transparent); }
+.run-log-expanded { margin: 0 8px 6px 40px; padding: 6px 8px; border-radius: 6px; }
 .run-log-expanded__row { display: flex; gap: 10px; padding: 2px 0; font-size: 12px; }
 .run-log-expanded__path { color: var(--ui-muted); white-space: nowrap; }
-.log-row--success { border-left-color: var(--ui-primary); }
-.log-row--success.log-row--ranch { border-left-color: var(--ui-violet); }
-.log-row--warn { border-left-color: var(--ui-warning); background: color-mix(in srgb, var(--ui-warning-soft) 70%, transparent); }
-.log-row--warn .log-row__tag { color: var(--ui-warning); }
-.log-row--error { border-left-color: var(--ui-danger); background: color-mix(in srgb, var(--ui-danger-soft) 80%, transparent); }
-.log-row--error .log-row__tag, .log-row--error .log-row__msg { color: var(--ui-danger); }
 .run-log-to-latest { position: absolute; right: 16px; bottom: 14px; display: flex; align-items: center; gap: 4px; padding: 5px 12px; border-radius: 999px; font-size: 12px; color: var(--ui-ink); background: color-mix(in srgb, var(--ui-surface-strong) 82%, transparent); border: 1px solid var(--ui-border); backdrop-filter: blur(4px); }
 .run-log-to-latest:hover { background: var(--ui-surface-strong); }
 @media (max-width: 640px) {

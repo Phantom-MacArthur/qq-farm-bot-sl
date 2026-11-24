@@ -89,17 +89,17 @@ async function save() {
 
         <div class="flex justify-end gap-2">
           <BaseButton
-            variant="outline"
-            @click="$emit('close')"
-          >
-            取消
-          </BaseButton>
-          <BaseButton
             variant="primary"
             :loading="loading"
             @click="save"
           >
             保存
+          </BaseButton>
+          <BaseButton
+            variant="outline"
+            @click="$emit('close')"
+          >
+            取消
           </BaseButton>
         </div>
       </div>

@@ -1,4 +1,5 @@
 import config from '../activity-data/muge-20261117.json';
+import type { MugeRewardKey } from '../config/automation-modules';
 
 export {};
 
@@ -7,6 +8,7 @@ const { types } = require('../utils/proto');
 const { getServerTimeSec, toNum } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
 const { util } = require('protobufjs');
+const { MUGE_REWARD_KEYS } = require('../config/automation-modules');
 
 const GROUP_ID = '2026111700';
 const IDS = { celebration: '2026111702', friends: '2026111703', handbook: '2026111704', personality: '2026111705' };
@@ -73,10 +75,12 @@ async function getMugeActivity() {
     };
 }
 
-async function perform(action: string, input: any) {
+type MugeState = Awaited<ReturnType<typeof getMugeActivity>>;
+
+async function perform(action: string, input: any, automatic?: { state: MugeState; enabled: () => boolean }) {
     const operation = Object.hasOwn(OPERATIONS, action) ? OPERATIONS[action as keyof typeof OPERATIONS] : null;
     if (!operation) fail('INVALID_MUGE_ACTION', '未知的牧歌初启操作');
-    const state = await getMugeActivity();
+    const state = automatic?.state ?? await getMugeActivity();
     if (!state.active) fail('MUGE_ENDED', '牧歌初启尚未开始或已经结束');
     let params: any = {};
     if (action === 'claimCelebration' || action === 'claimFriends' || action === 'claimHandbook') {
@@ -105,7 +109,15 @@ async function perform(action: string, input: any) {
         }
     }
     const body = types.MugeOperateRequest.encode({ id: operation.id, cmd: operation.cmd, [operation.field]: params }).finish();
-    const response = await sendMsgAsync('gamepb.activitypb.ActivityService', 'Operate', body);
+    const response = await sendMsgAsync('gamepb.activitypb.ActivityService', 'Operate', body, automatic ? {
+        beforeSend: () => {
+            if (!automatic.enabled()) return Object.assign(new Error('自动领取已暂停'), { code: 'MUGE_AUTO_PAUSED' });
+            const now = getServerTimeSec() * 1000;
+            return now < state.startTime || now >= state.endTime
+                ? Object.assign(new Error('牧歌初启不在活动时段内'), { code: 'MUGE_ENDED' })
+                : null;
+        },
+    } : undefined);
     const reply = types.MugeOperateReply.decode(response.body);
     if (String(reply.id) !== operation.id || toNum(reply.cmd) !== operation.cmd || !reply[operation.field] || String(reply.activity?.head?.id) !== operation.id) {
         fail('MUGE_RESULT_UNKNOWN', '操作回包未能确认，请刷新核对，勿重复提交');
@@ -124,10 +136,63 @@ async function perform(action: string, input: any) {
     catch { return { activity: null, rewards, refreshRequired: true }; }
 }
 
-function operateMugeActivity(action: string, input: any = {}) {
-    const pending = mutationTail.then(() => perform(action, input));
+function serializeMutation<T>(task: () => Promise<T>): Promise<T> {
+    const pending = mutationTail.then(task);
     mutationTail = pending.catch(() => {});
     return pending;
 }
 
-module.exports = { getMugeActivity, operateMugeActivity };
+function operateMugeActivity(action: string, input: any = {}) {
+    return serializeMutation(() => perform(action, input));
+}
+
+function runMugeAutoRewards(enabled: (key: MugeRewardKey) => boolean, report: (key: MugeRewardKey, rewards: any[]) => void) {
+    return serializeMutation(async () => {
+        if (!MUGE_REWARD_KEYS.some(enabled)) return;
+        let state: MugeState | null;
+        try {
+            state = await getMugeActivity();
+        } catch (error: any) {
+            if (error.code === 'MUGE_UNAVAILABLE') return;
+            throw error;
+        }
+        if (!state.active) return;
+
+        async function apply(key: MugeRewardKey, action: keyof typeof OPERATIONS, input: object = {}): Promise<boolean> {
+            if (!state?.active || !enabled(key)) return false;
+            try {
+                const outcome = await perform(action, input, { state, enabled: () => enabled(key) });
+                state = outcome.activity;
+                if (outcome.rewards.length) report(key, outcome.rewards);
+                return !!state?.active;
+            } catch (error: any) {
+                if (error.code === 'MUGE_AUTO_PAUSED') return false;
+                if (error.code === 'MUGE_ENDED') {
+                    state = null;
+                    return false;
+                }
+                throw error;
+            }
+        }
+
+        const claimable = (items: { status: number }[] | undefined) => items?.some(item => item.status === 2);
+        if (claimable(state.celebration?.tiers)) await apply('muge_claim_celebration', 'claimCelebration');
+        if (claimable(state?.friends?.tiers)) await apply('muge_claim_friends', 'claimFriends');
+        if (claimable(state?.handbook?.tasks)) await apply('muge_claim_handbook', 'claimTask');
+        if (claimable(state?.handbook?.tiers)) await apply('muge_claim_handbook', 'claimHandbook');
+
+        const key = 'muge_claim_personality';
+        const personality = state?.personality;
+        if (!personality || personality.shareRewardClaimed || !enabled(key)) return;
+        if (!personality.personalityId) {
+            const missingAnswers = Object.fromEntries(config.questions
+                .filter(question => !question.options.some(option => option.value === personality.answers[String(question.id)]))
+                .map(question => [String(question.id), question.options[0].value]));
+            if (Object.keys(missingAnswers).length && !await apply(key, 'saveAnswers', { answers: missingAnswers })) return;
+            if (!await apply(key, 'settle')) return;
+        }
+        if (state?.personality?.personalityId && !state.personality.shareRewardClaimed) await apply(key, 'claimShare');
+    });
+}
+
+module.exports = { getMugeActivity, operateMugeActivity, runMugeAutoRewards };

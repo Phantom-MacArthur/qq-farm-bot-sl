@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useResizeObserver } from '@vueuse/core'
 import { NTooltip } from 'naive-ui/es/tooltip'
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 defineOptions({ inheritAttrs: false })
 
@@ -36,7 +36,18 @@ function setShow(value: boolean) {
   show.value = value && overflowing.value
 }
 
-useResizeObserver(content, measureOverflow)
+// Tooltip 状态会更新 DOM，避免在尺寸通知的同一轮内写回。
+let overflowFrame: number | undefined
+useResizeObserver(content, () => {
+  overflowFrame ??= requestAnimationFrame(() => {
+    overflowFrame = undefined
+    measureOverflow()
+  })
+})
+onBeforeUnmount(() => {
+  if (overflowFrame !== undefined)
+    cancelAnimationFrame(overflowFrame)
+})
 onMounted(measureOverflow)
 watch(() => [props.text, props.lines], async () => {
   show.value = false

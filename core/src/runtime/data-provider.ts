@@ -291,7 +291,7 @@ function createDataProvider(options: DataProviderOptions) {
             store.setAutomation(key, value, accountId);
             const rev = nextConfigRevision();
             broadcastConfigToWorkers(accountId);
-            return { automation: store.getAutomation(accountId), configRevision: rev };
+            return { automation: store.getSavedAutomation(accountId), configRevision: rev };
         },
 
         doFarmOp: (accountRef: string, opType: string, targetLandId: unknown = null) => (
@@ -335,6 +335,7 @@ function createDataProvider(options: DataProviderOptions) {
                 'fertilizerBuyNormalCount',
                 'fertilizerBuyNormalThresholdHours',
                 'fertilizerBuyCheckIntervalMinutes',
+                'fertilizerBuyNormalCheckIntervalMinutes',
                 'emailClaimHour',
                 'bagSeedPriority',
                 'bagSeedMultiLandReservationEnabled',

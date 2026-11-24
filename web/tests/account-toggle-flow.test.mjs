@@ -130,22 +130,22 @@ test('offline responses from previous selections, canceled requests, and pre-rec
 const accountApiError = value => value?.response?.data?.error || value?.error || value?.message || '请求失败'
 const bulkActions = loadSource('../src/utils/account-bulk-actions.ts')
 
-function loadAccountStore(api, pinia) {
+function loadAccountStore(api, pinia, toast = loadSource('../src/stores/toast.ts')) {
   const apiModule = { __esModule: true, default: api, getApiErrorMessage: accountApiError, selectedAccountId: vue.ref('') }
   const { useAccountStore } = loadSource('../src/stores/account.ts', {
     '@/api': apiModule,
     '@/utils/account-bulk-actions': bulkActions,
     './setting': loadSource('../src/stores/setting.ts', { '@/api': apiModule }),
-    './toast': loadSource('../src/stores/toast.ts'),
+    './toast': toast,
   })
   return useAccountStore(pinia)
 }
 
-function createHarness(t, api) {
+function createHarness(t, api, toast) {
   const pinia = createPinia()
   setActivePinia(pinia)
   t.after(() => disposePinia(pinia))
-  const store = loadAccountStore(api, pinia)
+  const store = loadAccountStore(api, pinia, toast)
   // 启动后的后台列表刷新是定时任务，不关掉会把测试进程多拖几秒
   t.after(() => store.stopAccountStateSync())
   return { store }
@@ -155,14 +155,14 @@ function accountState({ running = false, online = false } = {}) {
   return { data: { ok: true, data: { accounts: [{ id: '7', name: 'acc', running, online }] } } }
 }
 
-test('全部启动串行处理已停止账号，并拦住重复提交', async (t) => {
+test('全部启动串行处理已停止和已断线账号，并拦住重复提交', async (t) => {
   const calls = []
   const accounts = [
     { id: '1', platform: 'wx', hasWxCredential: true, running: false },
     { id: '2', platform: 'qq', running: false },
     { id: '3', running: true, online: false },
   ]
-  const response = { data: { ok: true, data: { accounts } } }
+  let disconnectedWorkerRunning = true
   let finishRefresh
   const refresh = new Promise((resolve) => {
     finishRefresh = resolve
@@ -170,12 +170,15 @@ test('全部启动串行处理已停止账号，并拦住重复提交', async (t
   const { store } = createHarness(t, {
     get: async () => {
       calls.push('get-accounts')
-      return response
+      const snapshot = accounts.map(account => account.id === '3' ? { ...account, running: disconnectedWorkerRunning } : { ...account })
+      return { data: { ok: true, data: { accounts: snapshot } } }
     },
     post: async (url, _body, config) => {
       calls.push([url, config?.headers?.['x-account-id']])
       if (url === '/api/settings/auto-code-refresh/run')
         await refresh
+      if (url === '/api/accounts/3/stop')
+        disconnectedWorkerRunning = false
       return { data: { ok: true } }
     },
   })
@@ -189,8 +192,30 @@ test('全部启动串行处理已停止账号，并拦住重复提交', async (t
   assert.deepEqual(calls, [
     ['/api/settings/auto-code-refresh/run', '1'],
     ['/api/accounts/2/start', undefined],
+    ['/api/accounts/3/stop', undefined],
+    'get-accounts',
+    ['/api/accounts/3/start', undefined],
     'get-accounts',
   ])
+  assert.equal(store.bulkRunning, false)
+})
+
+test('批量启动在旧进程未确认退出时报告原因，并跳过启动', async (t) => {
+  let now = 0
+  t.mock.method(Date, 'now', () => (now += 60_000))
+  const calls = []
+  const errors = []
+  const { store } = createHarness(t, {
+    get: async () => accountState({ running: true, online: false }),
+    post: async (url) => {
+      calls.push(url)
+      return { data: { ok: true } }
+    },
+  }, { useToastStore: () => ({ error: message => errors.push(message) }) })
+  store.accounts = accountState({ running: true, online: false }).data.data.accounts
+  await store.startAllAccounts()
+  assert.deepEqual(calls, ['/api/accounts/7/stop'])
+  assert.deepEqual(errors, ['成功启动 0 个账号，1 个失败：停止后进程未退出'])
   assert.equal(store.bulkRunning, false)
 })
 

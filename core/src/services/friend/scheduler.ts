@@ -307,16 +307,6 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
         && !!getUserState().gid && isAutomationOn('friend') && !inFriendQuietHours()
         && getSystemDateKey() === roundDate && isGatewayHealthyForBusiness(getGatewayLoad());
 
-    async function waitStealGap(target: any): Promise<void> {
-        let remainingMs = getStealDelaySeconds(accountId) * 1000;
-        while (remainingMs > 0 && canContinue() && isAutomationOn('friend_steal')
-            && !getFriendBlacklist(accountId).includes(target.gid)) {
-            const sliceMs = Math.min(remainingMs, 1000);
-            await sleep(sliceMs);
-            remainingMs -= sliceMs;
-        }
-    }
-
     try {
         const friendsReply: any = await runExclusiveAutomationTask('friend_list', () => (
             canContinue() ? getAllFriends() : null
@@ -377,15 +367,44 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
 
         // 经验在本轮中途满掉之后被跳过的好友数
         let midRoundExpSkipped: number = 0;
-        let attemptedStealVisit = false;
+        const deferredSteals: Array<{ target: typeof plan.visits[number]; readyAt: number }> = [];
+        const stealDelayMs = getStealDelaySeconds(accountId) * 1000;
+        const canVisit = (target: typeof plan.visits[number]) => canContinue() && !getFriendBlacklist(accountId).includes(target.gid);
+
+        async function runVisit(target: typeof plan.visits[number], stealOnly = false) {
+            try {
+                return await runExclusiveAutomationTask('friend_visit', async () => {
+                    if (!canVisit(target)) return;
+                    const allowSteal = target.wantSteal && isAutomationOn('friend_steal');
+                    const allowHelp = !stealOnly && target.wantHelp && isAutomationOn('friend_help');
+                    const allowBad = !stealOnly && target.wantBad && isAutomationOn('friend_bad');
+                    if (!allowSteal && !allowHelp && !allowBad) return;
+                    return visitFriend(target, totalActions, state.gid, state.accountId, {
+                        allowSteal,
+                        allowHelp,
+                        allowBad,
+                        ignoreExpLimit,
+                        stealDelayMs: stealOnly ? 0 : stealDelayMs,
+                    });
+                }, { detached: true });
+            } catch (e: any) {
+                if (isGatewayYieldError(e) || String(e.message).includes('stage=pending')) throw e;
+                log('好友', `巡查好友失败: ${target.name}, 错误: ${e.message}`, {
+                    module: 'friend', event: '好友巡查失败', friendName: target.name, error: e.message,
+                });
+            }
+        }
+
+        async function runReadySteals(): Promise<void> {
+            while (deferredSteals[0]?.readyAt <= Date.now()) {
+                const { target } = deferredSteals.shift()!;
+                if (canVisit(target) && isAutomationOn('friend_steal')) await runVisit(target, true);
+            }
+        }
 
         for (const target of plan.visits) {
             if (!canContinue()) return false;
-            if (getFriendBlacklist(accountId).includes(target.gid)) continue;
-            if (attemptedStealVisit && target.wantSteal && isAutomationOn('friend_steal')) {
-                // 首位可偷好友立即访问，后续等待不持有自动化锁。
-                await waitStealGap(target);
-            }
+            await runReadySteals();
             if (!canContinue()) return false;
             if (getFriendBlacklist(accountId).includes(target.gid)) continue;
             if (target.wantBad) {
@@ -402,31 +421,21 @@ export async function checkFriends(options: CheckFriendsOptions = {}): Promise<b
                 }
             }
 
-            try {
-                await runExclusiveAutomationTask('friend_visit', async () => {
-                    if (!canContinue() || getFriendBlacklist(accountId).includes(target.gid)) return;
-                    const allowSteal = target.wantSteal && isAutomationOn('friend_steal');
-                    const allowHelp = target.wantHelp && isAutomationOn('friend_help');
-                    const allowBad = target.wantBad && isAutomationOn('friend_bad');
-                    if (!allowSteal && !allowHelp && !allowBad) return;
-                    if (allowSteal) attemptedStealVisit = true;
-                    await visitFriend(target, totalActions, state.gid, state.accountId, {
-                        allowSteal,
-                        allowHelp,
-                        allowBad,
-                        ignoreExpLimit,
-                    });
-                }, { detached: true });
-            } catch (e: any) {
-                if (isGatewayYieldError(e) || String(e.message).includes('stage=pending')) throw e;
-                log('好友', `巡查好友失败: ${target.name}, 错误: ${e.message}`, {
-                    module: 'friend', event: '好友巡查失败', friendName: target.name, error: e.message,
-                });
-            }
+            const result = await runVisit(target);
+            if (result?.stealReadyAt) deferredSteals.push({ target, readyAt: result.stealReadyAt });
 
             // 普通访问快速让位，捣乱仍保留较慢间隔。
             if (target.wantBad) await randomDelay(2000, 3500);
             else await randomDelay(200, 350);
+        }
+
+        // 等待发生在场景和任务锁之外，其余互动已在首次拜访时完成。
+        while (deferredSteals.length && canContinue() && isAutomationOn('friend_steal')) {
+            await runReadySteals();
+            const next = deferredSteals[0];
+            if (!next || !canContinue() || !isAutomationOn('friend_steal')) break;
+            if (canVisit(next.target)) await sleep(Math.min(1000, Math.max(0, next.readyAt - Date.now())));
+            else deferredSteals.shift();
         }
 
         if (!canContinue()) return false;

@@ -24,10 +24,15 @@ function harness(t, initialWidth, savedCollapsed = false) {
   const imports = {
     '@vueuse/core': {
       useStorage(key, fallback) {
+        if (key === 'theme_mode') {
+          assert.equal(fallback, 'system')
+          return ref(fallback)
+        }
         assert.equal(key, 'sidebar_collapsed')
         assert.equal(fallback, false)
         return preference
       },
+      usePreferredDark: () => ref(false),
       useWindowSize(options) {
         // 不以 document.clientWidth 或正文滚动区宽度判断断点。
         assert.equal(options.type, 'inner')
@@ -37,9 +42,10 @@ function harness(t, initialWidth, savedCollapsed = false) {
     },
   }
   const module = { exports: {} }
+  const document = { documentElement: { classList: { toggle() {} }, style: {} } }
   // 执行实际的 Pinia store，只替换视口与存储输入。
   // eslint-disable-next-line no-new-func
-  new Function('require', 'module', 'exports', outputText)(id => imports[id] || require(id), module, module.exports)
+  new Function('require', 'module', 'exports', 'document', outputText)(id => imports[id] || require(id), module, module.exports, document)
   return { store: module.exports.useAppStore(pinia), viewportWidth, preference }
 }
 

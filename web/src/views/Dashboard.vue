@@ -339,7 +339,7 @@ useIntervalFn(refreshRanch, 30000)
 
     <!-- 运行日志（页面最下方，整宽展示） -->
     <section class="dashboard-log-card panel-scroll-layout page-card-surface margin-shell" aria-label="运行日志"><span class="margin-content">
-      <RunLogPanel default-module="farm" :max-logs="200" list-class="max-h-[50vh] min-h-0 flex-1" />
+      <RunLogPanel default-module="farm" :max-logs="200" list-class="min-h-0 flex-1" />
     </span></section>
   </div>
 </template>
@@ -358,16 +358,6 @@ useIntervalFn(refreshRanch, 30000)
   min-height: 180px;
   overflow: clip;
   --inset-top: 0; --inset-right: 0; --inset-bottom: 0; --inset-left: 0;
-}
-
-.dashboard-log-card :deep(.run-log-heading) {
-  font-family: "Microsoft YaHei", "PingFang SC", ui-sans-serif, system-ui, sans-serif;
-  font-size: var(--ui-font-size-large-15);
-  font-weight: var(--fw-600);
-}
-
-.dashboard-log-card :deep(.run-log-header) {
-  padding-inline: 16px;
 }
 
 .overview-grid {

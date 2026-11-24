@@ -1,3 +1,4 @@
+import { AUTOMATION_MODULE_DEFAULTS, FARM_DAILY_DEFAULTS, MUGE_REWARD_DEFAULTS } from '../../config/automation-modules';
 import type { AccountConfig, AutoCodeRefreshConfig, AutomationConfig, BagSeedFallbackStrategy, CaptureSettings, FertilizerLandType, FertilizerMode, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
 export {};
 
@@ -13,8 +14,8 @@ const ACCOUNTS_FILE: string = getDataFile('accounts.json');
 const configStorage = createConfigStorage(STORE_FILE);
 const KNOWN_FRIEND_GIDS_DIR: string = getDataFile('known_friend_gids');
 
-const ALLOWED_PLANTING_STRATEGIES: PlantingStrategy[] = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
-const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: BagSeedFallbackStrategy[] = ALLOWED_PLANTING_STRATEGIES.filter((s): s is BagSeedFallbackStrategy => s !== 'bag_priority');
+const ALLOWED_PLANTING_STRATEGIES: PlantingStrategy[] = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority', 'illustrated'];
+const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: BagSeedFallbackStrategy[] = ALLOWED_PLANTING_STRATEGIES.filter((s): s is BagSeedFallbackStrategy => s !== 'illustrated');
 const PUSHOO_CHANNELS: Set<string> = new Set([
     'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
     'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
@@ -23,7 +24,7 @@ const PUSHOO_CHANNELS: Set<string> = new Set([
 ]);
 
 const DEFAULT_FERTILIZER_LAND_TYPES: FertilizerLandType[] = ['purple-gold', 'gold', 'black', 'red', 'normal'];
-const FERTILIZER_MODES = new Set<FertilizerMode>(['both', 'normal', 'organic', 'smart', 'none', 'normal_ripen', 'organic_ripen']);
+const { FERTILIZER_MODES, normalizeFertilizerLandStrategies } = require('../../config/fertilizer-strategy');
 const ALL_FERTILIZER_LAND_TYPES: FertilizerLandType[] = ['blue-crystal', ...DEFAULT_FERTILIZER_LAND_TYPES];
 const FERTILIZER_LAND_TYPE_SET: Set<string> = new Set(ALL_FERTILIZER_LAND_TYPES);
 const INTERVAL_MAX_SEC: number = 86400;
@@ -77,6 +78,9 @@ const DEFAULT_AUTO_CODE_REFRESH: AutoCodeRefreshConfig = {
 const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     automation: {
         ...RANCH_AUTOMATION_DEFAULTS,
+        ...AUTOMATION_MODULE_DEFAULTS,
+        ...FARM_DAILY_DEFAULTS,
+        ...MUGE_REWARD_DEFAULTS,
         farm: true,
         farm_harvest_tiangong: true,
         farm_push: true,
@@ -104,6 +108,7 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         fertilizer: 'none',
         fertilizer_multi_season: true,
         fertilizer_land_types: [...DEFAULT_FERTILIZER_LAND_TYPES],
+        fertilizer_land_strategies: {},
         fertilizer_smart_seconds: 300,
         skip_own_weed_bug: true,
         show_manual_fertilizer: true,
@@ -148,6 +153,7 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     fertilizerBuyNormalCount: 1,
     fertilizerBuyNormalThresholdHours: 10,
     fertilizerBuyCheckIntervalMinutes: 60,
+    fertilizerBuyNormalCheckIntervalMinutes: 60,
     emailClaimHour: 10,
     bagSeedPriority: [],
     bagSeedMultiLandReservationEnabled: false,
@@ -299,8 +305,13 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         : {} as Partial<AutomationConfig>;
     const automation: AutomationConfig = { ...DEFAULT_ACCOUNT_CONFIG.automation };
     for (const key of Object.keys(automation) as Array<keyof AutomationConfig>) {
+        if (key === 'ranch_activate_shed') continue;
         if (key === 'fertilizer_land_types') {
             automation[key] = normalizeFertilizerLandTypes(srcAutomation[key], DEFAULT_FERTILIZER_LAND_TYPES);
+            continue;
+        }
+        if (key === 'fertilizer_land_strategies') {
+            automation[key] = normalizeFertilizerLandStrategies(srcAutomation[key]);
             continue;
         }
         if (key === 'ranch_coop_cub_priority' || key === 'ranch_shed_cub_priority') {
@@ -341,6 +352,7 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
         fertilizerBuyNormalCount: Math.max(0, Math.min(10000, Number(base.fertilizerBuyNormalCount) || 0)),
         fertilizerBuyNormalThresholdHours: Math.max(0, Math.min(990, Number(base.fertilizerBuyNormalThresholdHours) || 0)),
         fertilizerBuyCheckIntervalMinutes: Math.max(1, Math.min(1440, Number(base.fertilizerBuyCheckIntervalMinutes) || 30)),
+        fertilizerBuyNormalCheckIntervalMinutes: Math.max(1, Math.min(1440, Number(base.fertilizerBuyNormalCheckIntervalMinutes ?? base.fertilizerBuyCheckIntervalMinutes) || 30)),
         emailClaimHour: normalizeEmailClaimHour(base.emailClaimHour, DEFAULT_ACCOUNT_CONFIG.emailClaimHour),
         bagSeedPriority: normalizeBagSeedPriority(base.bagSeedPriority),
         bagSeedMultiLandReservationEnabled: base.bagSeedMultiLandReservationEnabled !== undefined
@@ -362,9 +374,9 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
     const cfg = cloneAccountConfig(fallback || DEFAULT_ACCOUNT_CONFIG);
 
     if (src.automation && typeof src.automation === 'object') {
-        // 旧账号同时关闭补栏与金券升级时保留手动解锁。
-        if (src.automation.ranch_activate_shed === undefined && src.automation.ranch_upgrade === false && src.automation.ranch_buy === false) {
-            cfg.automation.ranch_activate_shed = false;
+        // 没有独立抚摸选项的旧配置沿用之前的偷取开关状态。
+        if (src.automation.ranch_stroke === undefined && typeof src.automation.ranch_friend_steal === 'boolean') {
+            cfg.automation.ranch_stroke = src.automation.ranch_friend_steal;
         }
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(src.automation))) {
             if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
@@ -372,6 +384,8 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
                 cfg.automation.fertilizer = normalizeFertilizerMode(v, cfg.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 cfg.automation.fertilizer_land_types = normalizeFertilizerLandTypes(v, cfg.automation.fertilizer_land_types);
+            } else if (k === 'fertilizer_land_strategies') {
+                cfg.automation.fertilizer_land_strategies = normalizeFertilizerLandStrategies(v);
             } else if (k.startsWith('ranch_')) {
                 (cfg.automation as any)[k] = normalizeRanchSetting(k, v);
             } else if (k === 'fertilizer_smart_seconds') {
@@ -468,6 +482,12 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
 
     if (src.fertilizerBuyCheckIntervalMinutes !== undefined && src.fertilizerBuyCheckIntervalMinutes !== null) {
         cfg.fertilizerBuyCheckIntervalMinutes = Math.max(1, Math.min(1440, Number(src.fertilizerBuyCheckIntervalMinutes) || 30));
+        // 旧配置只保存了两种化肥共用的间隔。
+        cfg.fertilizerBuyNormalCheckIntervalMinutes = cfg.fertilizerBuyCheckIntervalMinutes;
+    }
+
+    if (src.fertilizerBuyNormalCheckIntervalMinutes !== undefined && src.fertilizerBuyNormalCheckIntervalMinutes !== null) {
+        cfg.fertilizerBuyNormalCheckIntervalMinutes = Math.max(1, Math.min(1440, Number(src.fertilizerBuyNormalCheckIntervalMinutes) || 30));
     }
 
     if (src.emailClaimHour !== undefined && src.emailClaimHour !== null) {

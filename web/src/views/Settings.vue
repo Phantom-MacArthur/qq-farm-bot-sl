@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import type { AutoCodeRefreshConfig, OfflineConfig } from '@/stores/setting'
-import type { FeatureModuleKey } from '@/utils/account-feature-modules'
+import type { AutomationConfig, OfflineConfig, SettingsSavePayload } from '@/stores/setting'
+import type { BagPreferenceModule, FeatureModuleKey } from '@/utils/account-feature-modules'
 import { NModal } from 'naive-ui/es/modal'
 import { NTab } from 'naive-ui/es/tabs'
 import { storeToRefs } from 'pinia'
@@ -10,17 +10,15 @@ import api, { getApiErrorMessage } from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 import PageTabs from '@/components/PageTabs.vue'
-import PlantingStrategyPanel from '@/components/PlantingStrategyPanel.vue'
 import AccountFeatureSettings from '@/components/settings/AccountFeatureSettings.vue'
-import AutomationSettingsForm from '@/components/settings/AutomationSettingsForm.vue'
-import AutoCodeRefreshCard from '@/components/settings/AutoCodeRefreshCard.vue'
-import BagSeedPriorityItem from '@/components/settings/BagSeedPriorityItem.vue'
+import FarmSeedPriorityDialog from '@/components/settings/FarmSeedPriorityDialog.vue'
+import IllustratedPriorityPreview from '@/components/settings/IllustratedPriorityPreview.vue'
 import OfflineReminderCard from '@/components/settings/OfflineReminderCard.vue'
+import PlantingStrategyPanel from '@/components/settings/PlantingStrategyPanel.vue'
 import SettingsPanel from '@/components/settings/SettingsPanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
-import BaseSwitch from '@/components/ui/BaseSwitch.vue'
+import '@/components/settings/settings-surface.css'
 import OfflineState from '@/components/ui/OfflineState.vue'
 import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useAccountPresence } from '@/composables/useReconnectRefresh'
@@ -36,7 +34,7 @@ import {
   runAccountBatch,
   toggleSelectedAccountIds,
 } from '@/utils/account-bulk-actions'
-import { MODULE_SAVE_PARTS } from '@/utils/account-feature-modules'
+import { getModuleAutomation, MODULE_GATE_KEYS, wereActivityRewardSettingsSaved } from '@/utils/account-feature-modules'
 
 const fertilizerLandTypeOptions = [
   { label: '蓝晶土地', short: '蓝', value: 'blue-crystal' },
@@ -53,26 +51,14 @@ const accountStore = useAccountStore()
 const settingStore = useSettingStore()
 const statusStore = useStatusStore()
 
-type SettingsTab = 'account' | 'account-config' | 'ranch-config' | 'notification'
-const settingsTabKeys: SettingsTab[] = ['account', 'account-config', 'ranch-config', 'notification']
+type SettingsTab = 'account' | 'account-config' | 'notification'
+const settingsTabKeys: SettingsTab[] = ['account', 'account-config', 'notification']
 /** 旧地址（?tab=strategy / automation）统一落到合并后的常规设置页，避免书签失效。 */
 const LEGACY_SETTINGS_TABS: Record<string, SettingsTab> = {
   strategy: 'account-config',
   automation: 'account-config',
+  'ranch-config': 'account-config',
 }
-const isSystemSettingsPage = computed(() => route.name === 'SystemSettings')
-type SystemTab = 'refresh' | 'login' | 'environment'
-const activeSystemTab = ref<SystemTab>('refresh')
-const systemTabs = [
-  { key: 'refresh', label: '定时刷新', icon: 'i-carbon-time' },
-  { key: 'login', label: '登录设置', icon: 'i-carbon-login' },
-  { key: 'environment', label: '运行环境', icon: 'i-carbon-settings-adjust' },
-] as const
-function setActiveSystemTab(value: string) {
-  if (systemTabs.some(tab => tab.key === value))
-    activeSystemTab.value = value as SystemTab
-}
-
 function normalizeSettingsTab(value: string): SettingsTab | null {
   if (settingsTabKeys.includes(value as SettingsTab))
     return value as SettingsTab
@@ -80,8 +66,6 @@ function normalizeSettingsTab(value: string): SettingsTab | null {
 }
 
 function getInitialSettingsTab(): SettingsTab {
-  if (isSystemSettingsPage.value)
-    return 'account'
   const queryTab = normalizeSettingsTab(String(route.query.tab || ''))
   if (queryTab)
     return queryTab
@@ -92,7 +76,7 @@ function getInitialSettingsTab(): SettingsTab {
 const activeTab = ref<SettingsTab>(getInitialSettingsTab())
 
 watch(activeTab, (newTab) => {
-  if (isSystemSettingsPage.value)
+  if (route.name !== 'Settings')
     return
   localStorage.setItem('settings-active-tab', newTab)
   if (String(route.query.tab || '') !== newTab) {
@@ -102,16 +86,8 @@ watch(activeTab, (newTab) => {
   }
 })
 
-watch(() => route.name, async () => {
-  activeTab.value = getInitialSettingsTab()
-  if (isSystemSettingsPage.value)
-    await Promise.all([loadSystemConfig(), loadCaptureConfigSettings(), fetchAutoCodeRefresh()])
-  else if (currentAccountId.value && loadedAccountId.value !== currentAccountId.value)
-    await loadStrategyData(currentAccountId.value)
-})
-
 watch(() => route.query.tab, (value) => {
-  if (isSystemSettingsPage.value)
+  if (route.name !== 'Settings')
     return
   const nextTab = normalizeSettingsTab(String(value || ''))
   if (nextTab && nextTab !== activeTab.value)
@@ -120,8 +96,7 @@ watch(() => route.query.tab, (value) => {
 
 const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-profile' },
-  { key: 'account-config', label: '农场设置', icon: 'i-carbon-settings-adjust' },
-  { key: 'ranch-config', label: '牧场设置', icon: 'i-carbon-settings' },
+  { key: 'account-config', label: '助手设置', icon: 'i-carbon-settings-adjust' },
   { key: 'notification', label: '下线通知', icon: 'i-carbon-notification' },
 ] as const
 
@@ -281,11 +256,6 @@ function handleBatchCleanup() {
 
 onMounted(async () => {
   await accountStore.fetchAccounts()
-  if (isSystemSettingsPage.value) {
-    await Promise.all([loadSystemConfig(), loadCaptureConfigSettings(), fetchAutoCodeRefresh()])
-    await loadDevicePresets()
-    return
-  }
   if (!currentAccountId.value && accounts.value.length > 0 && accounts.value[0]) {
     accountStore.selectAccount(String(accounts.value[0].id))
   }
@@ -495,6 +465,7 @@ const plantingStrategyOptions = [
   { label: '最大净利润/时', value: 'max_profit' },
   { label: '最大普通肥净利润/时', value: 'max_fert_profit' },
   { label: '背包种子优先', value: 'bag_priority' },
+  { label: '图鉴优先（普通图鉴）', value: 'illustrated' },
 ]
 
 const BAG_FALLBACK_STRATEGY_OPTIONS = [
@@ -518,7 +489,6 @@ interface BagSeedItem {
 const bagSeeds = ref<BagSeedItem[]>([])
 const bagSeedsLoading = ref(false)
 const bagSeedsError = ref<string | null>(null)
-const draggingBagSeedId = ref<number | null>(null)
 
 const visibleBagSeedIds = computed(() => bagSeeds.value.map(seed => seed.seedId))
 
@@ -575,6 +545,8 @@ const sortedBagSeeds = computed(() => {
 })
 
 function setBagSeedLandTypes(seedId: number, types: string[]) {
+  if (strategySaving.value)
+    return
   const next = { ...localStrategySettings.value.bagSeedLandTypes }
   // 按固定顺序收敛；不勾或勾满都等价于不限制，直接去掉该 seedId。
   const normalized = fertilizerLandTypeOptions
@@ -686,10 +658,6 @@ async function fetchBagSeeds(accountId = currentAccountId.value) {
   }
 }
 
-function materializeVisibleBagSeedOrder() {
-  return normalizeVisibleBagSeedOrder()
-}
-
 function saveVisibleBagSeedOrder(visibleOrder: number[]) {
   bagSortRequestRevision++
   localStrategySettings.value.bagSeedPriority = mergeVisibleBagSeedOrder(visibleOrder)
@@ -755,7 +723,7 @@ async function ensureBagSeedsForUserSort(accountId: string) {
 async function handleBagFallbackStrategyChange(value: string | number) {
   const accountId = currentAccountId.value
   const strategy = String(value)
-  if (!accountId)
+  if (!accountId || localStrategySettings.value.plantingStrategy === 'illustrated')
     return
   await ensureBagSeedsForUserSort(accountId)
   if (accountId === currentAccountId.value && localStrategySettings.value.bagSeedFallbackStrategy === strategy)
@@ -771,62 +739,9 @@ async function handlePreferredSeedChange() {
     await sortBagSeedsByFallbackStrategy('preferred', accountId)
 }
 
-function toTopBagSeed(seedId: number) {
-  const nextOrder = materializeVisibleBagSeedOrder()
-  const index = nextOrder.indexOf(seedId)
-  if (index <= 0)
-    return
-  nextOrder.splice(index, 1)
-  nextOrder.unshift(seedId)
-  saveVisibleBagSeedOrder(nextOrder)
-}
-
-function startBagSeedDrag(seedId: number, event: DragEvent) {
-  materializeVisibleBagSeedOrder()
-  draggingBagSeedId.value = seedId
-  if (event.dataTransfer) {
-    event.dataTransfer.effectAllowed = 'move'
-    event.dataTransfer.setData('text/plain', String(seedId))
-  }
-}
-
-function endBagSeedDrag() {
-  draggingBagSeedId.value = null
-}
-
-function dragOverBagSeed(_seedId: number, event: DragEvent) {
-  if (draggingBagSeedId.value === null)
-    return
-  event.preventDefault()
-  if (event.dataTransfer)
-    event.dataTransfer.dropEffect = 'move'
-}
-
-function dropBagSeed(seedId: number, event: DragEvent) {
-  event.preventDefault()
-  const sourceSeedId = draggingBagSeedId.value ?? Number(event.dataTransfer?.getData('text/plain') || '')
-  if (!sourceSeedId || sourceSeedId === seedId) {
-    endBagSeedDrag()
-    return
-  }
-
-  const nextOrder = materializeVisibleBagSeedOrder()
-  const sourceIndex = nextOrder.indexOf(sourceSeedId)
-  const targetIndex = nextOrder.indexOf(seedId)
-  if (sourceIndex < 0 || targetIndex < 0) {
-    endBagSeedDrag()
-    return
-  }
-
-  // 与目标直接交换位置（origin 同款拖拽语义），避免“插入到目标之前”导致向右拖动时几乎不换位的观感。
-  const source = nextOrder[sourceIndex]!
-  nextOrder[sourceIndex] = nextOrder[targetIndex]!
-  nextOrder[targetIndex] = source
-  saveVisibleBagSeedOrder(nextOrder)
-  endBagSeedDrag()
-}
-
 watch(() => [localStrategySettings.value.plantingStrategy, currentAccountId.value] as const, ([strategy, accountId], previous) => {
+  if (strategy === 'bag_priority' && localStrategySettings.value.bagSeedFallbackStrategy === 'bag_priority')
+    localStrategySettings.value.bagSeedFallbackStrategy = 'level'
   if (
     strategy === 'bag_priority'
     && accountId
@@ -850,6 +765,17 @@ const preferredSeedOptions = computed(() => {
 const strategyPreviewLabel = ref<string | null>(null)
 // 「策略预览」弹窗：展示各策略下当前等级可种的最优作物（与已删除的分析页同源）
 const strategyPreviewVisible = ref(false)
+const bagSeedsDialogVisible = ref(false)
+function openBagSeedsDialog() {
+  bagSeedsDialogVisible.value = true
+  bagSeedsLoadedAccountId = ''
+  void fetchBagSeeds()
+}
+
+async function saveBagSeedsDialog(save: (module: BagPreferenceModule) => Promise<boolean>) {
+  if (await save('planting'))
+    bagSeedsDialogVisible.value = false
+}
 
 watch(() => [
   localStrategySettings.value.plantingStrategy,
@@ -865,8 +791,12 @@ watch(() => [
     strategyPreviewLabel.value = null
     return
   }
-  if (strategy === 'bag_priority') {
+  if (strategy === 'bag_priority' || strategy === 'illustrated') {
     strategy = fallbackStrategy || 'level'
+    if (strategy === 'bag_priority') {
+      strategyPreviewLabel.value = '按背包优先顺序安排'
+      return
+    }
     if (strategy === 'preferred') {
       const seed = preferredSeedId > 0 ? currentSeeds.find(item => item.seedId === preferredSeedId) : undefined
       strategyPreviewLabel.value = seed ? `${seed.requiredLevel}级 ${seed.name}` : '未选择优先种子'
@@ -949,7 +879,6 @@ async function loadStrategyData(accountId = currentAccountId.value) {
 watch(currentAccountId, (accountId) => {
   strategySaving.value = false
   automationSaving.value = false
-  draggingBagSeedId.value = null
   bagSeeds.value = []
   bagSeedsLoading.value = false
   bagSeedsError.value = null
@@ -962,6 +891,7 @@ watch(currentAccountId, (accountId) => {
   bagSeedsRequestAccountId = ''
   bagSeedsLoadedAccountId = ''
   strategyPreviewLabel.value = null
+  bagSeedsDialogVisible.value = false
   if (accountId)
     loadStrategyData(accountId)
 })
@@ -1022,6 +952,7 @@ const localAutomationSettings = ref({
     mystery_shop_arrival_notify: false,
     mystery_shop_purchase_notify: false,
     mall_coupon_gift_buy: false,
+    ranch_coupon_gift_buy: false,
     fertilizer: 'normal',
     skip_own_weed_bug: false,
     fertilizer_multi_season: false,
@@ -1034,20 +965,16 @@ const localAutomationSettings = ref({
   fertilizerBuyNormalCount: 10,
   fertilizerBuyNormalThresholdHours: 10,
   fertilizerBuyCheckIntervalMinutes: 30,
+  fertilizerBuyNormalCheckIntervalMinutes: 30,
   emailClaimHour: 10 as number | string,
   autoAcceptFriendMinLevel: 0,
   autoAcceptRequireOwnLevel: false,
 })
 
 const currentAccountConnected = computed(() => !!currentAccountId.value && isAccountConnected(currentAccountId.value))
-const ranchModel = ref<any>({ automation: {} })
-const ranchSaving = ref(false)
 const ranchAnimalOptions = ref<Array<{ value: number, label: string, kind: string }>>([])
 const ranchAnimalOptionsLoading = ref(false)
 const ranchAnimalOptionsError = ref('')
-watch(settings, value => {
-  ranchModel.value = value ? JSON.parse(JSON.stringify(value)) : { automation: {} }
-}, { immediate: true })
 async function loadRanchAnimalOptions(accountId = currentAccountId.value) {
   if (!accountId)
     return
@@ -1055,7 +982,7 @@ async function loadRanchAnimalOptions(accountId = currentAccountId.value) {
   ranchAnimalOptions.value = []
   ranchAnimalOptionsError.value = ''
   try {
-    const { data } = await api.get('/api/ranch/automation-options', { skipErrorToast: true } as any)
+    const { data } = await api.get('/api/ranch/automation-options', { headers: { 'x-account-id': accountId }, skipErrorToast: true } as any)
     if (accountId === currentAccountId.value) {
       if (data?.ok && Array.isArray(data.data))
         ranchAnimalOptions.value = data.data
@@ -1072,41 +999,20 @@ async function loadRanchAnimalOptions(accountId = currentAccountId.value) {
       ranchAnimalOptionsLoading.value = false
   }
 }
-watch(currentAccountId, (accountId) => {
-  ranchModel.value = { automation: {} }
+watch(currentAccountId, () => {
   ranchAnimalOptions.value = []
-  void loadRanchAnimalOptions(accountId)
-}, { immediate: true })
-async function saveRanchSettings() {
-  const accountId = currentAccountId.value
-  if (!accountId || !settings.value)
-    return
-  ranchSaving.value = true
-  try {
-    const auto = ranchModel.value.automation || {}
-    if ((auto.ranch_strategy === 'preferred' || auto.ranch_strategy === 'bag_priority' && auto.ranch_bag_fallback === 'preferred') && !ranchAnimalOptions.value.length) {
-      showAlert('请先加载牧场动物选项', 'danger')
-      return
-    }
-    const ranch = Object.fromEntries(Object.entries(auto).filter(([key]) => key.startsWith('ranch_')))
-    const result = await settingStore.saveSettings(accountId, { automation: { ...settings.value.automation, ...ranch } })
-    if (!result.ok)
-      showAlert(result.error || '牧场设置保存失败', 'danger')
-    if (result.ok && accountId === currentAccountId.value) {
-      ranchModel.value = JSON.parse(JSON.stringify(settings.value))
-      showAlert('牧场设置已保存')
-    }
-  }
-  finally {
-    ranchSaving.value = false
-  }
-}
+  ranchAnimalOptionsError.value = ''
+  ranchAnimalOptionsLoading.value = false
+})
+
 
 const fertilizerOptions = [
   { label: '普通 + 有机', value: 'both' },
   { label: '普通 + 快成熟有机', value: 'smart' },
   { label: '仅普通化肥', value: 'normal' },
   { label: '仅有机化肥', value: 'organic' },
+  { label: '快成熟时施普通化肥', value: 'normal_ripen' },
+  { label: '快成熟时施有机化肥', value: 'organic_ripen' },
   { label: '不施肥', value: 'none' },
 ]
 
@@ -1138,6 +1044,7 @@ function syncLocalAutomationSettings() {
         mystery_shop_arrival_notify: false,
         mystery_shop_purchase_notify: false,
         mall_coupon_gift_buy: false,
+        ranch_coupon_gift_buy: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -1172,6 +1079,7 @@ function syncLocalAutomationSettings() {
         mystery_shop_arrival_notify: false,
         mystery_shop_purchase_notify: false,
         mall_coupon_gift_buy: false,
+        ranch_coupon_gift_buy: false,
         fertilizer: 'none',
         skip_own_weed_bug: false,
         fertilizer_multi_season: false,
@@ -1196,6 +1104,7 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.fertilizerBuyNormalCount = settings.value.fertilizerBuyNormalCount ?? 10
     localAutomationSettings.value.fertilizerBuyNormalThresholdHours = settings.value.fertilizerBuyNormalThresholdHours ?? 10
     localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes = settings.value.fertilizerBuyCheckIntervalMinutes ?? 30
+    localAutomationSettings.value.fertilizerBuyNormalCheckIntervalMinutes = settings.value.fertilizerBuyNormalCheckIntervalMinutes ?? localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes
     localAutomationSettings.value.emailClaimHour = settings.value.emailClaimHour
     localAutomationSettings.value.autoAcceptFriendMinLevel = settings.value.autoAcceptFriendMinLevel ?? 0
     localAutomationSettings.value.autoAcceptRequireOwnLevel = settings.value.autoAcceptRequireOwnLevel ?? false
@@ -1205,65 +1114,137 @@ function syncLocalAutomationSettings() {
 // ==================== 常规设置（模块卡） ====================
 // 模块卡的开关状态、草稿回滚都由 AccountFeatureSettings 自己基于两个 model 计算，
 // 页面只负责按模块把本地设置写回后端。
-function buildModuleSavePayload(module: FeatureModuleKey) {
-  const payload: Record<string, unknown> = {}
-  for (const part of MODULE_SAVE_PARTS[module]) {
-    if (part === 'strategy')
-      Object.assign(payload, JSON.parse(JSON.stringify(localStrategySettings.value)))
-    else
-      Object.assign(payload, JSON.parse(JSON.stringify(localAutomationSettings.value)))
+function buildModuleSavePayload(module: FeatureModuleKey, gateOnly: boolean): SettingsSavePayload {
+  const strategy = localStrategySettings.value
+  const automation = localAutomationSettings.value
+  const payload: SettingsSavePayload = { automation: getModuleAutomation(module, automation.automation, gateOnly) }
+  if (gateOnly)
+    return payload
+
+  if (module === 'planting') {
+    const { farmMin, farmMax } = strategy.intervals
+    Object.assign(payload, {
+      plantingStrategy: strategy.plantingStrategy,
+      preferredSeedId: strategy.preferredSeedId,
+      bagSeedPriority: strategy.bagSeedPriority,
+      bagSeedLandTypes: strategy.bagSeedLandTypes,
+      bagSeedFallbackStrategy: strategy.bagSeedFallbackStrategy,
+      bagSeedMultiLandReservationEnabled: strategy.bagSeedMultiLandReservationEnabled,
+      intervals: { farmMin, farmMax },
+      plantDelaySeconds: 0,
+    })
   }
-  // 化肥购买参数是顶层字段，弹窗里任意模块都可能触碰，随每次模块保存一起写回，
-  // 避免只保存 automation 分组的模块丢失这些草稿。
-  if (payload.automation) {
-    payload.fertilizerBuyOrganicCount = localAutomationSettings.value.fertilizerBuyOrganicCount
-    payload.fertilizerBuyOrganicThresholdHours = localAutomationSettings.value.fertilizerBuyOrganicThresholdHours
-    payload.fertilizerBuyNormalCount = localAutomationSettings.value.fertilizerBuyNormalCount
-    payload.fertilizerBuyNormalThresholdHours = localAutomationSettings.value.fertilizerBuyNormalThresholdHours
-    payload.fertilizerBuyCheckIntervalMinutes = localAutomationSettings.value.fertilizerBuyCheckIntervalMinutes
+  else if (module === 'friends') {
+    const { friendMin, friendMax } = strategy.intervals
+    Object.assign(payload, {
+      intervals: { friendMin, friendMax },
+      friendQuietHours: strategy.friendQuietHours,
+      stealDelaySeconds: strategy.stealDelaySeconds,
+      autoAcceptFriendMinLevel: automation.autoAcceptFriendMinLevel,
+      autoAcceptRequireOwnLevel: automation.autoAcceptRequireOwnLevel,
+    })
+  }
+  else if (module === 'fertilizer') {
+    Object.assign(payload, {
+      fertilizerBuyOrganicCount: automation.fertilizerBuyOrganicCount,
+      fertilizerBuyOrganicThresholdHours: automation.fertilizerBuyOrganicThresholdHours,
+      fertilizerBuyNormalCount: automation.fertilizerBuyNormalCount,
+      fertilizerBuyNormalThresholdHours: automation.fertilizerBuyNormalThresholdHours,
+      fertilizerBuyCheckIntervalMinutes: automation.fertilizerBuyCheckIntervalMinutes,
+      fertilizerBuyNormalCheckIntervalMinutes: automation.fertilizerBuyNormalCheckIntervalMinutes,
+    })
+    payload.automation!.fertilizer_land_types = normalizeFertilizerLandTypes(automation.automation.fertilizer_land_types)
   }
   return payload
 }
 
-async function saveFeatureModule(module: FeatureModuleKey) {
+async function saveBagPreferences(module: BagPreferenceModule): Promise<boolean> {
   const accountId = currentAccountId.value
-  if (!accountId || !settings.value)
-    return
+  if (!accountId || accountId !== loadedAccountId.value || strategySaving.value || automationSaving.value)
+    return false
+
+  const strategy = localStrategySettings.value
+  const auto: AutomationConfig = localAutomationSettings.value.automation
+  const payload: SettingsSavePayload = module === 'planting'
+    ? { bagSeedPriority: mergeVisibleBagSeedOrder(strategy.bagSeedPriority), bagSeedLandTypes: strategy.bagSeedLandTypes }
+    : { automation: { ranch_coop_cub_priority: auto.ranch_coop_cub_priority ?? [], ranch_shed_cub_priority: auto.ranch_shed_cub_priority ?? [] } }
+
+  if (module === 'planting')
+    bagSortRequestRevision++
   automationSaving.value = strategySaving.value = true
   try {
-    const payload = buildModuleSavePayload(module)
-    if (module === 'planting') {
-      // 种植延迟已从界面下线，保存种植模块时强制归零（秒种）。
-      payload.plantDelaySeconds = 0
-      if (payload.plantingStrategy === 'bag_priority') {
-        bagSortRequestRevision++
-        payload.bagSeedPriority = mergeVisibleBagSeedOrder(normalizeVisibleBagSeedOrder(payload.bagSeedPriority as number[]))
-      }
+    const res = await settingStore.saveSettings(accountId, payload)
+    if (accountId !== currentAccountId.value)
+      return false
+    if (!res.ok && !res.saved) {
+      showAlert(`保存失败：${res.error}`, 'danger')
+      return false
     }
-    const currentAutomation = (payload.automation as Record<string, any> | undefined) || {}
-    payload.automation = {
-      ...currentAutomation,
-      fertilizer_land_types: normalizeFertilizerLandTypes(currentAutomation.fertilizer_land_types),
+
+    if (module === 'planting') {
+      strategy.bagSeedPriority = [...settings.value.bagSeedPriority]
+      strategy.bagSeedLandTypes = { ...settings.value.bagSeedLandTypes }
+    }
+    else {
+      auto.ranch_coop_cub_priority = [...(settings.value.automation.ranch_coop_cub_priority ?? [])]
+      auto.ranch_shed_cub_priority = [...(settings.value.automation.ranch_shed_cub_priority ?? [])]
+    }
+    showAlert(res.ok ? '设置已保存' : '设置已保存，但运行进程尚未确认应用')
+    return true
+  }
+  finally {
+    if (accountId === currentAccountId.value)
+      automationSaving.value = strategySaving.value = false
+  }
+}
+
+async function saveFeatureModule(module: FeatureModuleKey, gateOnly = false): Promise<boolean> {
+  const accountId = currentAccountId.value
+  if (!accountId || accountId !== loadedAccountId.value || !settings.value || strategySaving.value || automationSaving.value)
+    return false
+  const currentAutomation = localAutomationSettings.value.automation
+  if (!gateOnly && module === 'ranchProduction') {
+    const draft = getModuleAutomation(module, currentAutomation)
+    const requiresAnimals = draft.ranch_strategy === 'preferred'
+      || ['bag_priority', 'illustrated'].includes(String(draft.ranch_strategy)) && draft.ranch_bag_fallback === 'preferred'
+    const saved = settings.value.automation
+    const changedAnimalChoice = ['ranch_strategy', 'ranch_bag_fallback', 'ranch_coop_animal', 'ranch_shed_animal']
+      .some(key => draft[key] !== (saved as Record<string, unknown>)[key])
+    if (requiresAnimals && changedAnimalChoice && !ranchAnimalOptions.value.length) {
+      showAlert('请先加载牧场动物选项', 'danger')
+      return false
+    }
+  }
+  automationSaving.value = strategySaving.value = true
+  try {
+    const payload = buildModuleSavePayload(module, gateOnly)
+    if (!gateOnly && module === 'planting' && (payload.plantingStrategy === 'bag_priority' || payload.bagSeedFallbackStrategy === 'bag_priority')) {
+      bagSortRequestRevision++
+      payload.bagSeedPriority = mergeVisibleBagSeedOrder(normalizeVisibleBagSeedOrder(payload.bagSeedPriority))
     }
     const res = await settingStore.saveSettings(accountId, payload)
     if (accountId !== currentAccountId.value)
-      return
-    if (res.ok) {
+      return false
+    if (res.ok || res.saved) {
+      if (module === 'activity' && !wereActivityRewardSettingsSaved(payload.automation, res.data?.automation)) {
+        showAlert('后端未保存奖励开关，请更新并重启后端后重试', 'danger')
+        return false
+      }
       syncLocalStrategySettings()
       syncLocalAutomationSettings()
-      if (isAccountConnected(accountId))
+      if (res.ok && !gateOnly && module === 'planting' && isAccountConnected(accountId))
         await fetchSeedOptions(accountId)
       // 开启了自动补肥时，与原自动控制页一样立即触发一次检测购买。
-      const auto = (payload.automation as Record<string, any>) || {}
-      if (auto.fertilizer_buy_organic || auto.fertilizer_buy_normal) {
+      const auto = settings.value.automation
+      if (res.ok && module === 'fertilizer' && auto[MODULE_GATE_KEYS.fertilizer] !== false && (auto.fertilizer_buy_organic || auto.fertilizer_buy_normal) && isAccountConnected(accountId)) {
         try {
           const buyRes = await api.post('/api/fertilizer/check-and-buy', {
             buyOrganic: !!auto.fertilizer_buy_organic,
             buyNormal: !!auto.fertilizer_buy_normal,
-            organicCount: payload.fertilizerBuyOrganicCount,
-            organicThresholdHours: payload.fertilizerBuyOrganicThresholdHours,
-            normalCount: payload.fertilizerBuyNormalCount,
-            normalThresholdHours: payload.fertilizerBuyNormalThresholdHours,
+            organicCount: settings.value.fertilizerBuyOrganicCount,
+            organicThresholdHours: settings.value.fertilizerBuyOrganicThresholdHours,
+            normalCount: settings.value.fertilizerBuyNormalCount,
+            normalThresholdHours: settings.value.fertilizerBuyNormalThresholdHours,
           }, {
             headers: { 'x-account-id': accountId },
           })
@@ -1277,14 +1258,14 @@ async function saveFeatureModule(module: FeatureModuleKey) {
           console.error('检测购买化肥失败', e)
         }
       }
-      showAlert('设置已保存', 'primary')
+      if (accountId === currentAccountId.value) {
+        const message = res.ok ? '设置已保存' : '设置已保存，但运行进程尚未确认应用'
+        showAlert(message, 'primary')
+      }
+      return true
     }
-    else {
-      const message = res.unconfirmed && res.saved
-        ? `设置已保存，但运行进程尚未确认应用：${res.error || '请稍后重试或重启账号'}`
-        : `保存失败: ${res.error}`
-      showAlert(message, res.unconfirmed && res.saved ? 'primary' : 'danger')
-    }
+    showAlert(`保存失败: ${res.error}`, 'danger')
+    return false
   }
   finally {
     if (accountId === currentAccountId.value)
@@ -1454,292 +1435,6 @@ async function handleTestOffline() {
   }
 }
 
-const systemConfigSaving = ref(false)
-const systemConfigLoading = ref(false)
-const loginSettingsSaving = ref(false)
-
-// ===== 抓包登录配置（对接 /api/settings/capture-config） =====
-const captureConfigTesting = ref(false)
-const localCaptureConfig = ref({
-  enabled: false,
-  autoImportQqGids: true,
-  embedded: false,
-  running: false,
-})
-
-function normalizeCaptureConfig(source: any) {
-  return {
-    enabled: source?.enabled === true,
-    autoImportQqGids: source?.autoImportQqGids !== false,
-    embedded: source?.embedded === true,
-    running: source?.running === true,
-  }
-}
-
-async function loadCaptureConfigSettings() {
-  try {
-    const { data } = await api.get('/api/settings/capture-config')
-    if (data?.ok)
-      localCaptureConfig.value = normalizeCaptureConfig(data.data)
-  }
-  catch (e) {
-    console.error('加载抓包登录配置失败:', e)
-  }
-}
-
-async function handleTestCaptureConfig() {
-  captureConfigTesting.value = true
-  try {
-    const { data } = await api.post('/api/settings/capture-config/test')
-    if (data?.ok) {
-      const d = data.data || {}
-      showAlert(`抓包内核自检通过：会话 ${d.sessions || 0}，端口池 ${d.portPoolSize || 0}，代理端口 ${d.proxyPort || '-'}`, 'primary')
-    }
-    else {
-      showAlert(getApiErrorMessage(data, '自检失败'), 'danger')
-    }
-  }
-  catch (e: any) {
-    showAlert(`自检失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
-  }
-  finally {
-    captureConfigTesting.value = false
-  }
-}
-
-// ==================== 微信 code 定时刷新 ====================
-const localAutoCodeRefresh = ref<AutoCodeRefreshConfig>({ enabled: true, intervalMinutes: 2, maxRetries: 8 })
-const autoCodeRefreshSaving = ref(false)
-
-async function fetchAutoCodeRefresh() {
-  const result = await settingStore.fetchAutoCodeRefresh()
-  if (!result.ok) {
-    showAlert(`读取刷新设置失败: ${result.error || '未知错误'}`, 'danger')
-    return
-  }
-  localAutoCodeRefresh.value = { ...settingStore.autoCodeRefresh }
-}
-
-async function saveAutoCodeRefreshSettings() {
-  if (autoCodeRefreshSaving.value)
-    return
-  autoCodeRefreshSaving.value = true
-  try {
-    localAutoCodeRefresh.value.intervalMinutes = Math.max(1, Math.min(1440, Math.round(Number(localAutoCodeRefresh.value.intervalMinutes) || 2)))
-    localAutoCodeRefresh.value.maxRetries = Math.max(1, Math.min(100, Math.round(Number(localAutoCodeRefresh.value.maxRetries) || 8)))
-    const result = await settingStore.saveAutoCodeRefresh(localAutoCodeRefresh.value)
-    if (!result.ok)
-      throw new Error(result.error || '保存失败')
-    showAlert('微信code定时刷新设置已保存')
-  }
-  catch (error: any) {
-    showAlert(error.response?.data?.error || error.message || '刷新设置保存失败', 'danger')
-  }
-  finally {
-    autoCodeRefreshSaving.value = false
-  }
-}
-
-// “立即刷新”入口已从设置卡片中移除；取码仍由账号启动前的 settingStore.runAutoCodeRefresh(id)
-// 和定时调度负责，两处共用同一个 store 方法，这里不再包一层只给当前账号手动触发。
-
-const defaultDeviceInfo = {
-  os: 'Windows',
-  clientVersion: '',
-  sysSoftware: 'Windows 10',
-  network: 'wifi',
-  memory: '16384',
-  deviceId: 'DESKTOP-PC<WPC>',
-  userAgent: '',
-}
-
-const localSystemConfig = ref({
-  serverUrl: '',
-  clientVersion: '',
-  wxClientVersion: '',
-  platform: 'qq',
-  os: 'Windows',
-  timeZone: 'Asia/Shanghai',
-  deviceInfo: { ...defaultDeviceInfo },
-})
-const defaultSystemConfig = ref({
-  serverUrl: '',
-  clientVersion: '',
-  wxClientVersion: '',
-  platform: 'qq',
-  os: 'Windows',
-  timeZone: 'Asia/Shanghai',
-  deviceInfo: { ...defaultDeviceInfo },
-})
-const localLoginSettings = ref({
-  wechatQrLogin: true,
-  qqQrLogin: false,
-  napCatEndpoint: '',
-  napCatSignature: '',
-})
-const devicePresets = ref<any[]>([])
-const selectedPresetId = ref<string | number>('')
-const devicePresetOptions = computed(() => devicePresets.value.map(item => ({ label: item.name, value: item.id })))
-const timeZoneOptions = ref([
-  { label: '北京时间 / 上海（UTC+8）', value: 'Asia/Shanghai' },
-])
-const platformOptions = [
-  { label: 'QQ', value: 'qq' },
-  { label: '微信', value: 'wx' },
-]
-const osOptions = [
-  { label: 'Windows', value: 'Windows' },
-  { label: 'iOS', value: 'iOS' },
-  { label: 'Android', value: 'Android' },
-]
-
-function normalizeSystemConfig(source: any, fallback: any) {
-  return {
-    serverUrl: source?.serverUrl || '',
-    clientVersion: source?.clientVersion || '',
-    wxClientVersion: source?.wxClientVersion || fallback.wxClientVersion || '',
-    platform: source?.platform || 'qq',
-    os: source?.os || 'Windows',
-    timeZone: source?.timeZone || fallback.timeZone || 'Asia/Shanghai',
-    deviceInfo: source?.deviceInfo ? { ...fallback.deviceInfo, ...source.deviceInfo } : { ...fallback.deviceInfo },
-  }
-}
-
-function normalizeLoginSettings(source: any) {
-  return {
-    wechatQrLogin: typeof source?.wechatQrLogin === 'boolean' ? source.wechatQrLogin : true,
-    qqQrLogin: typeof source?.qqQrLogin === 'boolean' ? source.qqQrLogin : false,
-    napCatEndpoint: typeof source?.napCatEndpoint === 'string' ? source.napCatEndpoint.trim() : '',
-    napCatSignature: typeof source?.napCatSignature === 'string' ? source.napCatSignature.trim() : '',
-  }
-}
-
-async function loadDevicePresets() {
-  try {
-    const { data } = await api.get('/api/settings/device-presets')
-    if (data?.ok && Array.isArray(data.data)) {
-      devicePresets.value = data.data
-      if (devicePresets.value[0])
-        applyDevicePreset(devicePresets.value[0].id)
-    }
-  }
-  catch (e) {
-    console.error('加载设备预设失败:', e)
-  }
-}
-
-function applyDevicePreset(presetId: string | number) {
-  const preset = devicePresets.value.find(item => item.id === presetId)
-  if (!preset)
-    return
-  const deviceInfo = { ...defaultDeviceInfo, ...(preset.deviceInfo || {}) }
-  localSystemConfig.value = {
-    ...localSystemConfig.value,
-    platform: 'wx',
-    os: deviceInfo.os || 'Windows',
-    clientVersion: deviceInfo.clientVersion || '',
-    deviceInfo,
-  }
-  selectedPresetId.value = presetId
-}
-
-async function loadSystemConfig() {
-  systemConfigLoading.value = true
-  try {
-    const { data } = await api.get('/api/settings/system-config')
-    if (data?.ok) {
-      if (Array.isArray(data.data.timeZones) && data.data.timeZones.length) {
-        timeZoneOptions.value = data.data.timeZones.map((option: any) => ({
-          label: String(option.label || option.value || ''),
-          value: String(option.value || 'Asia/Shanghai'),
-        }))
-      }
-      defaultSystemConfig.value = normalizeSystemConfig(data.data.default, defaultSystemConfig.value)
-      localSystemConfig.value = normalizeSystemConfig(data.data.saved || data.data.default, defaultSystemConfig.value)
-      localLoginSettings.value = normalizeLoginSettings(data.data.loginSettings)
-    }
-  }
-  catch (e) {
-    console.error('加载系统配置失败:', e)
-  }
-  finally {
-    systemConfigLoading.value = false
-  }
-}
-
-async function handleSaveLoginSettings() {
-  if (localLoginSettings.value.qqQrLogin
-    && (!localLoginSettings.value.napCatEndpoint.trim() || !localLoginSettings.value.napCatSignature.trim())) {
-    showAlert('开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名', 'danger')
-    return
-  }
-  loginSettingsSaving.value = true
-  let loginSaved = false
-  try {
-    const { data: loginResult } = await api.post('/api/settings/login-config', localLoginSettings.value)
-    if (!loginResult?.ok) {
-      showAlert(getApiErrorMessage(loginResult, '保存登录设置失败'), 'danger')
-      return
-    }
-    localLoginSettings.value = normalizeLoginSettings(loginResult.data)
-    loginSaved = true
-    const { data: captureResult } = await api.post('/api/settings/capture-config', {
-      enabled: localCaptureConfig.value.enabled,
-      autoImportQqGids: localCaptureConfig.value.autoImportQqGids,
-    })
-    if (!captureResult?.ok) {
-      showAlert(`登录设置已保存，抓包设置保存失败: ${getApiErrorMessage(captureResult, '未知错误')}`, 'danger')
-      return
-    }
-    localCaptureConfig.value = normalizeCaptureConfig(captureResult.data)
-    showAlert('登录设置与抓包设置已保存', 'primary')
-  }
-  catch (e: any) {
-    showAlert(`${loginSaved ? '登录设置已保存，抓包设置保存失败' : '保存失败'}: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
-  }
-  finally {
-    loginSettingsSaving.value = false
-  }
-}
-
-async function handleSaveSystemConfig() {
-  systemConfigSaving.value = true
-  try {
-    localSystemConfig.value.clientVersion = localSystemConfig.value.deviceInfo.clientVersion
-    localSystemConfig.value.os = localSystemConfig.value.deviceInfo.os
-    const { data } = await api.post('/api/settings/system-config', localSystemConfig.value)
-    showAlert(data?.ok ? '系统配置已保存，连接参数在下次登录时生效' : getApiErrorMessage(data, '保存失败'), data?.ok ? 'primary' : 'danger')
-  }
-  catch (e: any) {
-    showAlert(`保存失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
-  }
-  finally {
-    systemConfigSaving.value = false
-  }
-}
-
-async function handleResetSystemConfig() {
-  systemConfigSaving.value = true
-  try {
-    const { data } = await api.post('/api/settings/system-config/reset')
-    if (data?.ok) {
-      localSystemConfig.value = normalizeSystemConfig(data.data.saved, defaultSystemConfig.value)
-      if (devicePresets.value[0])
-        applyDevicePreset(devicePresets.value[0].id)
-      showAlert('系统配置已重置，连接参数在下次登录时生效', 'primary')
-    }
-    else {
-      showAlert(getApiErrorMessage(data, '重置失败'), 'danger')
-    }
-  }
-  catch (e: any) {
-    showAlert(`重置失败: ${getApiErrorMessage(e, '未知错误')}`, 'danger')
-  }
-  finally {
-    systemConfigSaving.value = false
-  }
-}
-
 // ==================== 默认方案 ====================
 type DefaultPlanAction = 'set' | 'apply' | 'reset'
 const defaultPlanSaving = ref<'' | DefaultPlanAction>('')
@@ -1823,16 +1518,8 @@ async function confirmDefaultPlanOperation() {
 <template>
   <div class="settings-page page-stack">
     <div class="settings-content panel-fill">
-      <PageTabs v-if="!isSystemSettingsPage" :value="activeTab" @update:value="setActiveTab">
+      <PageTabs :value="activeTab" @update:value="setActiveTab">
         <NTab v-for="tab in tabs" :key="tab.key" :name="tab.key">
-          <span class="inline-flex items-center gap-2">
-            <span :class="tab.icon" />
-            {{ tab.label }}
-          </span>
-        </NTab>
-      </PageTabs>
-      <PageTabs v-else-if="isSystemSettingsPage" :value="activeSystemTab" @update:value="setActiveSystemTab">
-        <NTab v-for="tab in systemTabs" :key="tab.key" :name="tab.key">
           <span class="inline-flex items-center gap-2">
             <span :class="tab.icon" />
             {{ tab.label }}
@@ -1842,7 +1529,7 @@ async function confirmDefaultPlanOperation() {
 
       <div class="settings-body panel-fill">
         <!-- 账号管理 -->
-        <div v-if="!isSystemSettingsPage && activeTab === 'account'" class="account-panel page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+        <div v-if="activeTab === 'account'" class="account-panel page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
           <div class="account-toolbar panel-titlebar margin-shell"><span class="margin-content">
             <div class="account-actions">
               <template v-if="!selectionMode">
@@ -2085,7 +1772,7 @@ async function confirmDefaultPlanOperation() {
         </span></div>
 
         <!-- 常规设置 -->
-        <div v-else-if="!isSystemSettingsPage && activeTab === 'account-config'" class="space-y-4 panel-fill">
+        <div v-else-if="activeTab === 'account-config'" class="space-y-3 panel-fill">
           <SettingsPanel>
             <BaseButton
               variant="secondary"
@@ -2116,7 +1803,7 @@ async function confirmDefaultPlanOperation() {
             </BaseButton>
 
             <template #body>
-              <div v-if="settingsLoading" class="py-4 text-center text-gray-500">
+              <div v-if="settingsLoading && loadedAccountId !== currentAccountId" class="py-4 text-center text-gray-500">
                 <span class="i-carbon-circle-dash mx-auto mb-2 inline-block animate-spin text-2xl" />
                 <p>加载中...</p>
               </div>
@@ -2128,19 +1815,26 @@ async function confirmDefaultPlanOperation() {
 
               <AccountFeatureSettings
                 v-else
+                :key="currentAccountId"
+                :account-id="currentAccountId"
+                :connected="currentAccountConnected"
+                :ranch-animal-options="ranchAnimalOptions"
+                :ranch-animal-options-loading="ranchAnimalOptionsLoading"
+                :ranch-animal-options-error="ranchAnimalOptionsError"
                 v-model:strategy="localStrategySettings"
                 v-model:automation="localAutomationSettings"
                 :current-account-name="currentAccountName"
-                :loading="settingsLoading"
                 :saving="strategySaving || automationSaving"
                 :fertilizer-land-type-options="fertilizerLandTypeOptions"
                 :fertilizer-options="fertilizerOptions"
-                @save="saveFeatureModule"
+                :save-module="saveFeatureModule"
+                :save-bag-preferences="saveBagPreferences"
+                @reload-animals="loadRanchAnimalOptions()"
               >
-                <template #planting-strategy>
-                  <div class="space-y-3">
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="text-sm text-gray-700 font-medium dark:text-gray-300">
+                <template #planting-strategy="{ saveBagPreferences: commitBagPreferences }">
+                  <div class="space-y-2">
+                    <div class="flex items-center justify-between gap-2">
+                      <div class="settings-group__title">
                         种植方案
                       </div>
                       <BaseButton variant="secondary" size="sm" @click="strategyPreviewVisible = true">
@@ -2151,15 +1845,17 @@ async function confirmDefaultPlanOperation() {
                       </BaseButton>
                     </div>
                     <OfflineState v-if="isOffline" />
-                    <div v-else-if="seedOptionsError" class="flex items-center gap-2 text-sm text-red-600 dark:text-red-400" role="status">
+                    <div v-else-if="seedOptionsError" class="flex items-center gap-2 settings-error" role="status">
                       {{ seedOptionsError }}
                       <RefreshButton label="重新读取" @click="fetchSeedOptions(currentAccountId)" />
                     </div>
-                    <div class="grid grid-cols-2 gap-3">
+                    <div class="grid grid-cols-2 gap-2">
                       <BaseSelect
                         v-model="localStrategySettings.plantingStrategy"
                         label="第一优先策略"
                         :options="plantingStrategyOptions"
+                        :virtual-scroll="false"
+                        :theme-overrides="{ peers: { InternalSelectMenu: { height: 'none' } } }"
                       />
                       <BaseSelect
                         v-if="localStrategySettings.plantingStrategy === 'preferred'"
@@ -2167,87 +1863,36 @@ async function confirmDefaultPlanOperation() {
                         label="优先种植种子"
                         :options="preferredSeedOptions"
                       />
+                      <div v-else-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="base-field">
+                        <label class="base-field__label">第一优先策略预览</label>
+                        <BaseButton variant="secondary" @click="openBagSeedsDialog">背包种子</BaseButton>
+                      </div>
+                      <IllustratedPriorityPreview v-else-if="localStrategySettings.plantingStrategy === 'illustrated'" kind="farm" :account-id="currentAccountId" :connected="!isOffline" />
                       <div
-                        v-else-if="!isOffline && !seedOptionsError && localStrategySettings.plantingStrategy !== 'bag_priority'"
+                        v-else-if="!isOffline && !seedOptionsError && !['bag_priority', 'illustrated'].includes(localStrategySettings.plantingStrategy)"
                         class="base-field"
                       >
                         <label class="base-field__label">
                           策略选种预览
                         </label>
                         <div
-                          class="h-[38px] w-full flex items-center justify-between gap-2 border border-gray-200 rounded-[6px] border-dashed bg-gray-50 px-3 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
+                          class="settings-preview w-full justify-between"
                           title="根据当前策略自动匹配，仅供预览"
                         >
                           <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
-                          <div class="i-carbon-information shrink-0 text-base text-gray-400" />
+                          <div class="i-carbon-information shrink-0 text-base" />
                         </div>
                       </div>
                     </div>
 
-                    <div v-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="space-y-3">
-                      <div v-if="!isOffline" class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 space-y-3 dark:border-gray-700 dark:bg-gray-800/40">
-                        <div class="text-sm text-gray-800 font-semibold dark:text-gray-200">
-                          背包种子优先顺序
-                        </div>
-                        <div v-if="bagSeedsLoading" class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">
-                          加载中...
-                        </div>
-                        <div v-else-if="bagSeedsError" class="py-4 text-center text-sm text-red-600 dark:text-red-400">
-                          {{ bagSeedsError }}
-                          <RefreshButton label="重新读取" @click="fetchBagSeeds()" />
-                        </div>
-                        <div v-else-if="bagSeeds.length === 0" class="py-4 text-center text-sm text-gray-500 dark:text-gray-400">
-                          背包中暂无 1x1 / 2x2 种子
-                        </div>
-                        <div v-else class="grid grid-cols-3 gap-2">
-                          <BagSeedPriorityItem
-                            v-for="(seed, index) in sortedBagSeeds"
-                            :key="seed.seedId"
-                            :seed="seed"
-                            :index="index"
-                            :land-types="localStrategySettings.bagSeedLandTypes[String(seed.seedId)]"
-                            :land-type-options="fertilizerLandTypeOptions"
-                            :dragging="draggingBagSeedId === seed.seedId"
-                            @to-top="toTopBagSeed(seed.seedId)"
-                            @update:land-types="setBagSeedLandTypes(seed.seedId, $event)"
-                            @drag-start="startBagSeedDrag(seed.seedId, $event)"
-                            @drag-end="endBagSeedDrag"
-                            @drag-over="dragOverBagSeed(seed.seedId, $event)"
-                            @drop="dropBagSeed(seed.seedId, $event)"
-                          />
-                        </div>
-                        <div v-if="orphanRestrictedSeeds.length > 0" class="border-t border-gray-200 pt-2 dark:border-gray-700">
-                          <div class="text-xs text-gray-600 dark:text-gray-300">
-                            未持有但已配限制
-                          </div>
-                          <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                            这些种子当前不在背包中，限制已保留，重新入库后仍生效。
-                          </p>
-                          <div class="mt-2 flex flex-wrap gap-1.5">
-                            <span
-                              v-for="item in orphanRestrictedSeeds"
-                              :key="item.seedId"
-                              class="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2 py-1 text-[11px] text-gray-700 dark:bg-gray-700 dark:text-gray-200"
-                            >
-                              {{ item.name }} · {{ item.scope }}
-                              <button
-                                type="button"
-                                class="i-carbon-close text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200"
-                                :title="`清除 ${item.name} 的土地限制`"
-                                :aria-label="`清除 ${item.name} 的土地限制`"
-                                @click="setBagSeedLandTypes(item.seedId, [])"
-                              />
-                            </span>
-                          </div>
-                        </div>
-                      </div>
+                    <div v-if="['bag_priority', 'illustrated'].includes(localStrategySettings.plantingStrategy)" class="space-y-2">
 
                       <!-- 第二优先策略（版式同第一优先策略行） -->
-                      <div class="grid grid-cols-2 gap-3">
+                      <div class="grid grid-cols-2 gap-2">
                         <BaseSelect
                           v-model="localStrategySettings.bagSeedFallbackStrategy"
                           label="第二优先策略"
-                          :options="BAG_FALLBACK_STRATEGY_OPTIONS"
+                          :options="localStrategySettings.plantingStrategy === 'illustrated' ? [...BAG_FALLBACK_STRATEGY_OPTIONS, { label: '背包种子优先', value: 'bag_priority' }] : BAG_FALLBACK_STRATEGY_OPTIONS"
                           @change="handleBagFallbackStrategyChange"
                         />
                         <BaseSelect
@@ -2257,46 +1902,48 @@ async function confirmDefaultPlanOperation() {
                           :options="preferredSeedOptions"
                           @change="handlePreferredSeedChange"
                         />
+                        <div v-else-if="localStrategySettings.bagSeedFallbackStrategy === 'bag_priority'" class="base-field">
+                          <label class="base-field__label">第二优先策略预览</label>
+                          <BaseButton variant="secondary" @click="openBagSeedsDialog">背包种子</BaseButton>
+                        </div>
                         <div v-else-if="!isOffline && !seedOptionsError" class="base-field">
                           <label class="base-field__label">
                             第二优先策略预览
                           </label>
                           <div
-                            class="h-[38px] w-full flex items-center justify-between gap-2 border border-gray-200 rounded-[6px] border-dashed bg-gray-50 px-3 text-gray-500 dark:border-gray-600 dark:bg-gray-800/50 dark:text-gray-400"
+                            class="settings-preview w-full justify-between"
                             title="根据当前策略自动匹配，仅供预览"
                           >
                             <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
-                            <div class="i-carbon-information shrink-0 text-base text-gray-400" />
+                            <div class="i-carbon-information shrink-0 text-base" />
                           </div>
                         </div>
                       </div>
                     </div>
                   </div>
+
+                  <FarmSeedPriorityDialog
+                    v-model:show="bagSeedsDialogVisible"
+                    :seeds="sortedBagSeeds"
+                    :land-types="localStrategySettings.bagSeedLandTypes"
+                    :land-type-options="fertilizerLandTypeOptions"
+                    :orphan-restricted-seeds="orphanRestrictedSeeds"
+                    :loading="bagSeedsLoading"
+                    :error="bagSeedsError"
+                    :saving="strategySaving"
+                    @save="saveBagSeedsDialog(commitBagPreferences)"
+                    @refresh="fetchBagSeeds()"
+                    @reorder="saveVisibleBagSeedOrder"
+                    @set-land-types="setBagSeedLandTypes"
+                  />
                 </template>
               </AccountFeatureSettings>
             </template>
           </SettingsPanel>
         </div>
 
-        <!-- 牧场设置：仅保存 ranch_ 字段，不覆盖农场草稿 -->
-        <div v-else-if="!isSystemSettingsPage && activeTab === 'ranch-config'" class="space-y-4 panel-fill">
-          <SettingsPanel>
-            <BaseButton variant="primary" :loading="ranchSaving" :disabled="!currentAccountId || loadedAccountId !== currentAccountId" @click="saveRanchSettings">
-              <span class="i-carbon-save" />
-              <span>保存牧场设置</span>
-            </BaseButton>
-            <template #body>
-              <div v-if="!currentAccountId || loadedAccountId !== currentAccountId" class="py-8 text-center text-gray-500">请选择账号并等待配置加载</div>
-              <template v-else>
-                <AutomationSettingsForm v-model="ranchModel" in-ranch panel="strategy" hide-save :saving="ranchSaving" :ranch-animal-options="ranchAnimalOptions" :ranch-animal-options-loading="ranchAnimalOptionsLoading" :ranch-animal-options-error="ranchAnimalOptionsError" :account-id="currentAccountId" :connected="currentAccountConnected" :fertilizer-land-type-options="fertilizerLandTypeOptions" :fertilizer-options="fertilizerOptions" @save="saveRanchSettings" @reload-animals="loadRanchAnimalOptions" />
-                <AutomationSettingsForm v-model="ranchModel" in-ranch panel="automation" hide-save :saving="ranchSaving" :fertilizer-land-type-options="fertilizerLandTypeOptions" :fertilizer-options="fertilizerOptions" @save="saveRanchSettings" />
-              </template>
-            </template>
-          </SettingsPanel>
-        </div>
-
         <!-- 下线通知 -->
-        <div v-else-if="!isSystemSettingsPage && activeTab === 'notification'" class="space-y-4 panel-fill">
+        <div v-else-if="activeTab === 'notification'" class="space-y-3 panel-fill">
           <SettingsPanel>
             <BaseButton
               variant="secondary"
@@ -2323,7 +1970,7 @@ async function confirmDefaultPlanOperation() {
               @click="handleSaveOffline"
             >
               <span class="i-carbon-save" />
-              <span>保存通知设置</span>
+              <span>保存</span>
             </BaseButton>
             <BaseButton
               variant="success"
@@ -2346,162 +1993,6 @@ async function confirmDefaultPlanOperation() {
           </SettingsPanel>
         </div>
 
-        <!-- 系统设置 -->
-        <div v-else-if="isSystemSettingsPage" class="space-y-4">
-          <div class="system-settings-content flex flex-col gap-4">
-            <section v-if="activeSystemTab === 'environment'" class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-4">
-              <div class="panel-titlebar mb-4 justify-between margin-shell"><span class="margin-content">
-                <div class="ml-auto flex shrink-0 items-center gap-2">
-                  <BaseButton variant="secondary" class="!w-auto !min-w-0" :disabled="systemConfigLoading" :loading="systemConfigSaving" @click="handleResetSystemConfig">
-                    重置
-                  </BaseButton>
-                  <BaseButton variant="primary" size="sm" :disabled="systemConfigLoading" :loading="systemConfigSaving" @click="handleSaveSystemConfig">
-                    保存运行环境
-                  </BaseButton>
-                </div>
-              </span></div>
-
-              <div v-if="systemConfigLoading" class="py-8 text-center text-gray-500">
-                <span class="i-svg-spinners-90-ring-with-bg inline-block text-2xl" />
-              </div>
-              <div v-else class="system-environment-fields space-y-3">
-                <div class="system-environment-selects grid grid-cols-1 gap-3" :class="devicePresets.length ? 'md:grid-cols-3' : 'md:grid-cols-2'">
-                  <BaseSelect
-                    v-if="devicePresets.length"
-                    v-model="selectedPresetId"
-                    label="设备预设"
-                    :options="devicePresetOptions"
-                    placeholder="选择设备预设"
-                    @change="applyDevicePreset"
-                  />
-                  <BaseSelect v-model="localSystemConfig.platform" label="平台" :options="platformOptions" />
-                  <BaseSelect v-model="localSystemConfig.deviceInfo.os" label="系统" :options="osOptions" />
-                </div>
-
-                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <BaseInput
-                    v-model="localSystemConfig.serverUrl"
-                    label="服务器地址"
-                    type="text"
-                    placeholder="wss://..."
-                  />
-                  <BaseSelect
-                    v-model="localSystemConfig.timeZone"
-                    label="系统时区"
-                    :options="timeZoneOptions"
-                  />
-                </div>
-
-                <div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.clientVersion"
-                    label="QQ 客户端版本"
-                    type="text"
-                    :placeholder="defaultSystemConfig.deviceInfo.clientVersion || '从服务器加载中...'"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.wxClientVersion"
-                    label="微信客户端版本"
-                    type="text"
-                    :placeholder="defaultSystemConfig.wxClientVersion || '从服务器加载中...'"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.sysSoftware"
-                    label="系统版本"
-                    type="text"
-                    placeholder="Windows 10"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.deviceId"
-                    label="设备标识"
-                    type="text"
-                    placeholder="DESKTOP-PC<WPC>"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.memory"
-                    label="内存 (MB)"
-                    type="text"
-                    placeholder="16384"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.network"
-                    label="网络"
-                    type="text"
-                    placeholder="wifi"
-                  />
-                  <div class="col-span-full pr-3">
-                    <BaseInput
-                      v-model="localSystemConfig.deviceInfo.userAgent"
-                      label="User-Agent"
-                      type="text"
-                      placeholder="Mozilla/5.0 ..."
-                    />
-                  </div>
-                </div>
-              </div>
-            </span></section>
-
-            <AutoCodeRefreshCard
-              v-if="activeSystemTab === 'refresh'"
-              v-model:config="localAutoCodeRefresh"
-              :loading="settingStore.autoCodeRefreshLoading"
-              :saving="autoCodeRefreshSaving"
-              @save="saveAutoCodeRefreshSettings"
-            />
-
-            <div v-if="activeSystemTab === 'login'" class="min-w-0 flex flex-col gap-4">
-              <section class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-4">
-                <div class="panel-titlebar mb-4 justify-between margin-shell"><span class="margin-content">
-                  <div class="ml-auto flex shrink-0 items-center gap-2">
-                    <BaseButton
-                      variant="secondary"
-                      class="!w-auto !min-w-0"
-                      :loading="captureConfigTesting"
-                      @click="handleTestCaptureConfig"
-                    >
-                      连通性自检
-                    </BaseButton>
-                    <BaseButton
-                      variant="primary"
-                      size="sm"
-                      :loading="loginSettingsSaving"
-                      @click="handleSaveLoginSettings"
-                    >
-                      保存登录设置
-                    </BaseButton>
-                  </div>
-                </span></div>
-
-                <div class="grid grid-cols-2 gap-2">
-                  <BaseSwitch v-model="localCaptureConfig.enabled" label="启用抓包登录" />
-                  <BaseSwitch v-model="localCaptureConfig.autoImportQqGids" label="自动导入 QQ 好友" :disabled="!localCaptureConfig.enabled" />
-                </div>
-                <div class="grid grid-cols-2 mt-4 gap-2">
-                  <BaseSwitch v-model="localLoginSettings.wechatQrLogin" label="微信扫码登录" />
-                  <BaseSwitch v-model="localLoginSettings.qqQrLogin" label="QQ扫码登录" />
-                </div>
-
-                <div
-                  v-if="localLoginSettings.qqQrLogin"
-                  class="grid grid-cols-2 mt-4 gap-3"
-                >
-                  <BaseInput
-                    v-model="localLoginSettings.napCatEndpoint"
-                    label="NapCat接口地址"
-                    type="text"
-                    placeholder="http://127.0.0.1:6099"
-                  />
-                  <BaseInput
-                    v-model="localLoginSettings.napCatSignature"
-                    label="NapCat接口签名"
-                    type="password"
-                    placeholder="请输入 NapCat 接口签名"
-                  />
-                </div>
-              </span></section>
-            </div>
-          </div>
-        </div>
       </div>
     </div>
 
@@ -2536,7 +2027,7 @@ async function confirmDefaultPlanOperation() {
       :mask-closable="true"
       :close-on-esc="true"
     >
-      <div class="strategy-preview-dialog">
+      <div class="settings-dialog strategy-preview-dialog">
         <PlantingStrategyPanel />
       </div>
     </NModal>
@@ -2544,43 +2035,6 @@ async function confirmDefaultPlanOperation() {
 </template>
 
 <style scoped>
-.system-settings-content :deep(.panel-titlebar) {
-  margin-bottom: 0;
-}
-
-.system-settings-content :deep(.panel-titlebar + *) {
-  margin-top: 12px;
-}
-
-.system-settings-content :deep(.base-switch__label) {
-  font-size: var(--ui-font-size-medium-14);
-  font-weight: 600;
-}
-
-.system-environment-fields :deep(.base-field) {
-  flex-direction: row;
-  align-items: center;
-  gap: 10px;
-}
-
-.system-environment-selects :deep(.base-field) {
-  gap: 12px;
-}
-
-.system-environment-fields :deep(.base-field__label) {
-  flex: 0 0 calc(7rem - 20px);
-  white-space: nowrap;
-}
-
-.system-environment-selects :deep(.base-field__label) {
-  flex: 0 0 auto;
-}
-
-.system-environment-fields :deep(.base-field > :not(.base-field__label)) {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
 /* 账号工具栏与个人页农场工具栏使用同一套尺寸：按钮保持默认 medium，行内间距 8px，
    窄屏时横向滚动而不是把按钮压小。 */
 /* 标题栏格式走全局 .panel-titlebar（出血/留白/分隔线/圆角/底色已对齐）。 */
@@ -2703,8 +2157,19 @@ async function confirmDefaultPlanOperation() {
 .account-panel {
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
+  gap: var(--ui-settings-space);
+  --inset-top: var(--ui-settings-space);
+  --inset-right: var(--ui-settings-space);
+  --inset-bottom: var(--ui-settings-space);
+  --inset-left: var(--ui-settings-space);
+}
+
+.account-panel > .margin-content > .account-toolbar {
+  margin-inline: calc(-1 * var(--ui-settings-space));
+  --inset-top: var(--ui-settings-space);
+  --inset-right: var(--ui-settings-space);
+  --inset-bottom: var(--ui-settings-space);
+  --inset-left: var(--ui-settings-space);
 }
 
 .account-grid {
@@ -2752,10 +2217,6 @@ async function confirmDefaultPlanOperation() {
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 64px);
   overflow-y: auto;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-card);
-  background: var(--ui-surface-solid);
-  box-shadow: var(--ui-shadow-sm);
 }
 
 /* 面板自带 page-card-surface 的描边与圆角，与外框完全重叠会叠成双层边。
@@ -2764,9 +2225,17 @@ async function confirmDefaultPlanOperation() {
    fit-content 无法按内容撑开、把种子名挤到省略；这里恢复成 normal。 */
 .strategy-preview-dialog :deep(.strategy-panel) {
   container-type: normal;
+  --strategy-row-pad-y: var(--ui-settings-space);
+  --strategy-row-pad-x: var(--ui-settings-space);
   border: 0 !important;
   box-shadow: none !important;
   background: var(--ui-surface-solid) !important;
+}
+
+.strategy-preview-dialog :deep(.strategy-bar__title) {
+  color: var(--ui-ink);
+  font-size: var(--ui-font-size-large-15);
+  font-weight: var(--fw-600);
 }
 
 /* 策略列表向下出血到面板下沿，底角要补圆角，否则会顶出弹窗外框 */

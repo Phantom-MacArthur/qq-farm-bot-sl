@@ -1,23 +1,24 @@
-/**
- * 「常规设置」模块卡的纯逻辑：总开关语义、按模块保存需要写回的设置分组。
- * 这里只读 sl 已有的配置键，不引入新键；也不 import 项目内其他模块，
- * 以便测试用 typescript.transpileModule 单文件转译后直接 require。
- */
+export type FeatureModuleKey = 'planting' | 'ranchProduction' | 'fertilizer' | 'ranchFacilities' | 'friends' | 'activity'
+export type BagPreferenceModule = Extract<FeatureModuleKey, 'planting' | 'ranchProduction'>
 
-export type FeatureModuleKey = 'planting' | 'fertilizer' | 'friends' | 'activity'
-
-/** 保存一个模块时实际需要写回的顶层设置分组。 */
-export type SettingsSavePart = 'strategy' | 'automation'
+export const MUGE_REWARD_OPTIONS = [
+  { key: 'muge_claim_celebration', label: '领取兴牧庆典奖励' },
+  { key: 'muge_claim_friends', label: '领取牧友同行奖励' },
+  { key: 'muge_claim_handbook', label: '领取成长手册奖励' },
+  { key: 'muge_claim_personality', label: '领取牧场人格奖励' },
+] as const
 
 export interface FeatureModuleMeta {
   key: FeatureModuleKey
   title: string
-  /** 卡片和弹窗头部用的图片，直接指向 public 下的静态资源。 */
-  image: string
+  image?: string
+  icon?: string
 }
 
 export interface FeatureStrategyShape {
   plantingStrategy: string
+  bagSeedPriority: number[]
+  bagSeedLandTypes: Record<string, string[]>
   bagSeedMultiLandReservationEnabled?: boolean
   stealDelaySeconds?: number
   intervals: {
@@ -44,6 +45,7 @@ export interface FeatureAutomationShape {
   fertilizerBuyNormalCount?: number
   fertilizerBuyNormalThresholdHours?: number
   fertilizerBuyCheckIntervalMinutes?: number
+  fertilizerBuyNormalCheckIntervalMinutes?: number
 }
 
 export interface FeatureModuleContext {
@@ -72,78 +74,90 @@ export function applyAllowedMysteryShopCurrency(a: Record<string, any>, value: s
 /** 卡片顺序即页面渲染顺序，不要依赖对象字面量的隐式次序。 */
 export const FEATURE_MODULES: FeatureModuleMeta[] = [
   { key: 'planting', title: '种植与收获', image: '/game-config/module_icons/planting.png' },
+  { key: 'ranchProduction', title: '养殖与收获', icon: 'i-carbon-pet-image-o' },
   { key: 'fertilizer', title: '土地与施肥', image: '/game-config/module_icons/fertilizer.png' },
+  { key: 'ranchFacilities', title: '设施与喂养', icon: 'i-carbon-building' },
   { key: 'friends', title: '好友', image: '/game-config/module_icons/friends-friendship.png' },
   { key: 'activity', title: '日常与活动', image: '/game-config/module_icons/activity-task.png' },
 ]
 
-export const MODULE_SAVE_PARTS: Record<FeatureModuleKey, SettingsSavePart[]> = {
-  planting: ['strategy', 'automation'],
-  fertilizer: ['automation'],
-  friends: ['strategy', 'automation'],
-  activity: ['automation'],
+
+export const MODULE_GATE_KEYS = {
+  planting: 'planting_enabled',
+  ranchProduction: 'ranch_production_enabled',
+  fertilizer: 'fertilizer_enabled',
+  ranchFacilities: 'ranch_facilities_enabled',
+  friends: 'friends_enabled',
+  activity: 'activity_enabled',
+} as const satisfies Record<FeatureModuleKey, string>
+
+const FRIEND_ACTION_FIELDS = {
+  patrol: ['friend', 'ranch_friend_patrol'],
+  help: ['friend_help', 'ranch_friend_clean'],
+  steal: ['friend_steal', 'ranch_friend_steal'],
+  mischief: ['friend_bad', 'ranch_friend_mosquito'],
+} as const
+
+export type FriendAction = keyof typeof FRIEND_ACTION_FIELDS
+
+export function getSharedFriendAction(action: FriendAction, automation: Record<string, unknown>): boolean | 'mixed' {
+  const [farm, ranch] = FRIEND_ACTION_FIELDS[action]
+  const farmEnabled = automation[farm] === true
+  const ranchEnabled = action === 'patrol' ? automation[ranch] !== false : automation[ranch] === true
+  return farmEnabled === ranchEnabled ? farmEnabled : 'mixed'
 }
 
-function auto(ctx: FeatureModuleContext) {
-  return ctx.automation?.automation || {}
+export function setSharedFriendAction(action: FriendAction, enabled: boolean, automation: Record<string, unknown>): void {
+  for (const field of FRIEND_ACTION_FIELDS[action])
+    automation[field] = enabled
 }
 
-/**
- * 模块总开关的当前状态。偷菜不是独立模块，它只是好友模块里的一个动作，
- * 所以这里只看好友互动总开关 friend，与后端 runFriendTick 的入口判断一致。
- */
+const MODULE_AUTOMATION_KEYS: Record<FeatureModuleKey, string[]> = {
+  planting: ['farm', 'farm_harvest_tiangong', 'farm_push', 'skip_own_weed_bug', 'sell'],
+  ranchProduction: [
+    'ranch_produce', 'ranch_harvest', 'ranch_buy', 'ranch_sell', 'ranch_check_min_seconds', 'ranch_check_max_seconds',
+    'ranch_strategy', 'ranch_bag_fallback', 'ranch_coop_animal', 'ranch_shed_animal',
+    'ranch_coop_cub_priority', 'ranch_shed_cub_priority',
+  ],
+  fertilizer: [
+    'land_upgrade', 'fertilizer_gift', 'fertilizer_buy_organic', 'fertilizer_buy_normal',
+    'fertilizer_multi_season', 'show_manual_fertilizer', 'fertilizer', 'fertilizer_land_types', 'fertilizer_land_strategies', 'fertilizer_smart_seconds',
+  ],
+  ranchFacilities: [
+    'ranch_upgrade', 'ranch_clean', 'ranch_grass', 'ranch_grass_buy',
+    'ranch_grass_threshold_percent', 'ranch_fill_cans', 'ranch_feed_normal', 'ranch_feed_organic',
+    'ranch_feed_normal_stage', 'ranch_feed_organic_stage',
+  ],
+  friends: [
+    ...Object.values(FRIEND_ACTION_FIELDS).flat(),
+    'friend_help_exp_limit', 'friend_help_protect_dog_ignore_exp_limit', 'friend_auto_accept', 'ranch_stroke',
+  ],
+  activity: [
+    'task', 'farm_illustrated', 'farm_email_rewards', 'farm_free_gifts', 'farm_daily_share', 'farm_vip_gift', 'farm_month_card_gift',
+    'mystery_shop_auto_buy', 'mall_coupon_gift_buy',
+    ...MYSTERY_SHOP_CURRENCIES.map(currency => currency.key),
+    'ranch_task', 'ranch_illustrated', 'ranch_share', 'ranch_daily_benefit', 'ranch_coupon_gift_buy',
+    'ranch_market_organic_poop', 'ranch_market_organic_pinecone',
+    ...MUGE_REWARD_OPTIONS.map(option => option.key),
+  ],
+}
+
+export function getModuleAutomation(key: FeatureModuleKey, automation: Record<string, any>, gateOnly = false) {
+  const fields = gateOnly ? [MODULE_GATE_KEYS[key]] : [MODULE_GATE_KEYS[key], ...MODULE_AUTOMATION_KEYS[key]]
+  return Object.fromEntries(fields.filter(field => Object.prototype.hasOwnProperty.call(automation, field)).map(field => [field, automation[field]]))
+}
+
+const ACTIVITY_REWARD_KEYS = ['farm_illustrated', ...MUGE_REWARD_OPTIONS.map(option => option.key)] as const
+type ActivityRewardSettings = Partial<Record<typeof ACTIVITY_REWARD_KEYS[number], boolean>>
+
+export function wereActivityRewardSettingsSaved(requested: ActivityRewardSettings | undefined, saved: ActivityRewardSettings | undefined): boolean {
+  return ACTIVITY_REWARD_KEYS.every(key => requested?.[key] === undefined || requested[key] === saved?.[key])
+}
+
 export function isModuleEnabled(key: FeatureModuleKey, ctx: FeatureModuleContext): boolean {
-  const a = auto(ctx)
-  switch (key) {
-    case 'planting':
-      return a.farm === true
-    case 'fertilizer':
-      return a.fertilizer !== 'none' || a.land_upgrade === true
-    case 'friends':
-      return a.friend === true
-    case 'activity':
-      return a.task === true || a.mall_coupon_gift_buy === true || a.mystery_shop_auto_buy === true
-    default:
-      return false
-  }
+  return ctx.automation.automation[MODULE_GATE_KEYS[key]] !== false
 }
 
-/**
- * 切换模块总开关。关闭时把该模块下会独立执行的动作一并置 false，
- * 避免出现「开关显示已关闭、后台仍在跑」的状态。直接修改传入对象，
- * 由调用方负责保存。
- */
-export function applyModuleEnabled(
-  key: FeatureModuleKey,
-  enabled: boolean,
-  ctx: FeatureModuleContext,
-): void {
-  const a = ctx.automation.automation
-  switch (key) {
-    case 'planting':
-      a.farm = enabled
-      break
-    case 'fertilizer':
-      if (enabled) {
-        if (a.fertilizer === 'none')
-          a.fertilizer = 'normal'
-      }
-      else {
-        a.fertilizer = 'none'
-        a.land_upgrade = false
-      }
-      break
-    case 'friends':
-      a.friend = enabled
-      break
-    case 'activity':
-      a.task = enabled
-      if (!enabled) {
-        a.mall_coupon_gift_buy = false
-        // 神秘商人并入本模块后，总开关关闭时同样要停掉自动购买及其提醒
-        a.mystery_shop_auto_buy = false
-        a.mystery_shop_purchase_notify = false
-      }
-      break
-  }
+export function applyModuleEnabled(key: FeatureModuleKey, enabled: boolean, ctx: FeatureModuleContext): void {
+  ctx.automation.automation[MODULE_GATE_KEYS[key]] = enabled
 }
