@@ -62,7 +62,7 @@ const items: Array<{ key: ActivityTab, label: string, description: string, icon:
 button {
   position: relative;
   min-width: 0;
-  min-height: 72px;
+  min-height: var(--ui-content-item-control-height-30);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -95,7 +95,7 @@ button[data-active] {
   width: 24px;
   flex: none;
   color: currentColor;
-  font-size: 24px;
+  font-size: var(--ui-font-size-large-15);
 }
 .activity-nav__copy {
   position: relative;
@@ -106,7 +106,7 @@ button[data-active] {
 .activity-nav__copy strong {
   overflow: hidden;
   color: inherit;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -114,7 +114,7 @@ button[data-active] {
   margin-top: 2px;
   overflow: hidden;
   color: var(--ui-subtle);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

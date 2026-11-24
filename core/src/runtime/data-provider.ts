@@ -16,9 +16,9 @@ interface DataProviderOptions {
     broadcastConfigToWorkers: (accountId?: string) => void;
     buildConfigSnapshotForAccount: (accountId: string) => any;
     broadcastGameConfigReload?: () => void;
-    startWorker: (account: any) => boolean;
-    stopWorker: (accountId: string) => void;
-    restartWorker: (account: any) => void;
+    startWorker: (account: any) => boolean | Promise<boolean>;
+    stopWorker: (account: any) => void | Promise<void>;
+    restartWorker: (account: any) => void | Promise<void>;
     scheduleAutoCodeRefresh?: (accountId: string) => void;
     rescheduleAllAutoCodeRefresh?: () => void;
     stopAutoCodeRefresh?: (accountId: string) => void;
@@ -129,7 +129,12 @@ function createDataProvider(options: DataProviderOptions) {
         getIllustratedSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedSnapshot'),
         getCollectionsSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCollectionsSnapshot'),
         operateCollections: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateCollections', action, input),
+        getRanchState: (accountRef: string, view: string, shopId?: number, hostGid?: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchState', view, shopId, hostGid),
+        clearRanchIllustratedNew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'clearRanchIllustratedNew'),
+        prepareRanchAction: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'prepareRanchAction', action, input),
+        operateRanch: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateRanch', action, input),
         claimIllustratedRewards: (accountRef: string, type: number) => callWorkerApi(resolveAccountRefId(accountRef), 'claimIllustratedRewards', type),
+        clearIllustratedNew: (accountRef: string, fruitIds: number[]) => callWorkerApi(resolveAccountRefId(accountRef), 'clearIllustratedNew', fruitIds),
         getSolarCalendar: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSolarCalendar'),
         operateSolarCalendar: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateSolarCalendar', action, input),
         getFriends: (accountRef: string, forceSync = false) => callWorkerApi(resolveAccountRefId(accountRef), 'getFriends', forceSync, true),
@@ -189,6 +194,7 @@ function createDataProvider(options: DataProviderOptions) {
         ),
         getDailyGifts: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyGiftOverview', true),
         getActivityDirectorySnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityDirectorySnapshot'),
+        getRanchActivityDirectorySnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchActivityDirectorySnapshot'),
         getActivityCenterSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityCenterSnapshot'),
         getCurrentSeasonEvent: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCurrentSeasonEvent'),
         getCurrentStellarActivity: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCurrentStellarActivity'),
@@ -248,6 +254,8 @@ function createDataProvider(options: DataProviderOptions) {
         advanceWeatherResearch: (accountRef: string, nodeId: unknown) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'advanceWeatherResearch', nodeId)
         ),
+        getMugeActivity: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getMugeActivity'),
+        operateMugeActivity: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateMugeActivity', action, input),
         getMilkTeaActivity: (accountRef: string, page: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'getMilkTeaActivity', page, input),
         operateMilkTeaActivity: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateMilkTeaActivity', action, input),
         getShareRewardActivity: (accountRef: string, activityId: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getShareRewardActivity', activityId),
@@ -483,27 +491,27 @@ function createDataProvider(options: DataProviderOptions) {
                 const refreshed = await refreshAccountCode(acc.id, 'manual_start');
                 if (refreshed) return true;
             }
-            startWorker(acc);
+            await startWorker(acc);
             return true;
         },
 
-        stopAccount: (accountRef: string) => {
+        stopAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            if (accountId) stopWorker(accountId);
+            if (accountId) await stopWorker(acc);
             // 退出轮询：用户手动停掉的账号不能又被定时刷新拉起来。
             if (typeof pauseAutoCodeRefreshPolling === 'function') pauseAutoCodeRefreshPolling(acc.id);
             return true;
         },
 
-        restartAccount: (accountRef: string) => {
+        restartAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
             if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(acc.id);
             if (typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(acc.id);
-            restartWorker(acc);
+            await restartWorker(acc);
             return true;
         },
 

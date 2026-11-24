@@ -199,7 +199,7 @@ article.disabled {
   border-radius: 999px;
   color: #60400c;
   background: #fff1a4;
-  font-size: 9px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-style: normal;
 }
 .goods-card > h3 {
@@ -211,7 +211,7 @@ article.disabled {
   margin: 6px 2px 2px;
   overflow: hidden;
   color: #fff;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.35;
   text-align: center;
 }
@@ -221,7 +221,7 @@ article.disabled {
   justify-content: center;
   gap: 3px;
   color: #fff4b5;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .goods-price img {
   width: 17px;
@@ -240,7 +240,7 @@ article.disabled {
   border-radius: 999px;
   color: #b7d1e2;
   background: rgba(10, 44, 90, 0.3);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .goods-action.available {
   border-color: #ffe997;
@@ -257,7 +257,7 @@ article.disabled {
   color: #b9dcec;
 }
 .shop-empty span {
-  font-size: 65px;
+  font-size: var(--ui-font-size-large-15);
   color: rgba(157, 230, 247, 0.4);
 }
 .shop-empty p {
@@ -317,7 +317,7 @@ article {
   min-height: 38px;
   margin-top: 8px;
   color: #273d36;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .goods-price {
   color: #7b5a25;

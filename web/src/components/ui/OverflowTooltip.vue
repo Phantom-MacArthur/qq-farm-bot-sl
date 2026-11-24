@@ -107,7 +107,6 @@ function toggle() {
 }
 
 .overflow-tooltip--clipped {
-  cursor: help;
 }
 
 .overflow-tooltip--clipped:focus-visible {
@@ -120,7 +119,7 @@ function toggle() {
   max-width: 100%;
   max-height: min(360px, 60vh);
   overflow-y: auto;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.65;
   overflow-wrap: anywhere;
   white-space: pre-line;

@@ -296,7 +296,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
 </script>
 
 <template>
-  <section class="strategy-panel page-card-surface rounded-2xl">
+  <section class="strategy-panel page-card-surface rounded-2xl margin-shell"><span class="margin-content">
     <header class="strategy-bar">
       <h3 class="strategy-bar__title">
         策略对比
@@ -366,7 +366,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
         </div>
       </li>
     </ul>
-  </section>
+  </span></section>
 </template>
 
 <style scoped>
@@ -385,7 +385,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
   display: flex;
   overflow: hidden;
   flex-direction: column;
-  padding: 16px;
+  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
 }
 
 .strategy-bar {
@@ -409,7 +409,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
   min-width: 0;
   margin: 0;
   color: var(--ui-primary);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
   white-space: nowrap;
 }
@@ -425,7 +425,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
 
 .strategy-bar__level {
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 /* 参考等级只需放下 4 位数字，省出的宽度留给右侧的排除开关 */
@@ -440,7 +440,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
 
 .strategy-bar__exclude :deep(.n-checkbox__label) {
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 /* 列表向左、右、下出血到面板边缘，由 page-card-surface 的圆角裁切 */
@@ -463,7 +463,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
   min-height: var(--strategy-row-height);
   padding: var(--strategy-row-pad-y) var(--strategy-row-pad-x);
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .strategy-row + .strategy-row {
@@ -486,7 +486,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
   place-items: center;
   border-radius: 6px;
   color: #fff;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 /* 第一列宽度固定，策略名超宽时裁切，避免溢出到种子列造成重叠 */
@@ -537,7 +537,7 @@ watch([currentAccountId, currentAccountConnected], loadShopSeedIds)
 .strategy-num,
 .strategy-row__value-num {
   color: var(--ui-primary);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-500);
   font-variant-numeric: tabular-nums;
 }

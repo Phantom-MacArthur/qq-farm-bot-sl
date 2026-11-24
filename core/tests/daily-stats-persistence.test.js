@@ -305,6 +305,74 @@ test('金豆基线在登录时用背包快照建立并落盘', (t) => {
     assert.equal(saved.baselineReady.goldBean, true, '金豆基线可信标记落盘');
 });
 
+test('十二项今日资产按可信余额计算净变化，缺失保持未知', (t) => {
+    const h = statsHarness(t);
+    const stats = h.load();
+    stats.initStatsWithPersistence('acc', 100, 0, 20, 30, { coupon: true, goldBean: true });
+    const keys = ['gold', 'coupon', 'goldBean', 'ranchCoupon', 'pinecone', 'grass', 'dung', 'diamond',
+        'fertilizerNormal', 'fertilizerOrganic', 'canNormal', 'canOrganic'];
+    const initial = readStats(stats, 100, 0, 20, 30).todayAssetGains;
+    assert.deepEqual(Object.keys(initial), keys);
+    for (const key of keys.slice(3)) assert.equal(initial[key], null, `${key} 未观测时未知`);
+    assert.equal(initial.gold, 0);
+    assert.equal(initial.coupon, 0);
+    assert.equal(initial.goldBean, 0);
+
+    const balances = { ranchCoupon: 0, pinecone: 10, grass: 20, dung: 30,
+        diamond: 40, fertilizerNormal: 3600, fertilizerOrganic: 7200, canNormal: 10800, canOrganic: 14400 };
+    stats.recordAssetBalances(balances);
+    assert.equal(stats.getAssetTodayGains().ranchCoupon, 0, '确认的零余额可用作基线');
+    stats.recordAssetBalances({ ranchCoupon: 5, pinecone: 3, grass: 20, dung: 0, diamond: 0,
+        fertilizerNormal: 7200, fertilizerOrganic: 3600, canNormal: 7200, canOrganic: 18000 });
+    const gains = readStats(stats, 90, 0, 15, 35).todayAssetGains;
+    assert.deepEqual(JSON.parse(JSON.stringify(gains)), {
+        gold: -10, coupon: -5, goldBean: 5, ranchCoupon: 5, pinecone: -7,
+        grass: 0, dung: -30, diamond: -40, fertilizerNormal: 3600,
+        fertilizerOrganic: -3600, canNormal: -3600, canOrganic: 3600,
+    });
+    const offline = stats.getStats({ gold: 90 }, { gold: 90 }, false, {}).todayAssetGains;
+    for (const key of keys) assert.equal(offline[key], null, `${key} 离线时未知`);
+});
+
+test('资产基线同日持久化，重启等待新观测；跨日重置', (t) => {
+    const h = statsHarness(t);
+    const stats = h.load();
+    stats.initStatsWithPersistence('acc', 100, 0);
+    stats.recordAssetBalances({ diamond: 100, canNormal: 0 });
+    stats.recordAssetBalances({ diamond: 75, canNormal: 3600 });
+    assert.equal(h.readStatsFile().assetBaseline.diamond, 100);
+    assert.equal(h.readStatsFile().assetBaseline.canNormal, 0);
+
+    const restarted = h.load();
+    restarted.initStatsWithPersistence('acc', 100, 0);
+    assert.equal(restarted.getAssetTodayGains().diamond, null, '重启前余额不再当作当前余额');
+    restarted.recordAssetBalances({ diamond: 60, canNormal: 0 });
+    assert.equal(restarted.getAssetTodayGains().diamond, -40);
+    assert.equal(restarted.getAssetTodayGains().canNormal, 0);
+    restarted.recordAssetBalances({ pinecone: null, grass: -1, dung: 'oops', diamond: Number.NaN });
+    assert.equal(restarted.getAssetTodayGains().pinecone, null);
+    assert.equal(restarted.getAssetTodayGains().grass, null);
+    assert.equal(restarted.getAssetTodayGains().dung, null);
+    assert.equal(restarted.getAssetTodayGains().diamond, -40);
+
+    h.clock.dateKey = '2026-11-18';
+    assert.equal(restarted.getAssetTodayGains().diamond, null, '跨日未观测不沿用昨日余额');
+    restarted.recordAssetBalances({ diamond: 60, canNormal: 0 });
+    assert.equal(restarted.getAssetTodayGains().diamond, 0);
+    restarted.recordAssetBalances({ diamond: 65 });
+    assert.equal(restarted.getAssetTodayGains().diamond, 5);
+    assert.equal(h.readStatsFile().date, '2026-11-18');
+    assert.equal(h.readStatsFile().assetBaseline.diamond, 60);
+
+    h.clock.dateKey = '2026-11-19';
+    const nextDay = h.load();
+    nextDay.initStatsWithPersistence('acc', 100, 0);
+    assert.equal(nextDay.getAssetTodayGains().diamond, null);
+    nextDay.recordAssetBalances({ diamond: 65 });
+    assert.equal(nextDay.getAssetTodayGains().diamond, 0);
+    assert.equal(h.readStatsFile().assetBaseline.diamond, 65);
+});
+
 test('登录时确认的金币为 0 不会被当成全部余额', (t) => {
     const h = statsHarness(t);
     const stats = h.load();

@@ -1,5 +1,7 @@
+import crypto from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import process from 'node:process'
 import { fileURLToPath, URL } from 'node:url'
 import vue from '@vitejs/plugin-vue'
 import { visualizer } from 'rollup-plugin-visualizer'
@@ -7,13 +9,17 @@ import UnoCSS from 'unocss/vite'
 import { defineConfig } from 'vite'
 import viteCompression from 'vite-plugin-compression'
 
-const corePackageJson = JSON.parse(readFileSync('../core/package.json', 'utf-8'))
+const webPackageJson = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf-8'))
 const publicDir = fileURLToPath(new URL('./public', import.meta.url))
 
 // https://vitejs.dev/config/
-export default defineConfig(({ mode }) => {
+export default defineConfig(({ command, mode }) => {
   const analyzeBuild = mode === 'analyze'
   const compressedBuild = mode === 'compressed'
+  const builtAt = Date.now()
+  const webBuildId = command === 'build'
+    ? `${webPackageJson.version}-${builtAt.toString(36)}-${crypto.randomBytes(4).toString('hex')}`
+    : 'dev'
 
   return {
     plugins: [
@@ -22,6 +28,22 @@ export default defineConfig(({ mode }) => {
       // 若不关掉 includeAbsolute，Vue 会把绝对路径改写成 import "xxx?import"，
       // 而该请求被 /game-config 代理接管、返回 image/png，浏览器 MIME 校验失败导致路由白屏。
       vue({ template: { transformAssetUrls: { includeAbsolute: false } } }),
+      {
+        name: 'panel-version-manifest',
+        apply: 'build' as const,
+        generateBundle() {
+          this.emitFile({
+            type: 'asset',
+            fileName: 'version.json',
+            source: JSON.stringify({
+              buildId: webBuildId,
+              inputHash: process.env.TURBO_HASH,
+              appVersion: webPackageJson.version,
+              builtAt,
+            }, null, 2),
+          })
+        },
+      },
       ...(compressedBuild
         ? [viteCompression({
             verbose: true,
@@ -83,7 +105,8 @@ export default defineConfig(({ mode }) => {
       chunkSizeWarningLimit: 1000,
     },
     define: {
-      __APP_VERSION__: JSON.stringify(corePackageJson.version),
+      __APP_VERSION__: JSON.stringify(webPackageJson.version),
+      __WEB_BUILD_ID__: JSON.stringify(webBuildId),
     },
     resolve: {
       alias: {

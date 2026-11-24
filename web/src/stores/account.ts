@@ -275,6 +275,11 @@ export const useAccountStore = defineStore('account', () => {
           return toAccountBatchOutcome(await stopAccount(id), '停止后进程未退出')
         const account = accounts.value.find(acc => String(acc.id) === id)
         // 有凭证的微信账号先取新 Code，取码接口同时会重启 worker。
+        if (account?.running && account.online === false) {
+          const stopped = await stopAccount(id)
+          if (!stopped.ok || !stopped.confirmed)
+            return toAccountBatchOutcome(stopped, '????????')
+        }
         return shouldRefreshCodeBeforeStart(account)
           ? settingStore.runAutoCodeRefresh(id)
           : startAccount(id)
@@ -296,6 +301,14 @@ export const useAccountStore = defineStore('account', () => {
 
   function startAllAccounts() {
     return runAccountBatchAction('start', pickAccountBatchTargets(accounts.value, 'start'))
+  }
+
+  async function reloadCurrentAccount() {
+    const id = currentAccountId.value
+    if (!id || bulkRunning.value)
+      return
+    await refreshAccountsSilently()
+    return runAccountBatchAction('start', pickAccountBatchTargets(accounts.value, 'start', [id]))
   }
 
   async function fetchLogs() {
@@ -344,6 +357,7 @@ export const useAccountStore = defineStore('account', () => {
     bulkRunning,
     runAccountBatchAction,
     startAllAccounts,
+    reloadCurrentAccount,
     fetchAccounts,
     refreshAccountsSilently,
     selectAccount,

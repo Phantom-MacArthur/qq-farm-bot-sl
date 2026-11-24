@@ -130,6 +130,16 @@ function isSkippableFertilizeLandError(error: any): boolean {
     return code === 1001024 || code === 1001025;
 }
 
+function isFertilizerStockError(error: any): boolean {
+    return getGatewayErrorCode(error) === 1000019;
+}
+
+function logFertilizerStockSkip(error: any): void {
+    log('施肥', '肥料不足，已停止本次施肥，继续其他打理动作', {
+        module: 'farm', event: '施肥', result: 'skip', code: getGatewayErrorCode(error),
+    });
+}
+
 /**
  * 自动施肥保留逐块执行方式；手动一键施肥使用 fertilizeBatch。
  * 游戏中拖动施肥间隔很短，这里用 50ms
@@ -145,7 +155,10 @@ async function fertilize(landIds: number[], fertilizerId: number = NORMAL_FERTIL
             await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
             successCount++;
         } catch (error) {
-            if (isSkippableFertilizeLandError(error)) {
+            if (isFertilizerStockError(error)) {
+                logFertilizerStockSkip(error);
+                break;
+            } else if (isSkippableFertilizeLandError(error)) {
                 log('施肥', `第 ${landId} 块地当前不能施肥，已跳过`, {
                     module: 'farm',
                     event: '施肥',
@@ -189,7 +202,10 @@ async function fertilizeOrganicLoop(landIds: number[] | any[], propagateErrors: 
             await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
             successCount++;
         } catch (error) {
-            // 常见是有机肥耗尽，按需求直接停止
+            if (isFertilizerStockError(error)) {
+                logFertilizerStockSkip(error);
+                break;
+            }
             if (propagateErrors) throw error;
             break;
         }
@@ -290,6 +306,8 @@ module.exports = {
     fertilizeBatch,
     fertilize,
     isSkippableFertilizeLandError,
+    isFertilizerStockError,
+    logFertilizerStockSkip,
     fertilizeOrganicLoop,
     removePlant,
     upgradeLand,

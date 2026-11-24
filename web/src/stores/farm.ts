@@ -5,7 +5,8 @@ import type {
   FriendInteractionItemDto,
 } from '@/stores/friend'
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { computed, ref, watch } from 'vue'
+import { useAccountStore } from '@/stores/account'
 import api, { getApiErrorMessage, normalizeApiErrorMessage } from '@/api'
 
 export type FertilizerType = 'normal' | 'organic'
@@ -56,6 +57,7 @@ export const useFarmStore = defineStore('farm', () => {
   const loading = ref(false)
   const loaded = ref(false)
   const error = ref(false)
+  const farmRefreshError = ref('')
   const interactionItems = ref<FriendInteractionItemDto[]>([])
   const interactionItemsLoading = ref(false)
   const interactionItemsError = ref('')
@@ -65,10 +67,50 @@ export const useFarmStore = defineStore('farm', () => {
   const interactionUsedLandIds = ref<Record<string, string[]>>({})
   const fertilizePending = ref(false)
   const fertilizeError = ref('')
-  let landRequestSequence = 0
-  let fertilizeRequestSequence = 0
-  let interactionItemsRequestSequence = 0
+  let farmReadRequestVersion = 0
+  let farmFertilizerRequestVersion = 0
+  let farmInteractionReadVersion = 0
   let landOverlay: { lands: any[], effects: FriendInteractionEffectDto[], updatedAt: number } | null = null
+
+  const accountStore = useAccountStore()
+  const farmAccountId = ref('')
+  const refreshing = ref(false)
+  const farmAccountSessionVersion = ref(0)
+  let farmSeedRequestVersion = 0
+  let farmReadPromise: Promise<boolean> | null = null
+  const pendingFarmAccounts = ref<string[]>([])
+  const farmOperationPending = computed(() => pendingFarmAccounts.value.includes(String(accountStore.currentAccountId || '')))
+  const ownsFarmAccount = (accountId: string) => !!accountId && farmAccountId.value === accountId
+    && String(accountStore.currentAccountId || '') === accountId
+  function invalidateFarmReadRequests() {
+    farmReadRequestVersion++
+    farmInteractionReadVersion++
+    farmSeedRequestVersion++
+    farmReadPromise = null
+    refreshing.value = false
+    loading.value = false
+    interactionItemsLoading.value = false
+  }
+  async function runFarmWrite(accountId: string, operation: (isCurrentFarmOperation: () => boolean) => Promise<any>): Promise<any> {
+    if (!ownsFarmAccount(accountId) || pendingFarmAccounts.value.includes(accountId))
+      return false
+    invalidateFarmReadRequests()
+    const version = farmAccountSessionVersion.value
+    const isCurrentFarmOperation = () => ownsFarmAccount(accountId) && farmAccountSessionVersion.value === version
+    pendingFarmAccounts.value = [...pendingFarmAccounts.value, accountId]
+    try {
+      const result = await operation(isCurrentFarmOperation)
+      return isCurrentFarmOperation() ? result : false
+    }
+    catch (cause) {
+      if (isCurrentFarmOperation()) throw cause
+      return false
+    }
+    finally {
+      pendingFarmAccounts.value = pendingFarmAccounts.value.filter(id => id !== accountId)
+    }
+  }
+  watch(() => String(accountStore.currentAccountId || ''), id => clearFarmAccountState(id), { immediate: true, flush: 'sync' })
 
   function normalizeLandId(value: unknown) {
     const text = String(value ?? '').trim()
@@ -143,50 +185,59 @@ export const useFarmStore = defineStore('farm', () => {
     lands.value = applyLandOverlay(mergeLandUpdateList(lands.value, updatedLands))
   }
 
-  async function fetchLands(accountId: string) {
-    if (!accountId)
+  async function fetchLands(accountId: string, afterOperation = false): Promise<boolean> {
+    if (!ownsFarmAccount(accountId) || (pendingFarmAccounts.value.includes(accountId) && !afterOperation))
       return false
-    const sequence = ++landRequestSequence
-    loading.value = true
-    loaded.value = false
+    if (farmReadPromise)
+      return farmReadPromise
+    const version = ++farmReadRequestVersion
+    const isCurrentFarmRead = () => ownsFarmAccount(accountId) && version === farmReadRequestVersion
+    refreshing.value = true
+    loading.value = !loaded.value
     error.value = false
-    try {
-      const { data } = await api.get('/api/lands', {
-        headers: { 'x-account-id': accountId },
-        skipErrorToast: true,
-      } as any)
-      if (sequence !== landRequestSequence)
+    farmRefreshError.value = ''
+    const request = (async () => {
+      try {
+        const { data } = await api.get('/api/lands', { headers: { 'x-account-id': accountId }, skipErrorToast: true } as any)
+        if (!isCurrentFarmRead())
+          return false
+        if (data?.ok) {
+          lands.value = applyLandOverlay(data.data.lands || [])
+          socialEvents.value = Array.isArray(data.data.socialEvents) ? data.data.socialEvents : []
+          career.value = data.data.career || null
+          loaded.value = true
+          return true
+        }
+        error.value = !loaded.value
+        farmRefreshError.value = '土地数据刷新失败'
         return false
-      if (data && data.ok) {
-        lands.value = applyLandOverlay(data.data.lands || [])
-        socialEvents.value = Array.isArray(data.data.socialEvents) ? data.data.socialEvents : []
-        career.value = data.data.career || null
-        return true
       }
-      career.value = null
-      socialEvents.value = []
-      error.value = true
-      return false
-    }
-    catch {
-      if (sequence !== landRequestSequence)
+      catch (cause) {
+        if (isCurrentFarmRead()) {
+          error.value = !loaded.value
+          farmRefreshError.value = getApiErrorMessage(cause, '土地数据刷新失败')
+        }
         return false
-      career.value = null
-      socialEvents.value = []
-      error.value = true
-      return false
-    }
-    finally {
-      if (sequence === landRequestSequence) {
-        loaded.value = true
-        loading.value = false
       }
-    }
+      finally {
+        if (isCurrentFarmRead()) {
+          loading.value = false
+          refreshing.value = false
+          farmReadPromise = null
+        }
+      }
+    })()
+    farmReadPromise = request
+    return request
   }
 
-  function resetLandState() {
-    landRequestSequence++
-    fertilizeRequestSequence++
+  function clearFarmAccountState(accountId = String(accountStore.currentAccountId || '')) {
+    invalidateFarmReadRequests()
+    farmAccountSessionVersion.value++
+    farmRefreshError.value = ''
+    farmAccountId.value = accountId
+    seeds.value = []
+    farmFertilizerRequestVersion++
     lands.value = []
     socialEvents.value = []
     career.value = null
@@ -196,7 +247,7 @@ export const useFarmStore = defineStore('farm', () => {
     landOverlay = null
     fertilizePending.value = false
     fertilizeError.value = ''
-    resetInteractionState()
+    clearFarmInteractionState()
   }
 
   function interactionUsageKey(accountId: string, itemId: unknown) {
@@ -207,8 +258,8 @@ export const useFarmStore = defineStore('farm', () => {
     return interactionUsedLandIds.value[interactionUsageKey(accountId, itemId)] || []
   }
 
-  function resetInteractionState() {
-    interactionItemsRequestSequence++
+  function clearFarmInteractionState() {
+    farmInteractionReadVersion++
     interactionItems.value = []
     interactionItemsLoading.value = false
     interactionItemsError.value = ''
@@ -220,9 +271,9 @@ export const useFarmStore = defineStore('farm', () => {
   /** 读取背包中可对自己农场使用的特殊互动道具（服务端已按白名单过滤）。 */
   async function fetchInteractionItems(accountId: string) {
     const requestedAccountId = String(accountId || '').trim()
-    if (!requestedAccountId)
+    if (!ownsFarmAccount(requestedAccountId) || pendingFarmAccounts.value.includes(requestedAccountId))
       return false
-    const sequence = ++interactionItemsRequestSequence
+    const sequence = ++farmInteractionReadVersion
     if (interactionItemsAccountId.value !== requestedAccountId) {
       interactionItems.value = []
       interactionItemsAccountId.value = requestedAccountId
@@ -234,7 +285,7 @@ export const useFarmStore = defineStore('farm', () => {
         headers: { 'x-account-id': requestedAccountId },
         skipErrorToast: true,
       } as any)
-      if (sequence !== interactionItemsRequestSequence)
+      if (sequence !== farmInteractionReadVersion || !ownsFarmAccount(requestedAccountId))
         return false
       if (!res.data?.ok) {
         interactionItems.value = []
@@ -245,163 +296,183 @@ export const useFarmStore = defineStore('farm', () => {
       return true
     }
     catch (cause: any) {
-      if (sequence !== interactionItemsRequestSequence)
+      if (sequence !== farmInteractionReadVersion || !ownsFarmAccount(requestedAccountId))
         return false
       interactionItems.value = []
       interactionItemsError.value = getApiErrorMessage(cause, '无法读取可用的互动道具')
       return false
     }
     finally {
-      if (sequence === interactionItemsRequestSequence)
+      if (sequence === farmInteractionReadVersion && ownsFarmAccount(requestedAccountId))
         interactionItemsLoading.value = false
     }
   }
 
   async function useInteractionItemBatch(accountId: string, itemId: string, landIds: string[]) {
-    if (!accountId || !itemId || !Array.isArray(landIds) || landIds.length === 0)
-      return false
-    if (interactionUsePending.value)
-      return false
-    interactionUsePending.value = true
-    interactionUseError.value = ''
-    try {
-      const res = await api.post('/api/farm/interaction-items/use-batch', {
-        itemId,
-        landIds,
-      }, {
-        headers: { 'x-account-id': accountId },
-        skipErrorToast: true,
-      } as any)
-      if (!res.data?.ok) {
-        interactionUseError.value = getApiErrorMessage(res.data, '互动道具使用失败')
+    return runFarmWrite(accountId, async (isCurrentFarmOperation) => {
+      if (!accountId || !itemId || !Array.isArray(landIds) || landIds.length === 0)
+        return false
+      if (interactionUsePending.value)
+        return false
+      interactionUsePending.value = true
+      interactionUseError.value = ''
+      try {
+        const res = await api.post('/api/farm/interaction-items/use-batch', {
+          itemId,
+          landIds,
+        }, {
+          headers: { 'x-account-id': accountId },
+          skipErrorToast: true,
+        } as any)
+        if (!isCurrentFarmOperation())
+          return false
+        if (!res.data?.ok) {
+          interactionUseError.value = getApiErrorMessage(res.data, '互动道具使用失败')
+          return false
+        }
+        const result = res.data.data as FriendInteractionBatchDto
+        if (result && typeof result.message === 'string')
+          result.message = normalizeApiErrorMessage(result.message)
+        for (const item of result?.results || []) {
+          if (item && typeof item.message === 'string')
+            item.message = normalizeApiErrorMessage(item.message)
+        }
+        if (Array.isArray(result?.items))
+          interactionItems.value = result.items
+        const key = interactionUsageKey(accountId, result.itemId)
+        const used = new Set(interactionUsedLandIds.value[key] || [])
+        for (const landId of result.usedLandIds || [])
+          used.add(String(landId))
+        interactionUsedLandIds.value = {
+          ...interactionUsedLandIds.value,
+          [key]: [...used].sort((left, right) => Number(left) - Number(right)),
+        }
+        recordLandUpdates(result?.updatedLands || [], result?.interactionEffects || [])
+        return result
+      }
+      catch (cause: any) {
+        if (!isCurrentFarmOperation())
+          return false
+        interactionUseError.value = getApiErrorMessage(cause, '互动道具使用失败')
         return false
       }
-      const result = res.data.data as FriendInteractionBatchDto
-      if (result && typeof result.message === 'string')
-        result.message = normalizeApiErrorMessage(result.message)
-      for (const item of result?.results || []) {
-        if (item && typeof item.message === 'string')
-          item.message = normalizeApiErrorMessage(item.message)
+      finally {
+        if (isCurrentFarmOperation())
+        interactionUsePending.value = false
       }
-      if (Array.isArray(result?.items))
-        interactionItems.value = result.items
-      const key = interactionUsageKey(accountId, result.itemId)
-      const used = new Set(interactionUsedLandIds.value[key] || [])
-      for (const landId of result.usedLandIds || [])
-        used.add(String(landId))
-      interactionUsedLandIds.value = {
-        ...interactionUsedLandIds.value,
-        [key]: [...used].sort((left, right) => Number(left) - Number(right)),
-      }
-      recordLandUpdates(result?.updatedLands || [], result?.interactionEffects || [])
-      return result
-    }
-    catch (cause: any) {
-      interactionUseError.value = getApiErrorMessage(cause, '互动道具使用失败')
-      return false
-    }
-    finally {
-      interactionUsePending.value = false
-    }
+    })
   }
 
   async function fetchSeeds(accountId: string) {
-    if (!accountId)
+    const version = ++farmSeedRequestVersion
+    if (!ownsFarmAccount(accountId) || pendingFarmAccounts.value.includes(accountId))
       return
     const { data } = await api.get('/api/seeds', {
       headers: { 'x-account-id': accountId },
     })
-    if (data && data.ok)
+    if (data && data.ok && ownsFarmAccount(accountId) && version === farmSeedRequestVersion)
       seeds.value = data.data || []
   }
 
   async function fertilizeLand(accountId: string, landId: number, fertilizerType: FertilizerType) {
-    if (!accountId || !landId || fertilizePending.value)
-      return false
-    fertilizePending.value = true
-    const sequence = ++fertilizeRequestSequence
-    fertilizeError.value = ''
-    try {
-      const res = await api.post('/api/farm/fertilize', {
-        landId,
-        fertilizerType,
-      }, {
-        headers: { 'x-account-id': accountId },
-        skipErrorToast: true,
-      } as any)
-      if (sequence !== fertilizeRequestSequence)
+    return runFarmWrite(accountId, async (isCurrentFarmOperation) => {
+      if (!accountId || !landId || fertilizePending.value)
         return false
-      if (!res.data?.ok) {
-        fertilizeError.value = userFacingFertilizeError(res.data)
+      fertilizePending.value = true
+      const sequence = ++farmFertilizerRequestVersion
+      fertilizeError.value = ''
+      try {
+        const res = await api.post('/api/farm/fertilize', {
+          landId,
+          fertilizerType,
+        }, {
+          headers: { 'x-account-id': accountId },
+          skipErrorToast: true,
+        } as any)
+        if (sequence !== farmFertilizerRequestVersion || !isCurrentFarmOperation())
+          return false
+        if (!res.data?.ok) {
+          fertilizeError.value = userFacingFertilizeError(res.data)
+          return false
+        }
+        const result = res.data.data as FertilizeLandResult
+        if (result?.updatedLand)
+          recordLandUpdates([result.updatedLand])
+        else
+          await fetchLands(accountId, true)
+        return result
+      }
+      catch (cause: any) {
+        if (!isCurrentFarmOperation())
+          return false
+        if (sequence !== farmFertilizerRequestVersion || !isCurrentFarmOperation())
+          return false
+        fertilizeError.value = userFacingFertilizeError(cause)
         return false
       }
-      const result = res.data.data as FertilizeLandResult
-      if (result?.updatedLand)
-        recordLandUpdates([result.updatedLand])
-      else
-        await fetchLands(accountId)
-      return result
-    }
-    catch (cause: any) {
-      if (sequence !== fertilizeRequestSequence)
-        return false
-      fertilizeError.value = userFacingFertilizeError(cause)
-      return false
-    }
-    finally {
-      if (sequence === fertilizeRequestSequence)
-        fertilizePending.value = false
-    }
+      finally {
+        if (sequence === farmFertilizerRequestVersion && isCurrentFarmOperation())
+          fertilizePending.value = false
+      }
+    })
   }
 
   async function fertilizeAll(accountId: string, fertilizerType: FertilizerType, landIds?: number[]) {
-    if (!accountId || fertilizePending.value)
-      return false
-    const sequence = ++fertilizeRequestSequence
-    fertilizePending.value = true
-    fertilizeError.value = ''
-    try {
-      const res = await api.post('/api/farm/fertilize-all', landIds ? { fertilizerType, landIds } : { fertilizerType }, {
-        headers: { 'x-account-id': accountId },
-        skipErrorToast: true,
-      } as any)
-      if (sequence !== fertilizeRequestSequence)
+    return runFarmWrite(accountId, async (isCurrentFarmOperation) => {
+      if (!accountId || fertilizePending.value)
         return false
-      if (!res.data?.ok) {
-        fertilizeError.value = userFacingFertilizeError(res.data)
+      const sequence = ++farmFertilizerRequestVersion
+      fertilizePending.value = true
+      fertilizeError.value = ''
+      try {
+        const res = await api.post('/api/farm/fertilize-all', landIds ? { fertilizerType, landIds } : { fertilizerType }, {
+          headers: { 'x-account-id': accountId },
+          skipErrorToast: true,
+        } as any)
+        if (sequence !== farmFertilizerRequestVersion || !isCurrentFarmOperation())
+          return false
+        if (!res.data?.ok) {
+          fertilizeError.value = userFacingFertilizeError(res.data)
+          return false
+        }
+        const result = res.data.data as FertilizeAllResult
+        recordLandUpdates(result.updatedLands || [])
+        return result
+      }
+      catch (cause: any) {
+        if (!isCurrentFarmOperation())
+          return false
+        if (sequence !== farmFertilizerRequestVersion || !isCurrentFarmOperation())
+          return false
+        fertilizeError.value = userFacingFertilizeError(cause)
         return false
       }
-      const result = res.data.data as FertilizeAllResult
-      recordLandUpdates(result.updatedLands || [])
-      return result
-    }
-    catch (cause: any) {
-      if (sequence !== fertilizeRequestSequence)
-        return false
-      fertilizeError.value = userFacingFertilizeError(cause)
-      return false
-    }
-    finally {
-      if (sequence === fertilizeRequestSequence)
-        fertilizePending.value = false
-    }
+      finally {
+        if (sequence === farmFertilizerRequestVersion && isCurrentFarmOperation())
+          fertilizePending.value = false
+      }
+    })
   }
 
   async function operate(accountId: string, opType: string, landId: number | null = null) {
-    if (!accountId)
-      return false
-    const res = await api.post('/api/farm/operate', { opType, landId }, {
-      headers: { 'x-account-id': accountId },
+    return runFarmWrite(accountId, async (isCurrentFarmOperation) => {
+      if (!accountId)
+        return false
+      const res = await api.post('/api/farm/operate', { opType, landId }, {
+        headers: { 'x-account-id': accountId }, skipErrorToast: true,
+      } as any)
+      if (!isCurrentFarmOperation())
+        return false
+      if (!res.data?.ok) {
+        throw new Error(getApiErrorMessage(res.data, '农场操作失败'))
+      }
+      landOverlay = null
+      await fetchLands(accountId, true)
+      const result = res.data?.data || { hadWork: false, actions: [] }
+      if (result && typeof result.message === 'string')
+        result.message = normalizeApiErrorMessage(result.message)
+      return result
     })
-    if (!res.data?.ok) {
-      throw new Error(getApiErrorMessage(res.data, '农场操作失败'))
-    }
-    landOverlay = null
-    await fetchLands(accountId)
-    const result = res.data?.data || { hadWork: false, actions: [] }
-    if (result && typeof result.message === 'string')
-      result.message = normalizeApiErrorMessage(result.message)
-    return result
   }
 
   return {
@@ -420,13 +491,19 @@ export const useFarmStore = defineStore('farm', () => {
     fertilizePending,
     fertilizeError,
     fetchLands,
-    resetLandState,
+    clearFarmAccountState,
+    invalidateFarmReadRequests,
+    farmAccountId,
+    refreshing,
+    farmOperationPending,
+    farmAccountSessionVersion,
+    farmRefreshError,
     fetchSeeds,
     operate,
     fetchInteractionItems,
     useInteractionItemBatch,
     getInteractionUsedLandIds,
-    resetInteractionState,
+    clearFarmInteractionState,
     fertilizeLand,
     fertilizeAll,
   }

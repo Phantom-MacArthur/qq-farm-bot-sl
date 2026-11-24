@@ -11,7 +11,9 @@ const { createRuntimeState } = require('./runtime-state');
 const { createWorkerManager } = require('./worker-manager');
 const { createAutoCodeRefreshService } = require('./auto-code-refresh');
 
-const OPERATION_KEYS = ['harvest', 'fertilize', 'plant', 'steal'];
+const { listHostedSessions, findAccountSession } = require('../session/ipc');
+
+const OPERATION_KEYS = ['harvest', 'farming', 'fertilize', 'plant', 'steal', 'helpFarming', 'taskClaim', 'sell', 'upgrade'];
 
 interface RuntimeEngineOptions {
     processRef?: any;
@@ -81,7 +83,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         addAccountLog,
     });
 
-    const { startWorker, stopWorker, restartWorker, callWorkerApi } = createWorkerManager({
+    const { startWorker, stopWorker, restartWorker, callWorkerApi, startAccountWorker, stopAccountWorker, detachAllWorkers } = createWorkerManager({
         fork,
         WorkerThread: Worker,
         runtimeMode,
@@ -126,8 +128,8 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         broadcastConfigToWorkers,
         buildConfigSnapshotForAccount,
         broadcastGameConfigReload,
-        startWorker,
-        stopWorker,
+        startWorker: startAccountWorker,
+        stopWorker: stopAccountWorker,
         restartWorker,
         scheduleAutoCodeRefresh: autoCodeRefresh.scheduleAccount,
         rescheduleAllAutoCodeRefresh: autoCodeRefresh.rescheduleAll,
@@ -204,7 +206,14 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
             startAdminServer(dataProvider);
         }
 
-        if (shouldAutoStartAccounts) {
+        if (processRef.env.FARM_SESSION_SOCKET) {
+            const sessions = await listHostedSessions();
+            for (const account of store.getAccounts().accounts) {
+                const session = findAccountSession(sessions, account);
+                if (session) startWorker(account, session.sessionId);
+                else if (shouldAutoStartAccounts) await dataProvider.startAccount(account.id);
+            }
+        } else if (shouldAutoStartAccounts) {
             await startAllAccounts();
         }
         // 调度必须在建号、启动、重启后都重建，不能因为历史配置让已删账号的任务继续跑。
@@ -225,6 +234,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         start,
         startAllAccounts,
         stopAllAccounts,
+        detachAllWorkers,
         broadcastConfigToWorkers,
         broadcastGameConfigReload,
         startWorker,

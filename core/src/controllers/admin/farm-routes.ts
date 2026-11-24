@@ -8,6 +8,7 @@ export {};
  */
 
 const { getLevelExpProgress } = require('../../config/gameConfig');
+const { getFarmRewardHistory } = require('../../services/farm-reward-history');
 
 const {
     getAccId,
@@ -413,6 +414,12 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
+    app.get('/api/farm-reward-history', (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) return res.status(400).json({ ok: false });
+        return res.json({ ok: true, data: getFarmRewardHistory(id) });
+    });
+
     // API: 每日礼包状态总览
     app.get('/api/daily-gifts', async (req: Request, res: Response) => {
         const id = getAccId(ctx, req);
@@ -442,11 +449,11 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
     });
 
     // API: 停止账号
-    app.post('/api/accounts/:id/stop', (req: Request, res: Response) => {
+    app.post('/api/accounts/:id/stop', async (req: Request, res: Response) => {
         try {
             const accountId = resolveAccId(ctx, req.params.id);
 
-            const ok = ctx.provider.stopAccount(accountId);
+            const ok = await ctx.provider.stopAccount(accountId);
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
             }

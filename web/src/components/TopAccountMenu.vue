@@ -18,6 +18,7 @@ const { accounts, currentAccount } = storeToRefs(accountStore)
 const { status } = storeToRefs(statusStore)
 const presence = useAccountPresence()
 const isOffline = computed(() => presence.value === 'offline')
+const presenceLabel = computed(() => presence.value === 'online' ? '在线' : presence.value === 'offline' ? '离线' : '连接中')
 
 const showAccountDropdown = ref(false)
 const showAccountModal = ref(false)
@@ -283,11 +284,12 @@ function openCareer() {
           class="h-full w-full object-cover"
           @error="markAvatarFailed(currentAccount)"
         >
-        <span v-else class="text-xs text-gray-500 font-semibold">{{ avatarInitial(currentAccount) }}</span>
+        <span v-else class="text-xs text-[var(--ui-muted)] font-semibold">{{ avatarInitial(currentAccount) }}</span>
+        <span class="account-trigger__presence" :class="`is-${presence}`" role="status" :aria-label="presenceLabel" :title="presenceLabel" />
       </div>
       <div class="min-w-0 flex flex-col">
-        <span class="truncate text-sm text-gray-900 font-semibold">{{ displayName }}</span>
-        <span class="mt-0.5 flex items-center gap-1.5 text-xs text-gray-500">
+        <span class="truncate text-sm text-[var(--ui-ink)] font-semibold">{{ displayName }}</span>
+        <span class="mt-0.5 flex items-center gap-1.5 text-xs text-[var(--ui-muted)]">
           <span
             v-if="platform"
             class="rounded px-1 text-xs leading-tight font-medium"
@@ -299,7 +301,7 @@ function openCareer() {
         </span>
       </div>
       <div
-        class="i-carbon-chevron-down shrink-0 text-gray-400 transition-transform duration-200"
+        class="i-carbon-chevron-down shrink-0 text-[var(--ui-muted)] transition-transform duration-200"
         :class="{ 'rotate-180': showAccountDropdown }"
       />
     </button>
@@ -317,7 +319,7 @@ function openCareer() {
         ref="menuSurface"
         role="region"
         aria-label="账号列表与管理"
-        class="account-menu-surface fixed z-[9999] overflow-y-auto border border-gray-200/70 rounded-xl bg-white/95 py-1 shadow-xl backdrop-blur-sm"
+        class="account-menu-surface fixed z-[9999] overflow-y-auto border rounded-xl py-1 shadow-xl backdrop-blur-sm"
         :style="{ top: `${dropdownPos.top}px`, left: `${dropdownPos.left}px`, width: `${dropdownPos.width}px`, maxHeight: `${dropdownPos.maxHeight}px` }"
         @keydown.escape.stop.prevent="closeDropdown"
         @focusout="onMenuFocusout"
@@ -327,7 +329,7 @@ function openCareer() {
             <div
               v-for="acc in accounts"
               :key="acc.id || acc.uin"
-              class="w-full flex items-center gap-3 px-4 py-2 transition-colors hover:bg-gray-100/60"
+              class="w-full flex items-center gap-3 px-4 py-2 transition-colors hover:bg-[var(--ui-surface-soft)]"
               :style="{ backgroundColor: currentAccount?.id === acc.id ? 'color-mix(in srgb, var(--ui-primary) 10%, transparent)' : undefined }"
             >
               <button
@@ -337,7 +339,7 @@ function openCareer() {
                 :aria-pressed="currentAccount?.id === acc.id"
                 @click="selectAccount(acc)"
               >
-                <div class="h-7 w-7 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-200">
+                <div class="h-7 w-7 flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-[var(--ui-surface-soft)]">
                   <img
                     v-if="shouldShowAvatar(acc)"
                     :src="avatarSource(acc)"
@@ -345,7 +347,7 @@ function openCareer() {
                     class="h-full w-full object-cover"
                     @error="markAvatarFailed(acc)"
                   >
-                  <span v-else class="text-xs text-gray-500 font-semibold">{{ avatarInitial(acc) }}</span>
+                  <span v-else class="text-xs text-[var(--ui-muted)] font-semibold">{{ avatarInitial(acc) }}</span>
                 </div>
                 <div class="min-w-0 flex flex-1 flex-col items-start">
                   <span class="w-full truncate text-left text-sm font-medium">{{ accountDisplayName(acc) }}</span>
@@ -357,14 +359,14 @@ function openCareer() {
                     >
                       {{ getPlatformLabel(acc.platform) }}
                     </span>
-                    <span v-if="accountSubtitle(acc)" class="text-xs text-gray-500">{{ accountSubtitle(acc) }}</span>
+                    <span v-if="accountSubtitle(acc)" class="text-xs text-[var(--ui-muted)]">{{ accountSubtitle(acc) }}</span>
                   </div>
                 </div>
               </button>
               <button
                 type="button"
                 :aria-label="`修改 ${accountDisplayName(acc)} 的备注`"
-                class="rounded-full p-1 text-gray-400 transition-colors hover:bg-blue-50 hover:text-blue-500"
+                class="rounded-full p-1 text-[var(--ui-muted)] transition-colors hover:bg-[var(--ui-surface-soft)] hover:text-blue-500"
                 title="修改备注"
                 @click.stop="openRemarkModal(acc)"
               >
@@ -377,22 +379,22 @@ function openCareer() {
               />
             </div>
           </template>
-          <div v-else class="px-4 py-3 text-center text-sm text-gray-400">
+          <div v-else class="px-4 py-3 text-center text-sm text-[var(--ui-muted)]">
             暂无账号
           </div>
         </div>
         <button
           v-if="currentAccount"
           type="button"
-          class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-gray-100/60"
+          class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-[var(--ui-surface-soft)]"
           @click="openCareer"
         >
           <span class="i-carbon-user-profile" aria-hidden="true" />
           <span>查看角色生涯</span>
         </button>
-        <div class="mt-1 border-t border-gray-100 pt-1">
+        <div class="mt-1 border-t border-[var(--ui-border)] pt-1">
           <button
-            class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-gray-100/50"
+            class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-[var(--ui-surface-soft)]"
             :style="{ color: 'var(--ui-primary)' }"
             @click="openAddAccount"
           >
@@ -401,7 +403,7 @@ function openCareer() {
           </button>
           <router-link
             to="/settings"
-            class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-gray-100/50"
+            class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-[var(--ui-surface-soft)]"
             :style="{ color: 'var(--ui-primary)' }"
             @click="closeDropdown"
           >
@@ -453,15 +455,34 @@ function openCareer() {
   width: 36px;
   flex: none;
   place-items: center;
-  overflow: hidden;
-  border-radius: 999px;
+  position: relative;
+  border-radius: 10px;
   border: 1px solid var(--ui-border);
   background: var(--ui-surface-soft);
 }
 
+.account-trigger__avatar img {
+  border-radius: inherit;
+}
+
+.account-trigger__presence {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 11px;
+  height: 11px;
+  border: 2px solid var(--ui-surface-strong, #fff);
+  border-radius: 50%;
+  background: var(--ui-subtle);
+}
+
+.account-trigger__presence.is-online { background: var(--ui-primary); }
+.account-trigger__presence.is-offline { background: var(--ui-danger); }
+
 .account-menu-surface {
   font-family: var(--ui-font-sans, inherit);
   color: var(--ui-ink);
-  background: #fff;
+  border-color: var(--ui-border);
+  background: var(--ui-surface-strong);
 }
 </style>

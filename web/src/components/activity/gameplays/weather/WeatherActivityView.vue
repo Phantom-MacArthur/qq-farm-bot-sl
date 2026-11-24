@@ -37,7 +37,7 @@ const filteredFriends = computed(() => {
     return orderedFriends.value.slice(0, 60)
   return orderedFriends.value.filter((friend) => {
     const name = friend.name.toLowerCase()
-    return name.includes(keyword) || String(friend.gid || '').includes(keyword)
+    return name.includes(keyword)
   }).slice(0, 60)
 })
 
@@ -230,7 +230,7 @@ watch(friendList, (friends) => {
           <div class="friend-toolbar">
             <label class="search-field">
               <span class="i-carbon-search" />
-              <input v-model="friendSearch" type="search" placeholder="搜索好友名称或 GID">
+              <input v-model="friendSearch" type="search" placeholder="搜索好友名称">
             </label>
           </div>
           <div v-if="filteredFriends.length === 0" class="operation-empty">
@@ -250,7 +250,7 @@ watch(friendList, (friends) => {
               <span v-else class="friend-avatar-fallback i-carbon-user-avatar" />
               <span class="friend-option__name">
                 <strong>{{ friendName(friend) }}</strong>
-                <small>Lv.{{ friend.level || '--' }} · GID {{ friend.gid }}</small>
+                <small>Lv.{{ friend.level || '--' }}</small>
               </span>
               <span v-if="inspectingGid === friend.gid" class="friend-option__loading i-carbon-circle-dash animate-spin" />
             </button>
@@ -277,7 +277,7 @@ watch(friendList, (friends) => {
               <span v-else class="friend-avatar-fallback i-carbon-user-avatar" />
               <span class="selected-friend__name">
                 <strong :title="friendName(selectedFriend)">{{ friendName(selectedFriend) }}</strong>
-                <small>Lv.{{ selectedFriend.level || '--' }} · GID {{ selectedFriend.gid }}</small>
+                <small>Lv.{{ selectedFriend.level || '--' }}</small>
               </span>
             </div>
             <small>{{ selectedFriendState.detail }}</small>
@@ -322,7 +322,7 @@ watch(friendList, (friends) => {
         <span>主动道具按目标使用，闪电感应为被动加成</span>
       </header>
       <div class="weather-items">
-        <button type="button" class="weather-item" @click="openInteractionItem('/personal', '5003')">
+        <button type="button" class="weather-item" @click="openInteractionItem('/farm', '5003')">
           <img :src="activity.inventory.lightningMutationBottle.image" alt="">
           <span><strong>闪电变异瓶</strong><small>我的未成熟 1×1 作物 · 库存 {{ activity.inventory.known ? activity.inventory.lightningMutationBottle.count : '--' }}</small></span>
           <em>去我的农场</em>
@@ -498,7 +498,7 @@ watch(friendList, (friends) => {
   display: -webkit-box;
   overflow: hidden;
   color: #5e7068;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.35;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
@@ -506,7 +506,7 @@ watch(friendList, (friends) => {
 .weather-item em {
   min-width: 68px;
   color: #357b62;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-style: normal;
   line-height: 1.35;
   text-align: right;
@@ -537,7 +537,7 @@ watch(friendList, (friends) => {
   border-radius: 50%;
   color: #2f7d5f;
   background: rgba(226, 244, 237, 0.9);
-  font-size: 25px;
+  font-size: var(--ui-font-size-large-15);
 }
 .weather-status.active .weather-status__icon {
   color: #956816;
@@ -554,7 +554,7 @@ watch(friendList, (friends) => {
 .weather-status__content span,
 .weather-status__period span {
   color: #71817a;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .weather-status__content strong,
 .weather-status__period strong {
@@ -565,7 +565,7 @@ watch(friendList, (friends) => {
   border-radius: 6px;
   color: #2f7459;
   background: rgba(221, 241, 233, 0.9);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .weather-status.active .weather-status__badge {
@@ -590,7 +590,7 @@ watch(friendList, (friends) => {
 .panel header > span {
   max-width: 68%;
   color: #6c7d76;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.5;
   text-align: right;
   overflow-wrap: anywhere;
@@ -598,7 +598,7 @@ watch(friendList, (friends) => {
 .panel h2 {
   flex: none;
   margin: 0;
-  font-size: 19px;
+  font-size: var(--ui-font-size-large-15);
 }
 .meter {
   height: 10px;
@@ -625,11 +625,11 @@ watch(friendList, (friends) => {
 }
 .task-progress__title strong {
   color: #273d36;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
 }
 .task-progress__title span {
   color: #6c7d76;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .task-row {
   display: flex;
@@ -638,7 +638,7 @@ watch(friendList, (friends) => {
   justify-content: space-between;
   gap: 12px;
   margin-top: 10px;
-  padding: 8px 0;
+  --inset-top: 8px; --inset-right: 0; --inset-bottom: 8px; --inset-left: 0;
   border-top: 1px solid rgba(48, 79, 68, 0.1);
 }
 .task-row__main {
@@ -667,7 +667,7 @@ watch(friendList, (friends) => {
 .task-row__heading span {
   flex: none;
   color: #6c7d76;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
 }
 .task-row__heading span.completed {
@@ -703,7 +703,7 @@ watch(friendList, (friends) => {
 .task-empty {
   padding: 16px 0 6px;
   color: #6c7d76;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-align: center;
 }
 .operation-grid {
@@ -742,11 +742,11 @@ watch(friendList, (friends) => {
   color: #536b61;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .inventory-item strong {
   color: #236e52;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 .operation-item img {
   width: 48px;
@@ -763,7 +763,7 @@ watch(friendList, (friends) => {
 .operation-description,
 .operation-empty {
   color: #6c7d76;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .operation-description {
   margin: 0;
@@ -775,7 +775,7 @@ watch(friendList, (friends) => {
 }
 .operation-button {
   display: inline-flex;
-  min-height: 38px;
+  min-height: var(--ui-content-item-control-height-30);
   align-items: center;
   justify-content: center;
   gap: 7px;
@@ -899,11 +899,11 @@ watch(friendList, (friends) => {
 }
 .friend-option__name small {
   color: #71817a;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .friend-option__loading {
   color: #4b8b72;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .collect-composer {
   display: flex;
@@ -921,7 +921,7 @@ watch(friendList, (friends) => {
 .selected-friend span,
 .selected-friend small {
   color: #71817a;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .selected-friend__heading {
   display: flex;
@@ -931,7 +931,7 @@ watch(friendList, (friends) => {
 }
 .selected-friend__heading em {
   color: #64766e;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-style: normal;
   font-weight: var(--fw-700);
 }
@@ -968,7 +968,7 @@ watch(friendList, (friends) => {
   align-items: center;
 }
 .selected-friend--empty > span {
-  font-size: 28px;
+  font-size: var(--ui-font-size-large-15);
 }
 .research-grid {
   display: grid;
@@ -1004,7 +1004,7 @@ watch(friendList, (friends) => {
 .research-node span,
 .research-node em {
   color: #71817a;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-style: normal;
 }
 .research-node strong {
@@ -1041,7 +1041,7 @@ watch(friendList, (friends) => {
 }
 .rules-panel p {
   color: #647870;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.7;
 }
 .rules-panel p + p {

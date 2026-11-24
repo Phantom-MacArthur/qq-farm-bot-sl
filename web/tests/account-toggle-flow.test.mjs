@@ -21,6 +21,8 @@ function loadSource(path, imports = {}) {
 function makePresenceHarness(t) {
   const messages = []
   const apiModule = loadSource('../src/api/index.ts', {
+    '@/stores/app-update': { useAppUpdateStore: () => ({ reconnecting: false, notifyBackendReachable() {}, notifyBackendUnavailable() {}, observeBuildId() {} }) },
+    '@/utils/panel-update': loadSource('../src/utils/panel-update.ts'),
     '@vueuse/core': { useStorage: (_key, defaultValue) => vue.ref(defaultValue) },
     '@/stores/toast': { useToastStore: () => ({ error: message => messages.push(message) }) },
   })

@@ -180,7 +180,7 @@ defineExpose({ open })
                 <div class="escort-time">
                   <h3>{{ current ? '护送中…' : completed.length ? '护送完成' : '空闲中' }}</h3>
                   <div v-if="current" class="escort-progress">
-                    <progress :value="progress" max="100" aria-label="护送进度" />
+                    <progress class="ui-progress-track" :value="progress" max="100" aria-label="护送进度" />
                     <span>剩余时间 {{ countdown(current.endTime) }}</span>
                   </div>
                   <p v-else>
@@ -405,7 +405,7 @@ defineExpose({ open })
   background: #fff;
   color: var(--pet-ink);
   font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -441,7 +441,7 @@ defineExpose({ open })
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -451,7 +451,7 @@ defineExpose({ open })
   display: grid;
   flex: none;
   width: 32px;
-  height: 32px;
+  height: var(--ui-content-item-control-height-30);
   place-items: center;
   border: 1px solid var(--pet-line);
   border-radius: 9px;
@@ -488,7 +488,7 @@ defineExpose({ open })
   border-radius: 10px;
   background: var(--ui-primary-soft, #e4f1e7);
   color: #2f6f4b;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
 }
 
@@ -509,13 +509,13 @@ defineExpose({ open })
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 34px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 0 14px;
   border: 1px solid var(--pet-line);
   border-radius: 999px;
   background: #fff;
   color: var(--pet-ink-2);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   cursor: pointer;
 }
@@ -573,13 +573,13 @@ defineExpose({ open })
 
 .escort-time h3 {
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
 }
 
 .escort-time p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
@@ -590,7 +590,7 @@ defineExpose({ open })
 }
 
 .escort-progress span {
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   color: var(--pet-muted);
   font-variant-numeric: tabular-nums;
@@ -631,7 +631,7 @@ defineExpose({ open })
   border: 1px solid var(--pet-line);
   border-radius: 12px;
   background: var(--pet-paper);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -639,7 +639,7 @@ defineExpose({ open })
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   color: var(--pet-ink);
   font-variant-numeric: tabular-nums;
 }
@@ -665,14 +665,14 @@ defineExpose({ open })
 .escort-rewards h3,
 .escort-list-heading h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: 800;
 }
 
 .escort-rewards h3 span {
   margin-left: 4px;
   color: var(--pet-accent-deep);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .escort-charm-row {
@@ -702,13 +702,13 @@ defineExpose({ open })
 
 .escort-charm-row strong {
   display: block;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
 }
 
 .escort-charm-row p {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
   color: var(--pet-ink-2);
 }
@@ -716,7 +716,7 @@ defineExpose({ open })
 .escort-charm-row small {
   display: block;
   margin-top: 2px;
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -734,7 +734,7 @@ defineExpose({ open })
 .escort-refresh-hint,
 .escort-note {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -744,7 +744,7 @@ defineExpose({ open })
   border: 1px dashed var(--pet-line-strong);
   border-radius: 12px;
   color: var(--pet-muted);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-align: center;
 }
 
@@ -758,7 +758,7 @@ defineExpose({ open })
   border-radius: 999px;
   background: var(--ui-primary-soft, #e4f1e7);
   color: var(--ui-primary, #438d63);
-  font-size: 10.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
 }
 
@@ -802,7 +802,7 @@ defineExpose({ open })
   border: 1px solid var(--pet-line);
   border-radius: 999px;
   background: #fff;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   color: var(--pet-ink-2);
 }
@@ -824,13 +824,13 @@ defineExpose({ open })
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 36px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 0 16px;
   border: 1px solid var(--pet-line);
   border-radius: 10px;
   background: #fff;
   color: var(--pet-ink);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   line-height: 1.2;
   cursor: pointer;
@@ -870,7 +870,7 @@ defineExpose({ open })
   border: 0;
   background: none;
   color: var(--ui-primary, #438d63);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   cursor: pointer;
 }
@@ -889,7 +889,7 @@ defineExpose({ open })
 
 .escort-list > p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
@@ -904,7 +904,7 @@ defineExpose({ open })
 .escort-list-heading p {
   flex: 1 1 200px;
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
@@ -923,13 +923,13 @@ defineExpose({ open })
   border: 1px solid var(--pet-line);
   border-radius: 12px;
   background: var(--pet-paper);
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   color: var(--pet-muted);
 }
 
 .escort-counts b {
-  font-size: 17px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
   color: var(--pet-accent-deep);
   font-variant-numeric: tabular-nums;
@@ -952,7 +952,7 @@ defineExpose({ open })
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -962,7 +962,7 @@ defineExpose({ open })
   align-items: center;
   gap: 6px;
   color: var(--pet-ink);
-  font-size: 13.5px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
 }
 
@@ -990,25 +990,25 @@ defineExpose({ open })
 }
 
 .escort-treasure-card dt {
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
 .escort-treasure-card dd {
   margin: 0;
-  font-size: 13.5px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
 
 .escort-treasure-card > p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
 .escort-treasure-card > small {
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -1025,12 +1025,12 @@ defineExpose({ open })
 
 .escort-log-card > p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
 .escort-log-card time {
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -1042,12 +1042,12 @@ defineExpose({ open })
   padding: 8px 10px;
   border-radius: 10px;
   background: var(--pet-paper-2);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
 .escort-log-card details {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
@@ -1074,7 +1074,7 @@ defineExpose({ open })
 
 .escort-rules p {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.8;
   color: var(--pet-ink-2);
 }
@@ -1082,7 +1082,7 @@ defineExpose({ open })
 .escort-rule-heading {
   margin-top: 4px !important;
   color: var(--pet-ink) !important;
-  font-size: 13.5px !important;
+  font-size: var(--ui-font-size-small-13) !important;
   font-weight: 800;
 }
 

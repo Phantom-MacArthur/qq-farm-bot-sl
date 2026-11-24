@@ -14,11 +14,11 @@ const page = defineModel<number>('page', { default: 1 })
 </script>
 
 <template>
-  <section class="catalog-panel page-card-surface rounded-2xl panel-scroll-layout">
+  <section class="catalog-panel page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
     <!-- 标题栏：各页签自己的搜索与筛选控件 -->
-    <div class="catalog-toolbar panel-titlebar">
+    <div class="catalog-toolbar panel-titlebar margin-shell"><span class="margin-content">
       <slot name="toolbar" />
-    </div>
+    </span></div>
 
     <div v-if="loading" class="flex justify-center py-16">
       <div class="i-svg-spinners-90-ring-with-bg text-4xl text-green-500" />
@@ -27,10 +27,10 @@ const page = defineModel<number>('page', { default: 1 })
       <slot />
     </div>
 
-    <div v-if="!loading && (pageCount || 1) > 1" class="catalog-pagination">
+    <div v-if="!loading && (pageCount || 1) > 1" class="catalog-pagination margin-shell"><span class="margin-content">
       <NPagination v-model:page="page" :page-count="pageCount || 1" :page-slot="5" />
-    </div>
-  </section>
+    </span></div>
+  </span></section>
 </template>
 
 <style scoped>
@@ -42,7 +42,7 @@ const page = defineModel<number>('page', { default: 1 })
   display: flex;
   flex-direction: column;
   overflow: clip;
-  padding: 16px;
+  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
   background: var(--ui-surface-solid) !important;
 }
 
@@ -64,7 +64,7 @@ const page = defineModel<number>('page', { default: 1 })
   align-items: center;
   justify-content: center;
   margin: 0 -16px;
-  padding: 12px 16px;
+  --inset-top: 12px; --inset-right: 16px; --inset-bottom: 12px; --inset-left: 16px;
   border-top: 1px solid var(--ui-border);
 }
 

@@ -13,6 +13,13 @@ export interface CareerHarvestItem {
     harvestCount: number;
 }
 
+export interface RanchCareerInfo {
+    harvest: number;
+    mature: number;
+    steal: number;
+    products: { id: number; count: number }[];
+}
+
 export interface CareerInfo {
     gid: number;
     items: CareerHarvestItem[];
@@ -24,6 +31,7 @@ export interface CareerInfo {
     exp: number;
     platform: number;
     openId: string;
+    ranch: RanchCareerInfo | null;
 }
 
 async function getCareerInfo(gid: number): Promise<CareerInfo> {
@@ -52,6 +60,7 @@ async function getCareerInfo(gid: number): Promise<CareerInfo> {
         };
     });
 
+    const ranch = reply.ranch;
     return {
         gid: toNum(reply.gid) || numericGid,
         items,
@@ -63,6 +72,12 @@ async function getCareerInfo(gid: number): Promise<CareerInfo> {
         exp: toNum(reply.exp),
         platform: toNum(reply.platform),
         openId: String((reply.open_id ?? reply.openId) || ''),
+        ranch: ranch ? {
+            harvest: toNum(ranch.total_harvest_count),
+            mature: toNum(ranch.total_mature_count),
+            steal: toNum(ranch.total_steal_count),
+            products: ranch.harvest_items.map((item: any) => ({ id: toNum(item.item_id), count: toNum(item.harvest_count) })),
+        } : null,
     };
 }
 

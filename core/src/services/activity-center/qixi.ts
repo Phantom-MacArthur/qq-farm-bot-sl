@@ -282,7 +282,7 @@ function createQixiActivityService(deps: any) {
                 count: 1,
                 messageTextId,
                 totalSendCount: int64String(reply.qixi_gift_result?.total_send_count),
-                message: `已向好友 ${friendGid} 赠送 1 个鹊羽香囊`,
+                message: `已向好友赠送 1 个鹊羽香囊`,
                 snapshot: await getActivityCenterSnapshot(),
             };
         });

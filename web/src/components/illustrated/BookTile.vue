@@ -38,12 +38,12 @@ watch(() => props.image, () => failed.value = false)
   <component
     :is="interactive ? 'button' : 'div'"
     :type="interactive ? 'button' : undefined"
-    class="book-tile"
+    class="book-tile margin-shell"
     :class="[`is-${state}`, { 'is-interactive': interactive }]"
     :title="name"
     :aria-label="label || undefined"
     @click="interactive && $emit('select')"
-  >
+  ><span class="margin-content">
     <span class="book-tile__well">
       <img v-if="image && !failed" v-lazy-src="image" alt="" loading="lazy" decoding="async" @error="failed = true">
       <span v-else class="book-tile__fallback i-carbon-image" aria-hidden="true" />
@@ -55,7 +55,7 @@ watch(() => props.image, () => failed.value = false)
     <span v-if="meta || $slots.meta" class="book-tile__meta" :class="`is-${metaTone}`">
       <slot name="meta">{{ meta }}</slot>
     </span>
-  </component>
+  </span></component>
 </template>
 
 <style scoped>
@@ -66,16 +66,15 @@ watch(() => props.image, () => failed.value = false)
   flex-direction: column;
   align-items: stretch;
   gap: 4px;
-  padding: 8px 8px 10px;
+  --inset-top: 12px; --inset-right: 8px; --inset-bottom: 10px; --inset-left: 8px;
   border: 1px solid var(--ui-border);
   border-radius: 12px;
   color: var(--ui-ink);
-  background: var(--ui-surface);
+  background: transparent;
   font: inherit;
   text-align: center;
   transition:
     border-color 0.16s ease,
-    background-color 0.16s ease,
     transform var(--spring-drag-duration) var(--spring-drag);
 }
 
@@ -85,7 +84,6 @@ watch(() => props.image, () => failed.value = false)
 
 .book-tile.is-interactive:hover {
   border-color: color-mix(in srgb, var(--tile-accent, var(--ui-primary)) 40%, var(--ui-border));
-  background: var(--ui-surface-strong);
 }
 
 .book-tile.is-interactive:active {
@@ -101,16 +99,17 @@ watch(() => props.image, () => failed.value = false)
 .book-tile__well {
   position: relative;
   display: grid;
+  width: min(100%, 48px);
   aspect-ratio: 1;
+  align-self: center;
   place-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   border-radius: 9px;
-  background: var(--ui-surface-soft);
 }
 
 .book-tile__well > img {
-  width: 72%;
-  height: 72%;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   transition:
     opacity 0.2s ease,
@@ -119,7 +118,7 @@ watch(() => props.image, () => failed.value = false)
 
 .book-tile__fallback {
   color: var(--ui-subtle);
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .book-tile.is-missing .book-tile__well > img {
@@ -131,10 +130,6 @@ watch(() => props.image, () => failed.value = false)
   color: var(--ui-muted);
 }
 
-.book-tile.is-pending .book-tile__well {
-  background: var(--ui-warning-soft);
-}
-
 .book-tile__fresh {
   position: absolute;
   top: 5px;
@@ -143,7 +138,7 @@ watch(() => props.image, () => failed.value = false)
   border-radius: 5px;
   color: #fff;
   background: var(--ui-danger-fill);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 16px;
 }
@@ -151,7 +146,7 @@ watch(() => props.image, () => failed.value = false)
 .book-tile__name {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
   line-height: 18px;
   text-overflow: ellipsis;
@@ -167,7 +162,7 @@ watch(() => props.image, () => failed.value = false)
   gap: 3px;
   overflow: hidden;
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 16px;
   font-variant-numeric: tabular-nums;
   text-overflow: ellipsis;
@@ -183,4 +178,8 @@ watch(() => props.image, () => failed.value = false)
   color: var(--ui-warning);
   font-weight: var(--fw-600);
 }
+</style>
+
+<style scoped>
+.book-tile :deep(*) { font-weight: var(--fw-400) !important; }
 </style>

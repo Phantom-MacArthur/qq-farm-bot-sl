@@ -204,7 +204,7 @@ watch(() => props.constellation, (value) => {
   color: #2e8a66;
   background: #e6f4ed;
   transform: translateY(-50%);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .group-strip__lock,
 .group-strip__done {
@@ -246,11 +246,11 @@ watch(() => props.constellation, (value) => {
   gap: 8px;
   margin: 0 0 18px;
   color: #2b493f;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 .star-reward__title button {
   width: 20px;
-  height: 20px;
+  height: var(--ui-content-item-control-height-30);
   display: inline-grid;
   flex: none;
   place-items: center;
@@ -260,7 +260,7 @@ watch(() => props.constellation, (value) => {
   color: #8d633f;
   background: #fff8df;
   font-family: Arial, sans-serif;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   line-height: 1;
   text-align: center;
@@ -286,18 +286,18 @@ watch(() => props.constellation, (value) => {
 }
 .light-action strong {
   color: #416858;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 .light-action button {
   min-width: 126px;
-  min-height: 40px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 8px 18px;
   border: 1px solid #2e8a66;
   border-radius: 10px;
   color: white;
   background: #2e8a66;
   box-shadow: 0 8px 18px rgba(35, 113, 83, 0.18);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   cursor: pointer;
 }
 .light-action button:disabled {
@@ -317,6 +317,6 @@ watch(() => props.constellation, (value) => {
 }
 .catalog-unsupported span {
   color: #4b8b72;
-  font-size: 50px;
+  font-size: var(--ui-font-size-large-15);
 }
 </style>

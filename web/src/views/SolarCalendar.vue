@@ -241,8 +241,8 @@ onUnmounted(() => sequence++)
       />
     </div>
 
-    <section v-if="currentAccountId && (isOffline || calendarData)" class="solar-panel page-card-surface rounded-2xl panel-scroll-layout">
-      <header v-if="isOffline || season" class="panel-titlebar panel-titlebar--flush" aria-label="季度进度">
+    <section v-if="currentAccountId && (isOffline || calendarData)" class="solar-panel page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <header v-if="isOffline || season" class="panel-titlebar panel-titlebar--flush margin-shell" aria-label="季度进度"><span class="margin-content">
         <div v-if="isOffline" class="season-bar__progress">
           <strong>{{ seasonTabs.find(entry => entry.id === seasonId)?.name }}</strong>
         </div>
@@ -259,7 +259,7 @@ onUnmounted(() => sequence++)
           :disabled="isOffline || busy"
           @click="manualRefresh"
         />
-      </header>
+      </span></header>
 
       <div v-if="isOffline" class="panel-scroll-body solar-content">
         <OfflineState />
@@ -321,11 +321,11 @@ onUnmounted(() => sequence++)
       </ol>
       </div>
 
-    </section>
+    </span></section>
 
     <NModal v-if="!isOffline && question" :show="true" :mask-closable="!busy" :close-on-esc="!busy" @update:show="!busy && (questionId = 0)">
       <NCard :title="`${question.name} · 节令问答`" :closable="!busy" class="solar-question" role="dialog" aria-modal="true" :aria-label="question.name" @close="questionId = 0">
-        <div class="question-scroll">
+        <div class="question-scroll dialog-scroll">
           <p class="question-text">
             {{ question.question }}
           </p>
@@ -379,12 +379,12 @@ onUnmounted(() => sequence++)
   text-align: center;
 }
 .solar-empty > span {
-  font-size: 32px;
+  font-size: var(--ui-font-size-large-15);
   opacity: 0.6;
 }
 .solar-empty strong {
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 /* 季节面板：与账号管理同构的 page-card-surface，内部靠分隔线而不是卡片堆叠。
@@ -397,7 +397,7 @@ onUnmounted(() => sequence++)
   overflow: clip;
   width: 100%;
   min-width: 0;
-  padding: 0;
+  --inset-top: 0; --inset-right: 0; --inset-bottom: 0; --inset-left: 0;
 }
 .solar-content {
   --term-inset: 12px;
@@ -407,7 +407,7 @@ onUnmounted(() => sequence++)
   display: flex;
   align-items: center;
   gap: 12px;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .season-bar__progress b {
   color: var(--ui-primary);
@@ -502,20 +502,20 @@ onUnmounted(() => sequence++)
 .term__title h3 {
   margin: 0;
   font-family: var(--serif);
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   letter-spacing: 0.08em;
 }
 .term__lunar {
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .term__badge {
   padding: 1px 9px;
   border-radius: 999px;
   color: var(--ui-muted);
   background: var(--ui-bg-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
@@ -540,7 +540,7 @@ onUnmounted(() => sequence++)
   margin: 8px 0 0;
   color: var(--ui-muted);
   font-family: var(--serif);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   line-height: 1.8;
 }
 .term__poem span {
@@ -571,7 +571,7 @@ onUnmounted(() => sequence++)
 }
 .line-label {
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   white-space: nowrap;
 }
 .chips {
@@ -586,7 +586,7 @@ onUnmounted(() => sequence++)
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-variant-numeric: tabular-nums;
 }
 .chip :deep(.item-image) {
@@ -614,7 +614,7 @@ onUnmounted(() => sequence++)
   border-radius: 8px;
   color: var(--ui-warning);
   background: var(--ui-warning-soft);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 .term__tips span {
@@ -666,7 +666,12 @@ onUnmounted(() => sequence++)
   border-radius: 12px;
 }
 .solar-question :deep(.n-card-content) {
+  display: flex;
   flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+.question-scroll {
   min-height: 0;
   overflow-y: auto;
 }
@@ -677,7 +682,7 @@ onUnmounted(() => sequence++)
 .question-text {
   margin: 0;
   color: var(--ui-ink);
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-600);
   line-height: 1.7;
 }
@@ -715,7 +720,7 @@ onUnmounted(() => sequence++)
   border: 1.5px solid var(--ui-border-strong);
   border-radius: 50%;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .answer-options label.selected {
   border-color: var(--ui-primary);
@@ -748,7 +753,7 @@ onUnmounted(() => sequence++)
   flex-shrink: 0;
   margin-left: auto;
   color: var(--ui-danger);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .answer-options label .answer-options__correct {
   padding: 2px 6px;

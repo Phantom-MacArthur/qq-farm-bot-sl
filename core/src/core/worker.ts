@@ -17,10 +17,12 @@ const { performDailyMonthCardGift, getMonthCardDailyState } = require('../servic
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { runExclusiveAutomationTask } = require('../services/automation-lock');
 const { isMysteryShopWatchEnabled, mysteryShopConfigChanged, checkMysteryShopTick, resetMysteryShopPending } = require('../services/mystery-shop-auto');
-const { createScheduler } = require('../services/scheduler');
+const ranchAutomation = require('../services/ranch/automation');
+const { isRanchMarketEnabled, RANCH_MARKET_SWITCH_BY_CURRENCY } = require('../config/ranch-automation');
+const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
 const { refreshActivityWindows } = require('../services/activity-windows');
-const { resetSessionGains, initStatsWithPersistence, saveStats } = require('../services/stats');
+const { resetSessionGains, initStatsWithPersistence, saveStats, recordOperation } = require('../services/stats');
 const { initStatusBar, setStatusPlatform, statusData, updateStatusGold } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
 const { cleanupTaskSystem, checkAndClaimTasks, getTaskClaimDailyState, getTaskDailyStateLikeApp, getGrowthTaskStateLikeApp } = require('../services/task');
@@ -32,8 +34,8 @@ const {
     openCharitySettlementGiftPacksSilently,
 } = require('../services/warehouse');
 const { checkAndClaimDogSkillGifts } = require('../services/dog-skill-gifts');
-const { isGatewayHealthyForBusiness, nextBusinessBackoffMs } = require('../utils/low-priority-gate');
-const { connect, cleanup, getWs, getUserState, networkEvents, getGatewayLoad } = require('../utils/network');
+const { isGatewayHealthyForBusiness, isGatewayIdleForLowPriority, nextBusinessBackoffMs } = require('../utils/low-priority-gate');
+const { connect, cleanup, configureHostedSession, activateHostedSession, detachHostedSession, getWs, getUserState, networkEvents, getGatewayLoad } = require('../utils/network');
 const { loadProto } = require('../utils/proto');
 const { runWithRequestClass } = require('../utils/request-context');
 const { setLogHook, log, logWarn, toNum, getSystemDateKey, formatSystemDateTime24 } = require('../utils/utils');
@@ -53,7 +55,7 @@ if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUN
 
 function sendToMaster(payload: Record<string, any>): void {
     if (process.send) {
-        process.send(payload);
+        if (process.connected) process.send(payload);
         return;
     }
     if (parentPort) {
@@ -108,6 +110,7 @@ let isRunning: boolean = false;
 let loginReady: boolean = false;
 let appliedConfigRevision: number = 0;
 let unifiedSchedulerRunning: boolean = false;
+let unifiedTickGeneration: number | null = null;
 let farmTaskRunning: boolean = false;
 let nextFarmRunAt: number = 0;
 let friendTaskRunning: boolean = false;
@@ -116,10 +119,11 @@ let nextMysteryShopRunAt: number | null = null;
 let mysteryShopTaskRunning = false;
 let mysteryShopConfigGeneration = 0;
 const MYSTERY_SHOP_CHECK_INTERVAL_MS = 5 * 60 * 1000;
-// 网关卡住时两条定时任务各自的退避时长（毫秒），0 表示按正常间隔跑
-const businessBackoffMs: Record<string, number> = { farm: 0, friend: 0 };
+// 网关卡住时各定时任务的退避时长（毫秒），0 表示按正常间隔跑
+const businessBackoffMs: Record<string, number> = { farm: 0, friend: 0, ranch: 0 };
 let lastStatusHash: string = '';
 let lastStatusSentAt: number = 0;
+let onSellGain: ((deltaGold: any) => void) | null = null;
 let onFarmHarvested: (() => Promise<void>) | null = null;
 let onDogSkillGiftPending: ((count: any) => void) | null = null;
 let harvestSellRunning: boolean = false;
@@ -130,6 +134,69 @@ let shutdownStarted: boolean = false;
 let shutdownOfflineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLINE' = 'ACCOUNT_OFFLINE';
 let runtimeGeneration: number = 0;
 let lastDailyRunDate: string = '';
+let ranchRoutineQueued = false;
+let initialFarmCheckDone = false;
+let initialFriendCheckDone = false;
+let ranchDeferredUntil = 0;
+
+function ranchNextRunAt(): number {
+    // 首轮农场和好友巡查先完成；长好友轮次的访问间隔也不插入场景切换。
+    if (!unifiedSchedulerRunning || ranchRoutineQueued || farmTaskRunning || friendTaskRunning
+        || !initialFarmCheckDone || !initialFriendCheckDone) return Infinity;
+    const state = ranchAutomation.getRoutineState();
+    return Math.max(state.nextCheckAt, ranchDeferredUntil);
+}
+
+function wakeRanchMarketExchange({ id }: { id: 7002 | 1008 }): void {
+    if (!loginReady) return;
+    const auto = getAutomation();
+    if ((auto[RANCH_MARKET_SWITCH_BY_CURRENCY[id]] ?? auto.ranch_market_organic) !== true) return;
+    ranchAutomation.requestMarketCheck();
+    scheduleUnifiedNextTick();
+}
+
+function onRanchMarketVisitChanged(rotation: any): void {
+    if (!loginReady || !isRanchMarketEnabled(getAutomation())) return;
+    if (ranchAutomation.noteMarketVisit(rotation)) scheduleUnifiedNextTick();
+}
+
+function onRanchBookReward(kind: 'normal' | 'giant', available: boolean): void {
+    if (ranchAutomation.noteBookReward(kind, available) && loginReady && getAutomation().ranch_illustrated) scheduleUnifiedNextTick();
+}
+
+function onRanchFacilitiesChanged(facilities: any[]): void {
+    if (!loginReady || !getAutomation().ranch_activate_shed) return;
+    if (ranchAutomation.noteRanchFacilities(facilities)) scheduleUnifiedNextTick();
+}
+
+function runRanchRoutine(detached = false): Promise<void> {
+    if (!loginReady || Date.now() < ranchNextRunAt()) return Promise.resolve();
+    const generation = runtimeGeneration;
+    ranchRoutineQueued = true;
+    return runExclusiveAutomationTask('ranch_routine', async () => {
+        if (!loginReady || generation !== runtimeGeneration) return;
+        // 排队期间农场可能已到期，拿到锁后重新判断，避免空切一次牧场。
+        if (farmTaskRunning || friendTaskRunning || Date.now() >= Math.min(nextFarmRunAt, nextFriendRunAt)) return;
+        const deferMs = nextBusinessTickDeferMs('ranch');
+        if (deferMs > 0) {
+            ranchDeferredUntil = Date.now() + deferMs;
+            return;
+        }
+        if (!isGatewayIdleForLowPriority(getGatewayLoad())) {
+            ranchDeferredUntil = Date.now() + 1000;
+            return;
+        }
+        const state = ranchAutomation.getRoutineState();
+        if (state.doneToday || Date.now() < state.nextCheckAt) return;
+        await runWithRequestClass('friend', () => ranchAutomation.run({
+            farmDeadline: () => Math.min(nextFarmRunAt, friendTaskRunning ? Date.now() : nextFriendRunAt),
+            canContinue: () => loginReady && generation === runtimeGeneration && isGatewayHealthyForBusiness(getGatewayLoad()),
+        }));
+    }, { detached }).finally(() => {
+        ranchRoutineQueued = false;
+        scheduleUnifiedNextTick();
+    });
+}
 const workerScheduler = createScheduler('worker');
 // 土地快照保鲜：巡田循环只在「农场自动化」开关打开时才会带出快照，
 // 这里单独兜底一个补拉周期，账号上线后种植经验能尽快出现。
@@ -243,7 +310,7 @@ function resetUnifiedSchedule(): void {
     businessBackoffMs.friend = 0;
 }
 
-const BUSINESS_TICK_LABEL: Record<string, string> = { farm: '农场定时任务', friend: '好友定时任务' };
+const BUSINESS_TICK_LABEL: Record<string, string> = { farm: '农场定时任务', friend: '好友定时任务', ranch: '牧场定时任务' };
 
 function describeGatewayStall(load: any): string {
     const parts: string[] = [];
@@ -315,6 +382,7 @@ async function runFarmTick(auto: any): Promise<void> {
     } finally {
         nextFarmRunAt = Date.now() + farmMs;
         farmTaskRunning = false;
+        initialFarmCheckDone = true;
     }
 }
 
@@ -329,6 +397,7 @@ async function runFriendTick(auto: any): Promise<void> {
     // friend 总开关仍控制好友任务总入口；关闭时也要推进到期时间，避免调度器每秒空转。
     if (!auto.friend) {
         nextFriendRunAt = Date.now() + friendMs;
+        initialFriendCheckDone = true;
         return;
     }
 
@@ -349,6 +418,7 @@ async function runFriendTick(auto: any): Promise<void> {
         if (generation === runtimeGeneration) {
             nextFriendRunAt = Date.now() + friendMs;
             friendTaskRunning = false;
+            initialFriendCheckDone = true;
             scheduleUnifiedNextTick();
         }
     }
@@ -363,17 +433,20 @@ async function runUnifiedTick(): Promise<void> {
     if (nextMysteryShopRunAt !== null && now >= nextMysteryShopRunAt && !mysteryShopTaskRunning) {
         void runMysteryShopTick();
     }
-    if (!dueFarm && !dueFriend) return;
+    if (!dueFarm && !dueFriend && now < ranchNextRunAt()) return;
 
     const auto = getAutomation();
     // 好友按单次访问持锁，等待间隔不阻塞后续农场巡查。
     if (dueFarm) await runExclusiveAutomationTask('farm_tick', () => runFarmTick(auto));
     if (!unifiedSchedulerRunning || !loginReady || generation !== runtimeGeneration) return;
     if (dueFriend && !friendTaskRunning) void runFriendTick(auto);
+    void runRanchRoutine(true).catch((error: any) => logWarn('牧场', `牧场例程失败：${error.message}`));
 }
 
 function scheduleUnifiedNextTick(): void {
     if (!unifiedSchedulerRunning) return;
+    // 牧场离场可提前唤醒，但正在等待连接的农场巡查不能再排一轮。
+    if (unifiedTickGeneration === runtimeGeneration) return;
     workerScheduler.clear('unified_next_tick');
     if (!loginReady) return;
 
@@ -381,17 +454,19 @@ function scheduleUnifiedNextTick(): void {
     const nextAt = Math.min(
         farmTaskRunning ? Number.POSITIVE_INFINITY : (Number(nextFarmRunAt) || (now + 1000)),
         friendTaskRunning ? Number.POSITIVE_INFINITY : (Number(nextFriendRunAt) || (now + 1000)),
-        mysteryShopTaskRunning ? Number.POSITIVE_INFINITY : (nextMysteryShopRunAt ?? Number.POSITIVE_INFINITY)
+        mysteryShopTaskRunning ? Number.POSITIVE_INFINITY : (nextMysteryShopRunAt ?? Number.POSITIVE_INFINITY),
+        ranchNextRunAt(),
     );
     if (!Number.isFinite(nextAt)) return;
     const delayMs = Math.max(1000, nextAt - now); // 最低 1 秒
     const generation = runtimeGeneration;
-
     workerScheduler.setTimeoutTask('unified_next_tick', delayMs, async () => {
-        if (generation !== runtimeGeneration) return;
+        if (generation !== runtimeGeneration || !unifiedSchedulerRunning || unifiedTickGeneration === generation) return;
+        unifiedTickGeneration = generation;
         try {
             await runUnifiedTick();
         } finally {
+            if (unifiedTickGeneration === generation) unifiedTickGeneration = null;
             if (generation === runtimeGeneration) scheduleUnifiedNextTick();
         }
     });
@@ -399,6 +474,10 @@ function scheduleUnifiedNextTick(): void {
 
 function startUnifiedScheduler(): void {
     if (unifiedSchedulerRunning) return;
+    initialFarmCheckDone = false;
+    initialFriendCheckDone = false;
+    ranchDeferredUntil = 0;
+    businessBackoffMs.ranch = 0;
     unifiedSchedulerRunning = true;
     resetUnifiedSchedule();
     nextMysteryShopRunAt = isMysteryShopWatchEnabled(getAutomation()) ? Date.now() : null;
@@ -474,11 +553,7 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
 
         if (!loginReady || !canContinue()) return;
         // 登录串行部分跑完，才挂上主循环和后续周期性定时器，避免启动期任务叠跑。
-        startFarmCheckLoop({ externalScheduler: true });
-        startFriendCheckLoop({ externalScheduler: true });
-        startUnifiedScheduler();
-        startDailyRoutineTimer(false);
-        startCouponGiftTimer();
+        startBusinessLoops();
     } catch (e: any) {
         log('系统', `登录启动序列执行失败: ${e.message}`, { module: 'system', event: '启动序列', result: 'error' });
     }
@@ -486,6 +561,14 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
 function stopCouponGiftTimer(): void {
     workerScheduler.clear('coupon_gift_initial');
     workerScheduler.clear('coupon_gift_interval');
+}
+
+function startBusinessLoops(): void {
+    startFarmCheckLoop({ externalScheduler: true });
+    startFriendCheckLoop({ externalScheduler: true });
+    startUnifiedScheduler();
+    startDailyRoutineTimer(false);
+    startCouponGiftTimer();
 }
 
 function runCouponGiftTick(): Promise<void> {
@@ -529,8 +612,12 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
     if (!loginReady && snapshot && snapshot.systemClientVersion !== undefined) {
         updateRuntimeConfig({ clientVersion: String(snapshot.systemClientVersion || '') });
     }
-    const appliedSnapshot = applyConfigSnapshot(snapshot || {}, { persist: false, accountId });
+    applyConfigSnapshot(snapshot || {}, { persist: false, accountId });
     configureEmailClaim({ accountId });
+    const nextRanchAuto = getAutomation();
+    const ranchChanged = Object.keys(nextRanchAuto).some(key => key.startsWith('ranch_')
+        && JSON.stringify(nextRanchAuto[key]) !== JSON.stringify(prevAuto[key]));
+    if (ranchChanged) ranchAutomation.resetSchedule();
     if (rev > appliedConfigRevision) appliedConfigRevision = rev;
 
     // 优先使用本次下发的间隔，避免 worker 内部 store 漂移导致回退默认值
@@ -590,8 +677,8 @@ onMasterMessage(async (msg: any) => {
     try {
         if (msg.type === 'start') {
             await startBot(msg.config);
-        } else if (msg.type === 'stop') {
-            await stopBot();
+        } else if (msg.type === 'stop' || msg.type === 'detach') {
+            await stopBot(msg.type === 'detach');
         } else if (msg.type === 'api_call') {
             handleApiCall(msg);
         } else if (msg.type === 'config_sync') {
@@ -672,12 +759,25 @@ async function startBot(config: any): Promise<void> {
     };
     networkEvents.on('disconnected', onDisconnected);
     networkEvents.on('kickout', onKickout);
+    networkEvents.off('ranchBookReward', onRanchBookReward);
+    networkEvents.on('ranchBookReward', onRanchBookReward);
+    networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
+    networkEvents.on('ranchFacilitiesChanged', onRanchFacilitiesChanged);
 
     const generation = runtimeGeneration;
     const canContinueLogin = (): boolean => isRunning && !shutdownStarted && generation === runtimeGeneration;
     const onLoginSuccess = async (): Promise<void> => {
         if (!canContinueLogin() || loginReady) return;
         loginReady = true;
+        ranchAutomation.resetSchedule();
+        if (onSellGain) networkEvents.off('sell', onSellGain);
+        onSellGain = (deltaGold: any) => {
+            const delta = Number(deltaGold || 0);
+            if (!Number.isFinite(delta) || delta <= 0) return;
+            recordOperation('sell', 1);
+        };
+        networkEvents.on('sell', onSellGain);
+
         if (onFarmHarvested) {
             networkEvents.off('farmHarvested', onFarmHarvested);
         }
@@ -694,6 +794,11 @@ async function startBot(config: any): Promise<void> {
             }
         };
         networkEvents.on('farmHarvested', onFarmHarvested);
+
+        networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
+        networkEvents.on('ranchMarketStockReady', wakeRanchMarketExchange);
+        networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+        networkEvents.on('ranchMarketVisitChanged', onRanchMarketVisitChanged);
 
         if (onDogSkillGiftPending) {
             networkEvents.off('dogSkillGiftPending', onDogSkillGiftPending);
@@ -776,7 +881,15 @@ async function startBot(config: any): Promise<void> {
             Number(latest.goldBean || 0),
             bagConfirmed,
         );
+        if (!canContinueLogin()) return;
+        if (config.sessionId) {
+            startBusinessLoops();
+            syncStatus();
+            await activateHostedSession();
+            return;
+        }
         resetSessionGains();
+        await activateHostedSession();
 
         // 登录成功后启动各模块
         await runExclusiveAutomationTask('invite_codes', processInviteCodes);
@@ -801,6 +914,7 @@ async function startBot(config: any): Promise<void> {
         await runExclusiveAutomationTask('startup_sequence', () => runStartupSequence(canContinueLogin));
     };
 
+    configureHostedSession(config);
     connect(code, onLoginSuccess);
 
     // 启动定时状态同步
@@ -821,13 +935,21 @@ function detachRuntimeListeners(): void {
         networkEvents.off('farmHarvested', onFarmHarvested);
         onFarmHarvested = null;
     }
+    if (onSellGain) {
+        networkEvents.off('sell', onSellGain);
+        onSellGain = null;
+    }
+    networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
+    networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+    networkEvents.off('ranchBookReward', onRanchBookReward);
+    networkEvents.off('ranchFacilitiesChanged', onRanchFacilitiesChanged);
     if (onDogSkillGiftPending) {
         networkEvents.off('dogSkillGiftPending', onDogSkillGiftPending);
         onDogSkillGiftPending = null;
     }
 }
 
-function quiesceBot(reason: string, offlineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLINE' = 'ACCOUNT_OFFLINE'): void {
+function quiesceBot(reason: string, offlineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLINE' = 'ACCOUNT_OFFLINE', detach = false): void | Promise<void> {
     shutdownStarted = true;
     shutdownOfflineCode = offlineCode;
     runtimeGeneration += 1;
@@ -840,14 +962,19 @@ function quiesceBot(reason: string, offlineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLI
     cleanupTaskSystem();
     workerScheduler.clearAll();
     detachRuntimeListeners();
-    cleanup(reason);
+    const done = detach ? detachHostedSession() : cleanup(reason);
     syncStatus(true);
+    return done;
 }
 
-async function stopBot(): Promise<void> {
+if (process.send) process.once('disconnect', () => { void stopBot(true); });
+
+async function stopBot(detach = false): Promise<void> {
     if (!shutdownStarted) {
         saveStats();
-        quiesceBot('主动停止');
+        try { await quiesceBot(detach ? '后端更新' : '主动停止', 'ACCOUNT_OFFLINE', detach); }
+        finally { exitWorker(0); }
+        return;
     }
     exitWorker(0);
 }
@@ -862,7 +989,7 @@ function handleTerminalDisconnect(payload: any): void {
         source, disconnectCode: code, reason, phase, diagnostics: payload?.diagnostics || null,
     });
     saveStats();
-    quiesceBot(`连接断开: ${source}`, 'GAME_OFFLINE');
+    void Promise.resolve(quiesceBot(`连接断开: ${source}`, 'GAME_OFFLINE', true)).catch((err: Error) => logWarn('连接', err.message));
     sendToMaster({
         type: 'account_disconnected',
         source,
@@ -883,7 +1010,7 @@ function onKickout(payload: any): void {
     const diagnostics = payload?.diagnostics || null;
     log('系统', `检测到踢下线，准备自动停止账号。原因: ${reason} (${reasonCode})`, { reasonCode, diagnostics });
     saveStats();
-    quiesceBot(`踢下线: ${reason}`, 'GAME_OFFLINE');
+    void Promise.resolve(quiesceBot(`踢下线: ${reason}`, 'GAME_OFFLINE')).catch((err: Error) => logWarn('连接', err.message));
     sendToMaster({ type: 'account_kicked', reason, reasonCode, diagnostics });
     setTimeout(exitWorker, 300, 0);
 }
@@ -908,7 +1035,37 @@ async function handleApiCall(msg: any): Promise<void> {
             if (getWs()?.readyState !== 1) {
                 throw Object.assign(new Error('账号连接已断开'), { code: 'GAME_OFFLINE' });
             }
-            switch (method) {
+            await runExclusiveAutomationTask(`api:${method}`, async () => {
+                if (!loginReady || shutdownStarted) throw new Error('账号未连接');
+                switch (method) {
+                case 'getRanchState':
+                    // 打包版的 fork 使用 JSON IPC，会把缺省的好友 GID 编码成 null。
+                    result = await require('../services/ranch').getRanchState(args[0], args[1], args[2] ?? undefined);
+                    break;
+                case 'clearRanchIllustratedNew':
+                    result = await require('../services/ranch/book').clearGiantBookNew();
+                    break;
+                case 'prepareRanchAction':
+                    result = await require('../services/ranch').prepareRanchAction(args[0], args[1]);
+                    break;
+                case 'operateRanch':
+                    result = await require('../services/ranch').operateRanch(args[0], args[1]);
+                    break;
+                case 'clearIllustratedNew':
+                    result = await require('../services/illustrated').clearIllustratedNew(args[0]);
+                    break;
+                case 'getRanchActivityDirectorySnapshot':
+                    result = await require('../services/ranch/activity-directory').getRanchActivityDirectorySnapshot();
+                    break;
+                case 'getMugeActivity':
+                    result = await require('../services/muge-activity').getMugeActivity(args[0]);
+                    break;
+                case 'operateMugeActivity':
+                    result = await require('../services/muge-activity').operateMugeActivity(args[0], args[1], args[2]);
+                    break;
+                case 'getSchedulers':
+                    result = getSchedulerRegistrySnapshot();
+                    break;
             case 'getLands':
                 result = await getLandsDetail(args[0] === true);
                 break;
@@ -981,6 +1138,7 @@ async function handleApiCall(msg: any): Promise<void> {
                 break;
             case 'getDiamondBalance':
                 result = await require('../services/pay').getDiamondBalance();
+                require('../services/stats').recordAssetBalances({ diamond: result });
                 break;
             case 'getCareerInfo': {
                 const { getCareerInfo: _getCareerInfo } = require('../services/career');
@@ -1229,14 +1387,15 @@ async function handleApiCall(msg: any): Promise<void> {
                 result = await require('../services/commerce').purchaseMallProduct(args[0], args[1], args[2], args[3]);
                 break;
             case 'getMysteryShop':
-                result = await require('../services/commerce').getMysteryShop();
+                result = await require('../services/commerce').getMysteryShop(true);
                 break;
             case 'purchaseMysteryOffer':
                 result = await require('../services/commerce').purchaseMysteryOffer(args[0]);
                 break;
             default:
                 error = 'Unknown method';
-            }
+                }
+            });
         }
     } catch (e: any) {
         error = {
@@ -1276,6 +1435,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
             currentTask: growthTask.currentTask || null,
             tasks: Array.isArray(growthTask.tasks) ? growthTask.tasks : [],
         },
+        ranch: require('../services/ranch/daily').getOverview(!!auto.ranch_task, !!auto.ranch_share, !!auto.ranch_daily_benefit),
         gifts: [
             {
                 key: 'task_claim',
@@ -1301,7 +1461,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 result: email.result,
                 lastError: email.lastError,
             },
-            { key: 'mall_free_gifts', label: '商城免费礼包', enabled: true, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0), rewards: Array.isArray(free.rewards) ? free.rewards : [] },
+            { key: 'mall_free_gifts', label: '商城免费礼包', enabled: true, doneToday: !!free.doneToday, lastAt: Number(free.lastClaimAt || 0), rewards: free.rewards || [] },
             {
                 key: 'daily_share',
                 label: '分享礼包',
@@ -1337,7 +1497,7 @@ async function getDailyGiftOverview(propagateErrors: boolean = false): Promise<a
                 hasCard: typeof month.hasCard === 'boolean' ? month.hasCard : null,
                 hasClaimable: typeof month.hasClaimable === 'boolean' ? month.hasClaimable : null,
                 result: month.result || '',
-                rewards: Array.isArray(month.rewards) ? month.rewards : [],
+                rewards: month.rewards || [],
             },
         ],
     };
@@ -1384,6 +1544,13 @@ function syncStatus(force: boolean = false): void {
         userState, expProgress, fullStats, fullStats.automation, farmQuiet,
     );
     fullStats.configRevision = appliedConfigRevision;
+    const freeGift = getFreeGiftDailyState();
+    const shareGift = getShareDailyState();
+    fullStats.farmGiftRewards = {
+        date: getSystemDateKey(),
+        mall_free_gifts: { doneToday: freeGift.doneToday, lastAt: freeGift.lastClaimAt, rewards: freeGift.rewards },
+        daily_share: { doneToday: shareGift.doneToday, lastAt: shareGift.lastClaimAt, rewards: shareGift.rewards },
+    };
     const hash = JSON.stringify(fullStats);
     const now = Date.now();
     if (force || hash !== lastStatusHash || now - lastStatusSentAt > 8000) {

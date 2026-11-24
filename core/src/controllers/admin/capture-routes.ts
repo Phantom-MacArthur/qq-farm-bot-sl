@@ -431,7 +431,7 @@ function scheduleCapturedAccountStart(ctx: AdminContext, flow: CaptureFlow, acco
         void (async () => {
             try {
                 if (isUpdate) {
-                    if (wasRunning) ctx.provider.restartAccount(account.id);
+                    if (wasRunning) await ctx.provider.restartAccount(account.id);
                 } else {
                     await ctx.provider.startAccount(account.id);
                 }

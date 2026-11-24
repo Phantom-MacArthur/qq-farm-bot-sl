@@ -5,13 +5,13 @@ import { computed, nextTick, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import Sidebar from '@/components/Sidebar.vue'
-import { usePanelFloatingScrollbars } from '@/composables/useFloatingScrollbar'
+import { SPACE_TRANSITION_STYLE, spaceTransition } from '@/components/space-transition'
 import { useAppStore } from '@/stores/app'
 
 const route = useRoute()
 const { activityDetailOpen, layoutMinWidth } = storeToRefs(useAppStore())
 // 页头固定在滚动区之外；活动详情自带标题栏，打开时隐藏通用页头。
-const activityDetail = computed(() => route.name === 'activity-center' && activityDetailOpen.value)
+const activityDetail = computed(() => ['activity-center', 'ranch-activity-center'].includes(String(route.name)) && activityDetailOpen.value)
 const showPageHeader = computed(() => !route.meta.fullBleed && !activityDetail.value)
 const scrolled = ref(false)
 const scrollEl = ref<HTMLElement | null>(null)
@@ -39,11 +39,10 @@ watch(() => route.fullPath, async () => {
   measureScrollbar()
 }, { immediate: true })
 useResizeObserver(scrollEl, measureScrollbar)
-usePanelFloatingScrollbars(scrollEl)
 </script>
 
 <template>
-  <div class="liquid-layout w-full flex overflow-hidden" :style="{ '--app-min-width': `${layoutMinWidth}px` }">
+  <div class="liquid-layout w-full flex overflow-hidden" :data-space-phase="spaceTransition?.phase" :style="{ '--app-min-width': `${layoutMinWidth}px`, ...SPACE_TRANSITION_STYLE }">
     <Sidebar />
 
     <main class="app-main relative h-full min-h-0 min-w-0 flex flex-1 flex-col overflow-hidden">
@@ -67,13 +66,14 @@ usePanelFloatingScrollbars(scrollEl)
           @scroll.passive="onPageScroll"
         >
           <RouterView v-slot="{ Component, route: currentRoute }">
-            <Transition name="page-fade" mode="out-in">
-              <component :is="Component" :key="currentRoute.path" />
-            </Transition>
+            <div :key="currentRoute.path" class="page-view min-h-0 min-w-0 w-full flex flex-1 flex-col">
+              <component :is="Component" />
+            </div>
           </RouterView>
         </div>
       </div>
     </main>
+
   </div>
 </template>
 
@@ -156,29 +156,12 @@ usePanelFloatingScrollbars(scrollEl)
 /* 活动详情隐藏通用页头；普通详情沿用页面滚动，游戏外壳保留内部滚动。 */
 .page-scroll--fill > :deep(*) {
   margin-block-start: 0;
-}
-
-.page-scroll--fill > :deep(.activity-shell) {
   flex: 1 1 auto;
   min-height: 0;
 }
 
-.page-fade-enter-active {
-  transition:
-    opacity 0.16s ease,
-    transform 0.16s ease;
-}
-
-.page-fade-leave-active {
-  transition: opacity 0.1s ease;
-}
-
-.page-fade-enter-from {
-  opacity: 0;
-  transform: translateY(3px);
-}
-
-.page-fade-leave-to {
-  opacity: 0;
+.page-scroll--fill :deep(.activity-shell) {
+  flex: 1 1 auto;
+  min-height: 0;
 }
 </style>

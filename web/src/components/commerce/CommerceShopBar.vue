@@ -118,7 +118,7 @@ function refresh() {
   border-radius: var(--ui-radius-control);
   color: var(--ui-ink);
   background: var(--ui-surface);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
   /* 宽度跟着内容走：图标 + 数字各自占位，不预留空白，不再为对齐拉宽。 */
   white-space: nowrap;
@@ -153,7 +153,7 @@ function refresh() {
   gap: 6px;
   margin: 0;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
 }
 

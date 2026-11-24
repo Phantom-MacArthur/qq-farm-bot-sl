@@ -7,6 +7,7 @@ const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum, getSystemDateKey } = require('../utils/utils');
 const { describeRewardItems } = require('../utils/reward-items');
+const { recordFarmReward } = require('./farm-reward-history');
 
 const DAILY_KEY: string = 'vip_daily_gift';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
@@ -161,6 +162,7 @@ async function performDailyVipGift(force: boolean = false): Promise<boolean> {
         try {
             const rep: any = await claimQQVipRewards(rewardTypes);
             const items: any[] = Array.isArray(rep?.items) ? rep.items : [];
+            recordFarmReward('vip_daily_gift', describeRewardItems(items), '会员礼包');
             const reward = getRewardSummary(items);
             if (items.length > 0) lastRewards = describeRewardItems(items);
             claimed = true;

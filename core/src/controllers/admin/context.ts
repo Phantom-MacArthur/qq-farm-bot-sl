@@ -8,6 +8,7 @@ export {};
  * Creates and holds all shared state for the admin server.
  */
 
+
 export interface AdminContext {
     app: Application | null;
     server: Server | null;

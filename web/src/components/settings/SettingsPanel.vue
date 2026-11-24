@@ -7,14 +7,14 @@
 </script>
 
 <template>
-  <div class="settings-panel page-card-surface rounded-2xl panel-scroll-layout">
-    <div class="settings-panel__toolbar panel-titlebar">
+  <div class="settings-panel page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+    <div class="settings-panel__toolbar panel-titlebar margin-shell"><span class="margin-content">
       <slot />
-    </div>
+    </span></div>
     <div class="settings-panel__body panel-scroll-body">
       <slot name="body" />
     </div>
-  </div>
+  </span></div>
 </template>
 
 <style scoped>
@@ -23,7 +23,7 @@
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px;
+  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
   /* 半透的 --glass-card 叠在页面底色上会让卡片之间的空隙发灰，而内层卡片是双层叠加、
      反而更白，所以面板铺成不透明表面色，空隙与卡片就是同一个白底。 */
   background: var(--ui-surface-solid) !important;

@@ -91,7 +91,7 @@ function buildFriendVisitPlan(input: FriendVisitPlanInput): FriendVisitPlan {
         seen.add(gid);
         if (blacklist.has(gid)) continue;
 
-        const name: string = (friend && (friend.remark || friend.name)) || `GID:${gid}`;
+        const name: string = (friend && (friend.remark || friend.name)) || '未命名好友';
         const level: number = toInt(friend && friend.level);
         const plant: any = friend && friend.plant;
         const stealNum: number = plant ? toInt(plant.steal_plant_num) : 0;

@@ -7,6 +7,13 @@
 
 const WAN = 1e4
 const YI = 1e8
+const REWARD_CURRENCY_IDS = new Set([1, 1001, 1002, 1004, 1005, 1007, 1008])
+
+export function formatRewardAmount(id: unknown, count: unknown): string {
+  return REWARD_CURRENCY_IDS.has(Number(id))
+    ? formatCompactAmount(Number(count))
+    : formatNumber(count)
+}
 
 /**
  * 千分位完整数值，非数值统一按 0 处理。

@@ -13,7 +13,7 @@ import { computed, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import CareerHarvestSteal from '@/components/CareerHarvestSteal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
-import LandCard from '@/components/LandCard.vue'
+import LandCard from '@/components/FarmLandCard.vue'
 import PageTabs from '@/components/PageTabs.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -46,7 +46,6 @@ const {
   interactLoading,
   interactError,
   interactionItems,
-  interactionItemsLoading,
   interactionItemsError,
   interactionUsePending,
   interactionUseError,
@@ -79,10 +78,11 @@ const filteredKnownFriendGids = computed(() => {
   const list = knownFriendGids.value.map(gid => ({
     gid: Number(gid),
     synced: friendGidSet.value.has(Number(gid)),
+    name: friends.value.find(friend => Number(friend.gid) === Number(gid))?.name || '未命名好友',
   }))
   if (!keyword)
     return list
-  return list.filter(item => String(item.gid).includes(keyword))
+  return list.filter(item => item.name.toLowerCase().includes(keyword))
 })
 
 const syncedGidCount = computed(() => filteredKnownFriendGids.value.filter(item => item.synced).length)
@@ -100,12 +100,12 @@ async function handleRemoveUnsyncedGids() {
     return
   const unsyncedGids = filteredKnownFriendGids.value.filter(item => !item.synced).map(item => item.gid)
   if (unsyncedGids.length === 0) {
-    toast.info('没有需要删除的未同步 GID')
+    toast.info('没有未同步的好友记录')
     return
   }
   const result = await friendStore.removeUnsyncedKnownFriendGids(currentAccountId.value, unsyncedGids)
   if (result.ok && result.removedCount > 0) {
-    toast.success(`已删除 ${result.removedCount} 个未同步的 GID`)
+    toast.success(`已删除 ${result.removedCount} 条未同步的好友记录`)
   }
 }
 
@@ -185,6 +185,7 @@ async function onConfirm() {
 }
 
 const expandedFriends = ref<Set<string>>(new Set())
+const friendsRefreshing = ref(false)
 const selectedInteractionItemId = ref('')
 const selectedInteractionLandIds = ref<Record<string, string[]>>({})
 const lastInteractionResults = ref<Record<string, FriendInteractionResultDto[]>>({})
@@ -279,6 +280,38 @@ const visibleInteractRecords = computed(() => filteredInteractRecords.value.slic
 function friendKey(friendId: unknown) {
   return String(friendId || '')
 }
+
+watch(
+  [currentAccountId, currentAccountRunning, activeTab, () => paginatedFriends.value.map(friend => friendKey(friend.gid)).join(',')],
+  async ([accountId, running, tab, gids], _previous, onCleanup) => {
+    if (!accountId || !running || tab !== 'friends' || !gids)
+      return
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+
+    // One career request at a time so opening the list does not flood the game gateway.
+    for (const gid of gids.split(',')) {
+      if (controller.signal.aborted)
+        break
+      if (!gid || friendCareer.value[gid])
+        continue
+      try {
+        const { data } = await api.get('/api/career', {
+          headers: { 'x-account-id': accountId },
+          params: { gid },
+          signal: controller.signal,
+          skipErrorToast: true,
+        } as any)
+        if (!controller.signal.aborted && data.ok && data.data && !friendCareer.value[gid])
+          friendCareer.value = { ...friendCareer.value, [gid]: data.data }
+      }
+      catch {
+        // Leave unreported statistics blank and let the next page visit retry.
+      }
+    }
+  },
+  { immediate: true },
+)
 
 function interactionSelectionKey(friendId: unknown, itemId: unknown = selectedInteractionItemId.value) {
   return `${String(itemId || '')}:${friendKey(friendId)}`
@@ -387,7 +420,7 @@ function requestUseInteractionItem(friend: any) {
   const landIds = selectedInteractionIds(key, item.itemId)
   if (landIds.length === 0)
     return
-  const friendName = String(friend?.name || `GID ${key}`)
+  const friendName = String(friend?.name || '未命名好友')
   const saleConditionWarning = item.saleConditionSatisfiedCount > 0
     ? `该道具库存中有 ${item.saleConditionSatisfiedCount} 个已满足游戏配置的出售条件，可能已过活动或有效期，`
     : ''
@@ -454,7 +487,7 @@ function requestUseFarmInteractionItem(friend: any) {
   if (!accountId || !item || item.targetKind !== 'farm' || item.count < 1)
     return
   const key = friendKey(friend?.gid)
-  const name = String(friend?.name || `GID ${key}`)
+  const name = String(friend?.name || '未命名好友')
   confirmAction(`确定在 ${name} 的农场放出 1 个“${item.name}”吗？`, async () => {
     const result = await friendStore.useFarmInteractionItem(accountId, key, item.itemId)
     if (!result)
@@ -512,6 +545,29 @@ async function refreshFriendLands(friendId: unknown) {
   if (!accountId || !currentAccountRunning.value || !key || friendLandsLoading.value[key])
     return
   await friendStore.fetchFriendLands(accountId, key)
+}
+
+async function refreshFriendsAndExpandedLands() {
+  const accountId = currentAccountId.value
+  if (!accountId || !currentAccountRunning.value || friendsRefreshing.value)
+    return
+
+  friendsRefreshing.value = true
+  try {
+    await handleRefreshFriends()
+    if (accountId === currentAccountId.value && currentAccountRunning.value) {
+      for (const gid of expandedFriends.value)
+        await refreshFriendLands(gid)
+    }
+  }
+  finally {
+    friendsRefreshing.value = false
+  }
+}
+
+function onFriendRowClick(event: MouseEvent, friendId: string) {
+  if (event.target instanceof Element && !event.target.closest('button'))
+    toggleFriend(friendId)
 }
 
 function toggleFriend(friendId: string) {
@@ -577,7 +633,7 @@ async function handleDeleteFriend(friend: any, e: Event) {
   if (!currentAccountId.value)
     return
   const gid = Number(friend?.gid) || 0
-  const name = String(friend?.name || `GID:${gid}`).trim()
+  const name = String(friend?.name || '未命名好友').trim()
   confirmAction(
     `确定删除好友 ${name} 吗？这会真正解除游戏好友关系且不可恢复，并加入本地黑名单。之后自动偷菜、帮忙、捣乱和自动同意申请都会跳过该好友。`,
     async () => {
@@ -813,9 +869,9 @@ async function handleRemoveKnownFriendGid(friend: any, e: Event) {
   if (!currentAccountId.value)
     return
   const gid = Number(friend?.gid) || 0
-  const name = String(friend?.name || `GID ${gid}`).trim()
+  const name = String(friend?.name || '未命名好友').trim()
   confirmAction(
-    `确定将 ${name} 移出同步列表吗？后续如果最近访客再次命中，这个 GID 仍可被自动同步回来。`,
+    `确定将 ${name} 移出同步列表吗？后续如果最近访客再次命中，该好友仍可被自动同步回来。`,
     async () => {
       await friendStore.removeKnownFriendGid(currentAccountId.value!, gid)
       await refreshFriendsAfterKnownGidChange()
@@ -870,7 +926,7 @@ async function handleBatchAddKnownFriendGids() {
     return
   const gids = parseBatchGids(batchGidInput.value)
   if (gids.length === 0) {
-    toast.error('请输入有效的 GID 列表')
+    toast.error('请输入有效的好友导入数据')
     return
   }
   const result = await friendStore.batchAddKnownFriendGids(currentAccountId.value, gids)
@@ -878,7 +934,7 @@ async function handleBatchAddKnownFriendGids() {
     batchGidInput.value = ''
     showBatchAddGidModal.value = false
     await refreshFriendsAfterKnownGidChange()
-    toast.success(`已批量添加 ${result.addedCount} 个 GID`)
+    toast.success(`已批量添加 ${result.addedCount} 条好友记录`)
   }
 }
 
@@ -935,8 +991,8 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
       </NTab>
     </PageTabs>
 
-    <section class="friends-card page-card-surface rounded-2xl panel-scroll-layout">
-      <header class="friends-head panel-titlebar shrink-0" aria-label="好友页面操作栏">
+    <section class="friends-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <header class="friends-head panel-titlebar shrink-0 margin-shell" aria-label="好友页面操作栏"><span class="margin-content">
         <span class="friends-head__summary text-sm text-gray-500">
           <template v-if="activeTab === 'friends'">共 {{ filteredFriends.length }}/{{ friends.length }} 名好友</template>
           <template v-else-if="activeTab === 'blacklist'">共 {{ blacklist.length }} 人</template>
@@ -951,9 +1007,9 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
           />
           <RefreshButton
             title="刷新好友列表"
-            :loading="loading"
-            :disabled="!currentAccountId || !currentAccountRunning || loading"
-            @click="handleRefreshFriends"
+            :loading="loading || friendsRefreshing"
+            :disabled="!currentAccountId || !currentAccountRunning || loading || friendsRefreshing"
+            @click="refreshFriendsAndExpandedLands"
           />
         </div>
         <div v-else-if="activeTab === 'visitors'" class="page-toolbar__actions friends-toolbar">
@@ -978,7 +1034,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             @click="refreshBlacklist"
           />
         </div>
-      </header>
+      </span></header>
 
       <div class="panel-scroll-body panel-scroll-body--bleed">
       <EmptyState v-if="!currentAccountId" class="friends-empty" title="请先选择账号" description="添加并选择账号后查看好友" icon="i-carbon-user-avatar" />
@@ -997,7 +1053,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
       <template v-else>
         <div v-if="activeTab === 'friends'" class="friends-tab space-y-4">
-          <div v-if="currentAccountId && isQqAccount" class="mb-4 border page-card-surface border-amber-200 rounded-2xl bg-white p-4 shadow-md dark:border-amber-700/50 dark:bg-gray-800">
+          <div v-if="currentAccountId && isQqAccount" class="mb-4 border page-card-surface border-amber-200 rounded-2xl bg-white shadow-md dark:border-amber-700/50 dark:bg-gray-800 margin-shell"><span class="margin-content !m-4">
             <div class="flex flex-row items-start justify-between gap-3">
               <div>
                 <div class="flex items-center gap-2">
@@ -1011,11 +1067,11 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     size="tiny"
                     @click="openGidListModal"
                   >
-                    {{ knownFriendGidCount }} 个 GID
+                    {{ knownFriendGidCount }} 条好友记录
                   </NButton>
                 </div>
                 <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  QQ 新好友接口依赖已知 GID。系统会自动从最近访客补充，进入好友农场明确失败时自动移除失效 GID。
+                  系统会自动从最近访客补充 QQ 好友记录，并移除已确认失效的记录。
                 </p>
               </div>
               <div class="flex shrink-0 gap-2">
@@ -1040,7 +1096,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   size="sm"
                   @click="showBatchAddGidModal = true"
                 >
-                  批量新增 GID
+                  批量导入好友
                 </BaseButton>
               </div>
             </div>
@@ -1059,29 +1115,23 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                 :min="10"
               />
             </div>
-          </div>
+          </span></div>
 
-          <div v-if="friends.length === 0" class="page-card-surface rounded-2xl bg-white p-8 text-center text-gray-500 shadow-md dark:bg-gray-800">
+          <div v-if="friends.length === 0" class="page-card-surface rounded-2xl bg-white text-center text-gray-500 shadow-md dark:bg-gray-800 margin-shell"><span class="margin-content !m-8">
             暂无好友或数据加载失败
-          </div>
+          </span></div>
 
           <template v-else>
             <ul class="friend-list panel-list list-divider">
               <li
                 v-for="friend in paginatedFriends"
                 :key="friend.gid"
-                class="friend-item"
+                class="friend-item margin-shell"
                 :class="{ 'is-expanded': expandedFriends.has(String(friend.gid)), 'is-blocked': blacklistGidSet.has(Number(friend.gid)) }"
-              >
+              ><span class="margin-content">
                 <div
                   class="friend-row"
-                  role="button"
-                  tabindex="0"
-                  :aria-expanded="expandedFriends.has(String(friend.gid))"
-                  :aria-label="`${friend.name}，点击查看土地`"
-                  @click="toggleFriend(friend.gid)"
-                  @keydown.enter.self.prevent="toggleFriend(friend.gid)"
-                  @keydown.space.self.prevent="toggleFriend(friend.gid)"
+                  @click="onFriendRowClick($event, friend.gid)"
                 >
                   <div class="friend-avatar">
                     <img
@@ -1097,6 +1147,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   <div class="friend-main">
                     <div class="friend-name-row">
                       <strong class="friend-name" :title="friend.name">{{ friend.name }}</strong>
+                      <CareerHarvestSteal v-if="friendCareer[friend.gid]" :career="friendCareer[friend.gid]" />
                       <span v-if="blacklistGidSet.has(Number(friend.gid))" class="f-tag f-tag--blocked">已屏蔽</span>
                     </div>
                     <div class="friend-tags">
@@ -1120,7 +1171,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     </div>
                   </div>
 
-                  <div class="friend-actions" @click.stop @keydown.stop>
+                  <div class="friend-actions">
                     <NButton size="small" :type="friendCanSteal(friend) ? 'primary' : 'default'" secondary @click="handleOp(friend.gid, 'steal', $event)">
                       <template #icon>
                         <span class="i-carbon-shopping-bag" />
@@ -1146,25 +1197,13 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                         </template>
                       </NButton>
                     </NDropdown>
+                    <NButton class="friend-expand" size="small" quaternary circle :aria-expanded="expandedFriends.has(String(friend.gid))" :aria-label="`${expandedFriends.has(String(friend.gid)) ? '收起' : '展开'}${friend.name}的土地`" @click="toggleFriend(friend.gid)">
+                      <template #icon><span class="friend-chevron i-carbon-chevron-down" /></template>
+                    </NButton>
                   </div>
-
-                  <span class="friend-chevron i-carbon-chevron-down" aria-hidden="true" />
                 </div>
 
                 <div v-if="expandedFriends.has(String(friend.gid))" class="friend-lands">
-                  <div class="mb-3 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-2 text-sm text-gray-700 font-semibold dark:text-gray-200">
-                      <span class="i-carbon-sprout" />
-                      土地详情
-                    </div>
-                    <RefreshButton
-                      size="small"
-                      label="刷新土地"
-                      :loading="!!friendLandsLoading[friend.gid]"
-                      :disabled="!currentAccountId || !!friendLandsLoading[friend.gid] || !!friendLandsError[friend.gid]"
-                      @click="refreshFriendLands(friend.gid)"
-                    />
-                  </div>
                   <div v-if="friendLandsLoading[friend.gid]" class="flex justify-center py-6">
                     <div class="i-svg-spinners-90-ring-with-bg text-2xl text-green-600" />
                   </div>
@@ -1175,18 +1214,8 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     </NButton>
                   </EmptyState>
                   <template v-else>
-                    <div
-                      v-if="friendCareer[friend.gid]"
-                      class="mb-3 flex flex-wrap gap-x-5 gap-y-2 text-sm"
-                    >
-                      <CareerHarvestSteal :career="friendCareer[friend.gid]" />
-                    </div>
-                    <div class="mb-3 border border-amber-200 rounded-xl bg-amber-50/80 p-3 dark:border-amber-800 dark:bg-amber-950/25">
-                      <div v-if="interactionItemsLoading" class="flex items-center justify-center gap-2 py-2 text-sm text-amber-700 dark:text-amber-300">
-                        <span class="i-svg-spinners-90-ring-with-bg" />
-                        正在读取特殊互动道具
-                      </div>
-                      <div v-else-if="interactionItemsError" class="flex flex-wrap items-center justify-between gap-2 text-sm text-red-600 dark:text-red-300">
+                    <div v-if="interactionItemsError || interactionItems.length" class="mb-3 border border-amber-200 rounded-xl bg-amber-50/80 margin-shell dark:border-amber-800 dark:bg-amber-950/25"><span class="margin-content !m-3">
+                      <div v-if="interactionItemsError" class="flex flex-wrap items-center justify-between gap-2 text-sm text-red-600 dark:text-red-300">
                         <span>{{ interactionItemsError }}</span>
                         <NButton size="small" secondary type="error" @click="currentAccountId && friendStore.fetchInteractionItems(currentAccountId)">
                           重新读取
@@ -1253,11 +1282,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                           </div>
                         </div>
                       </template>
-                      <div v-else class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                        <span class="i-carbon-information" />
-                        背包中暂无可用于好友土地的特殊互动道具。
-                      </div>
-                    </div>
+                    </span></div>
 
                     <div v-if="selectedInteractionItem?.targetKind === 'farm'" class="py-4 text-center text-gray-500">
                       当前道具作用于好友农场整体，无需选择地块
@@ -1265,7 +1290,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     <div v-else-if="!friendLands[friend.gid] || friendLands[friend.gid]?.length === 0" class="py-4 text-center text-gray-500">
                       该好友当前没有可展示的土地
                     </div>
-                    <div v-else class="grid grid-cols-8 gap-2">
+                    <div v-else class="grid grid-cols-4 gap-2">
                       <LandCard
                         v-for="land in friendLands[friend.gid]"
                         :key="land.id"
@@ -1279,7 +1304,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     </div>
                   </template>
                 </div>
-              </li>
+              </span></li>
             </ul>
 
             <!-- 分页控件 -->
@@ -1316,8 +1341,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   <span v-else class="i-carbon-user text-gray-400" />
                 </div>
                 <div>
-                  <span class="font-medium">{{ item.name || `GID:${item.gid}` }}</span>
-                  <span class="ml-2 text-sm text-gray-400">({{ item.gid }})</span>
+                  <span class="font-medium">{{ item.name || '未命名好友' }}</span>
                 </div>
               </div>
               <NButton
@@ -1337,19 +1361,19 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             {{ interactError }}
           </div>
 
-          <div v-else-if="visibleInteractRecords.length === 0" class="page-card-surface rounded-2xl bg-white p-8 text-center text-gray-500 shadow-md dark:bg-gray-800">
+          <div v-else-if="visibleInteractRecords.length === 0" class="page-card-surface rounded-2xl bg-white text-center text-gray-500 shadow-md dark:bg-gray-800 margin-shell"><span class="margin-content !m-8">
             <div class="mx-auto mb-3 text-4xl text-gray-300">
               👀
             </div>
             暂无访客记录
-          </div>
+          </span></div>
 
           <ul v-else class="visitor-list panel-list list-divider">
             <li
               v-for="record in visibleInteractRecords"
               :key="record.key"
-              class="visitor-row"
-            >
+              class="visitor-row margin-shell"
+            ><span class="margin-content">
               <div class="friend-avatar visitor-row__avatar">
                 <img
                   v-if="canShowInteractAvatar(record)"
@@ -1362,7 +1386,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
               <div class="min-w-0 flex-1">
                 <div class="mb-1 flex flex-wrap items-center gap-2">
                   <span class="max-w-full truncate text-base text-gray-800 font-medium dark:text-gray-100">
-                    {{ record.nick || `GID:${record.visitorGid}` }}
+                    {{ record.nick || '未命名访客' }}
                   </span>
                   <span
                     class="rounded-full px-2 py-0.5 text-xs font-medium"
@@ -1373,16 +1397,13 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   <span v-if="record.level" class="rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-500 dark:bg-gray-700 dark:text-gray-300">
                     Lv.{{ record.level }}
                   </span>
-                  <span v-if="record.visitorGid" class="text-xs text-gray-400">
-                    GID {{ record.visitorGid }}
-                  </span>
                 </div>
                 <div class="text-sm text-gray-600 dark:text-gray-300">
                   {{ record.actionDetail || record.actionLabel }}
                 </div>
               </div>
               <time class="visitor-row__time">{{ formatInteractTime(record.serverTimeMs) }}</time>
-            </li>
+            </span></li>
           </ul>
 
           <div v-if="filteredInteractRecords.length > visibleInteractRecords.length" class="text-center text-xs text-gray-400">
@@ -1391,7 +1412,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
         </div>
       </template>
       </div>
-    </section>
+    </span></section>
 
     <ConfirmModal
       :show="showConfirm"
@@ -1403,14 +1424,14 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
     />
 
     <NModal :show="showBatchAddGidModal" @update:show="showBatchAddGidModal = $event">
-      <NCard class="gid-entry-card" title="批量新增 GID" :bordered="false" closable @close="showBatchAddGidModal = false">
+      <NCard class="gid-entry-card" title="批量导入好友" :bordered="false" closable @close="showBatchAddGidModal = false">
         <p class="mb-3 mt-0 text-sm text-gray-500 dark:text-gray-400">
           支持一行一个或用逗号、空格分隔，提交时自动去重。
         </p>
         <BaseTextarea
           v-model="batchGidInput"
           :rows="8"
-          placeholder="每行一个 GID，或用逗号、空格分隔"
+          placeholder="每行一条好友记录，或用逗号、空格分隔"
         />
         <template #footer>
           <div class="flex justify-end gap-2">
@@ -1431,12 +1452,12 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
     </NModal>
 
     <NModal :show="showGidListModal" @update:show="showGidListModal = $event">
-      <NCard class="gid-list-card" title="已导入的 GID" :bordered="false" closable @close="showGidListModal = false">
+      <NCard class="gid-list-card" title="已导入的好友" :bordered="false" closable @close="showGidListModal = false">
         <p class="mt-0 text-sm text-gray-500 dark:text-gray-400">
           共 {{ knownFriendGidCount }} 个，已同步 {{ syncedGidCount }} 个，未同步 {{ unsyncedGidCount }} 个。
         </p>
         <div class="mb-4 flex gap-2">
-          <BaseInput v-model="gidSearchKeyword" placeholder="搜索 GID..." clearable class="flex-1" />
+          <BaseInput v-model="gidSearchKeyword" placeholder="搜索好友昵称" clearable class="flex-1" />
           <BaseButton
             variant="danger"
             :loading="knownFriendSettingsSaving"
@@ -1446,7 +1467,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             删除未同步（{{ unsyncedGidCount }}）
           </BaseButton>
         </div>
-        <div class="gid-list-scroll">
+        <div class="gid-list-scroll dialog-scroll">
           <div v-if="filteredKnownFriendGids.length === 0" class="py-8 text-center text-gray-500 dark:text-gray-400">
             暂无数据
           </div>
@@ -1461,7 +1482,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             >
               <div class="min-w-0">
                 <div class="truncate text-sm font-mono">
-                  {{ item.gid }}
+                  {{ item.name }}
                 </div>
                 <div class="text-xs" :class="item.synced ? 'text-green-600' : 'text-red-600'">
                   {{ item.synced ? '已同步' : '未同步' }}
@@ -1473,7 +1494,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                 type="error"
                 size="small"
                 :disabled="knownFriendSettingsSaving"
-                aria-label="删除 GID"
+                aria-label="删除好友记录"
                 @click="handleRemoveGidFromList(item.gid)"
               >
                 <span class="i-carbon-trash-can" />
@@ -1492,7 +1513,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   --panel-pad: 16px;
   display: flex;
   flex-direction: column;
-  padding: var(--panel-pad);
+  --inset-top: var(--panel-pad); --inset-right: var(--panel-pad); --inset-bottom: var(--panel-pad); --inset-left: var(--panel-pad);
   overflow: clip;
 }
 
@@ -1512,7 +1533,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 }
 
 .friends-card:has(.blacklist-empty) {
-  padding-block-end: 0;
+  --inset-bottom: 0;
 }
 
 .blacklist-tab:has(> .blacklist-empty) {
@@ -1536,7 +1557,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 .friends-head__summary {
   display: flex;
   flex: none;
-  min-height: var(--ui-toolbar-control-height);
+  min-height: var(--ui-content-titlebar-control-height-34);
   align-items: center;
   white-space: nowrap;
 }
@@ -1556,26 +1577,12 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
 .friend-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto 20px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  padding: 14px var(--panel-pad);
   cursor: pointer;
-  transition: background-color 0.15s ease;
 }
 
-.friend-item:first-child > .friend-row {
-  padding-block-start: 12px;
-}
-
-.friend-row:hover {
-  background: color-mix(in srgb, var(--ui-surface-soft) 60%, transparent);
-}
-
-.friend-row:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ui-primary) 55%, transparent);
-  outline-offset: -2px;
-}
 
 .friend-avatar {
   width: 44px;
@@ -1586,7 +1593,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   border-radius: 14px;
   color: var(--ui-subtle);
   background: var(--ui-surface-soft);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .friend-avatar img {
@@ -1610,7 +1617,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   min-width: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1633,7 +1640,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   border-radius: 7px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -1646,7 +1653,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 }
 
 .f-tag > span {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .f-tag--level {
@@ -1703,16 +1710,10 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   color: #e2c36d;
 }
 
-.friend-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .friend-chevron {
   justify-self: end;
   color: var(--ui-subtle);
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   transition: transform 0.2s ease;
 }
 
@@ -1722,7 +1723,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
 @container friend-list (max-width: 440px) {
   .friend-row {
-    grid-template-columns: 44px minmax(0, 1fr) 20px;
+    grid-template-columns: 44px minmax(0, 1fr);
   }
 
   .friend-actions {
@@ -1732,16 +1733,14 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 }
 
 .friend-lands {
-  padding: 16px;
-  border-top: 1px solid var(--ui-border);
-  background: color-mix(in srgb, var(--ui-surface-soft) 55%, transparent);
+  margin-block-start: 12px;
 }
 
 .visitor-row {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px var(--panel-pad);
+  --inset-top: 12px; --inset-right: var(--panel-pad); --inset-bottom: 12px; --inset-left: var(--panel-pad);
   overflow-wrap: anywhere;
 }
 
@@ -1750,13 +1749,13 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   width: 40px;
   height: 40px;
   border-radius: 999px;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .visitor-row__time {
   flex: none;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }

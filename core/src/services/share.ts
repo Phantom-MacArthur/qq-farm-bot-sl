@@ -7,6 +7,7 @@ const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, getSystemDateKey } = require('../utils/utils');
 const { describeRewardItems } = require('../utils/reward-items');
+const { recordFarmReward } = require('./farm-reward-history');
 
 const DAILY_KEY: string = 'daily_share';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
@@ -93,6 +94,7 @@ async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
         claimedDateKey = checkedDateKey;
         lastClaimAt = Date.now();
         lastRewards = describeRewardItems(items);
+        recordFarmReward('daily_share', lastRewards);
         log('分享', `分享礼包领取成功${items.length > 0 ? `，获得 ${items.length} 种物品` : ''}`, {
             module: 'task',
             event: DAILY_KEY,

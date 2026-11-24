@@ -139,7 +139,7 @@ useReconnectRefresh(load)
   min-height: 240px;
   place-items: center;
   color: var(--ui-primary);
-  font-size: 28px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 /* 列表行自带内边距，行间分割线要贴卡片左右边缘，去掉 #body 的默认留白 */
@@ -176,7 +176,6 @@ useReconnectRefresh(load)
   height: 44px;
   place-items: center;
   border-radius: 11px;
-  background: var(--ui-surface-soft);
 }
 
 .mutation-row__well img {
@@ -192,7 +191,7 @@ useReconnectRefresh(load)
 .mutation-row__main h3 {
   margin: 0;
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
   line-height: 20px;
 }
@@ -201,7 +200,7 @@ useReconnectRefresh(load)
   margin: 2px 0 0;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -217,7 +216,7 @@ useReconnectRefresh(load)
   margin: 0;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 18px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -237,7 +236,7 @@ useReconnectRefresh(load)
   border-radius: 6px;
   color: var(--ui-subtle);
   background: var(--ui-surface-soft);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 20px;
 }
 
@@ -260,7 +259,7 @@ useReconnectRefresh(load)
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 24px;
   text-overflow: ellipsis;

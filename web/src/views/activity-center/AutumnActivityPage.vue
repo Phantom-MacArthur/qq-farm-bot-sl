@@ -324,7 +324,7 @@ onUnmounted(() => {
                 </button>
               </header>
               <div class="ladder" :style="{ '--tiers': state.milestones?.length || 1 }">
-                <div class="ladder__track" role="progressbar" :aria-valuenow="state.score || 0" aria-valuemin="0" :aria-valuemax="maxThreshold" aria-label="快乐值档位进度">
+                <div class="ladder__track ui-progress-track" role="progressbar" :aria-valuenow="state.score || 0" aria-valuemin="0" :aria-valuemax="maxThreshold" aria-label="快乐值档位进度">
                   <span :style="{ width: `${trackFill}%` }" />
                 </div>
                 <article v-for="tier in state.milestones" :key="tier.id" class="rung" :class="`rung--${tierClass(tier.state)}`">
@@ -480,7 +480,7 @@ h3 {
 
 /* 按钮与标签 */
 .btn {
-  min-height: 38px;
+  min-height: var(--ui-content-item-control-height-30);
   display: inline-flex;
   flex: none;
   align-items: center;
@@ -490,7 +490,7 @@ h3 {
   border: 1px solid transparent;
   border-radius: 999px;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-700);
   white-space: nowrap;
   cursor: pointer;
@@ -500,9 +500,9 @@ h3 {
     color 0.15s ease;
 }
 .btn--lg {
-  min-height: 44px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 0 26px;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
 }
 .btn--primary {
   color: #fff;
@@ -536,7 +536,7 @@ summary:focus-visible {
   border-radius: 999px;
   color: var(--muted);
   background: rgba(120, 110, 95, 0.1);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   white-space: nowrap;
 }
@@ -559,15 +559,15 @@ summary:focus-visible {
 }
 .autumn-state__icon {
   color: var(--muted);
-  font-size: 34px;
+  font-size: var(--ui-font-size-large-15);
   opacity: 0.6;
 }
 .autumn-state strong {
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 .autumn-state small {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .autumn-state .btn {
   margin-top: 8px;
@@ -615,14 +615,14 @@ summary:focus-visible {
 }
 .hero__eyebrow {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   letter-spacing: 0.06em;
 }
 .hero__copy h2 {
   margin: 6px 0 8px;
   font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, serif;
-  font-size: 30px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-900);
   line-height: 1.25;
   letter-spacing: 0.06em;
@@ -631,7 +631,7 @@ summary:focus-visible {
   max-width: 440px;
   margin: 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   line-height: 1.7;
 }
 .hero__stats {
@@ -649,18 +649,18 @@ summary:focus-visible {
 }
 .hero__stats dt {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .hero__stats dd {
   display: flex;
   align-items: baseline;
   gap: 3px;
   margin: 4px 0 0;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .hero__stats b {
   color: var(--accent);
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1;
   font-variant-numeric: tabular-nums;
 }
@@ -687,13 +687,13 @@ summary:focus-visible {
   min-width: 0;
 }
 .panel__head h3 {
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1.4;
 }
 .panel__head p {
   margin: 4px 0 0;
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -730,16 +730,16 @@ summary:focus-visible {
 }
 .stick small {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   letter-spacing: 0.1em;
 }
 .stick__icon {
   color: var(--accent);
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
 }
 .stick strong {
   font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, serif;
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-900);
   letter-spacing: 0.16em;
   text-indent: 0.16em;
@@ -747,7 +747,7 @@ summary:focus-visible {
 .stick__mark {
   min-height: 20px;
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .stick--active {
@@ -802,7 +802,7 @@ summary:focus-visible {
   border-radius: 8px;
   color: var(--seal);
   font-family: 'Noto Serif SC', 'Songti SC', SimSun, serif;
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-900);
   opacity: 0.85;
   transform: rotate(8deg);
@@ -810,7 +810,7 @@ summary:focus-visible {
 .slip__text {
   margin: 0;
   font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, serif;
-  font-size: 24px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   line-height: 1.8;
   letter-spacing: 0.08em;
@@ -833,7 +833,7 @@ summary:focus-visible {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: #fff;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .slip__rewards :deep(.item-image) {
   border-radius: 50%;
@@ -865,21 +865,21 @@ summary:focus-visible {
 }
 .day__label {
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .day__name {
   min-height: 2.8em;
   display: -webkit-box;
   overflow: hidden;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.4;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
 .day b {
   color: var(--accent);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .day--past {
   opacity: 0.55;
@@ -938,7 +938,7 @@ summary:focus-visible {
   border-radius: 50%;
   color: var(--muted);
   background: #e7ece4;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
 }
 .rung--ready .rung__dot {
   color: #fff;
@@ -950,7 +950,7 @@ summary:focus-visible {
   background: var(--accent);
 }
 .rung__value {
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   font-variant-numeric: tabular-nums;
 }
 .rung ul {
@@ -978,7 +978,7 @@ summary:focus-visible {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.35;
 }
 .rung li span {
@@ -1021,7 +1021,7 @@ summary:focus-visible {
   border-radius: 12px;
   color: var(--accent);
   background: var(--accent-soft);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 .task__copy {
   min-width: 0;
@@ -1031,20 +1031,20 @@ summary:focus-visible {
   gap: 2px;
 }
 .task__copy strong {
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
 }
 .task__copy span {
   color: var(--muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .task__count {
   flex: none;
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
   font-variant-numeric: tabular-nums;
 }
 .task__count small {
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-400);
 }
 .task--meter {
@@ -1060,7 +1060,7 @@ summary:focus-visible {
   align-items: center;
   gap: 8px;
   padding: 16px 24px;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   cursor: pointer;
   list-style: none;
@@ -1091,7 +1091,7 @@ summary:focus-visible {
 .fold__empty {
   margin: 10px 0 0;
   color: var(--muted);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .segmented {
   display: inline-flex;
@@ -1107,7 +1107,7 @@ summary:focus-visible {
   border-radius: 999px;
   color: var(--muted);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   background: transparent;
   cursor: pointer;
 }
@@ -1128,7 +1128,7 @@ summary:focus-visible {
   gap: 2px 12px;
   padding: 12px 0;
   border-bottom: 1px solid rgba(120, 110, 95, 0.1);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .records li:last-child {
   border-bottom: 0;
@@ -1140,13 +1140,13 @@ summary:focus-visible {
 .records time {
   grid-column: 1 / -1;
   color: var(--muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 .rules p {
   margin: 0 0 6px;
   color: #4f4538;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   line-height: 1.85;
 }
 .autumn--happy .rules p {

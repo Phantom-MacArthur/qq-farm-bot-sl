@@ -188,9 +188,9 @@ useReconnectRefresh(refreshItems)
         </thead>
         <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
           <tr v-for="item in paginated" :key="item.id">
-            <td class="sticky left-0 z-1 px-3 py-2 text-left">
+            <td class="sticky left-0 z-1 px-3 py-3 text-left">
               <div class="flex items-center gap-2">
-                <div class="relative h-10 w-10 flex shrink-0 items-center justify-center overflow-hidden border border-gray-200 rounded-lg bg-gray-100 dark:border-gray-600 dark:bg-gray-700">
+                <div class="h-8 w-8 flex shrink-0 items-center justify-center">
                   <img
                     v-if="item.image && !imageErrors[item.id]"
                     v-lazy-src="item.image"

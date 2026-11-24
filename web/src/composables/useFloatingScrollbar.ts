@@ -1,7 +1,7 @@
 import type { Ref } from 'vue'
 import { watch } from 'vue'
 
-const PANEL_SCROLL_SELECTOR = '.panel-scroll-layout > .panel-scroll-body:not(.mystery-body), .mystery-body > .history-list'
+const PANEL_SCROLL_SELECTOR = '.panel-scroll-layout > .panel-scroll-body:not(.mystery-body), .panel-scroll-layout > .margin-content > .panel-scroll-body:not(.mystery-body), .mystery-body > .history-list'
 const TRACK_WIDTH = 8
 const TRACK_INSET_TOP = 4
 const TRACK_INSET_BOTTOM = 6

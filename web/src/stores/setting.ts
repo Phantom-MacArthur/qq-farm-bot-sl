@@ -2,7 +2,42 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 
+type RanchFeedStage = 'any' | 'longest' | 'to_production' | 'near_harvest'
+
 export interface AutomationConfig {
+  ranch_harvest?: boolean
+  ranch_produce?: boolean
+  ranch_buy?: boolean
+  ranch_upgrade?: boolean
+  ranch_activate_shed?: boolean
+  ranch_sell?: boolean
+  ranch_market_organic?: boolean
+  ranch_market_organic_poop?: boolean
+  ranch_market_organic_pinecone?: boolean
+  ranch_grass?: boolean
+  ranch_grass_buy?: boolean
+  ranch_grass_threshold_percent?: number
+  ranch_fill_cans?: boolean
+  ranch_feed_normal?: boolean
+  ranch_feed_normal_stage?: RanchFeedStage
+  ranch_feed_organic?: boolean
+  ranch_feed_organic_stage?: RanchFeedStage
+  ranch_clean?: boolean
+  ranch_stroke?: boolean
+  ranch_friend_steal?: boolean
+  ranch_friend_clean?: boolean
+  ranch_friend_mosquito?: boolean
+  ranch_task?: boolean
+  ranch_illustrated?: boolean
+  ranch_share?: boolean
+  ranch_daily_benefit?: boolean
+  ranch_check_minutes?: number
+  ranch_strategy?: string
+  ranch_bag_fallback?: string
+  ranch_coop_animal?: number
+  ranch_shed_animal?: number
+  ranch_coop_cub_priority?: number[]
+  ranch_shed_cub_priority?: number[]
   farm?: boolean
   farm_harvest_tiangong?: boolean
   farm_push?: boolean

@@ -330,7 +330,7 @@ onUnmounted(() => sequence++)
   margin: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -343,7 +343,7 @@ onUnmounted(() => sequence++)
   gap: 6px;
   margin: 3px 0 0;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .share-head__badge {
@@ -351,7 +351,7 @@ onUnmounted(() => sequence++)
   border-radius: 999px;
   color: var(--ui-warning);
   background: var(--ui-warning-soft);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 18px;
 }
 
@@ -394,7 +394,7 @@ onUnmounted(() => sequence++)
   border-radius: 10px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .share-task__main {
@@ -406,13 +406,13 @@ onUnmounted(() => sequence++)
 
 .share-task__main strong {
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
 .share-task__main span {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.5;
   font-variant-numeric: tabular-nums;
 }
@@ -429,13 +429,13 @@ onUnmounted(() => sequence++)
   gap: 6px;
   margin: 0;
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
 .share-section__title small {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-400);
 }
 
@@ -514,13 +514,13 @@ onUnmounted(() => sequence++)
 
 .tier-row__threshold b {
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-variant-numeric: tabular-nums;
 }
 
 .tier-row__threshold small {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tier-row__rewards {
@@ -541,7 +541,7 @@ onUnmounted(() => sequence++)
   color: var(--ui-muted);
   background: var(--ui-surface-strong);
   font: inherit;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   cursor: pointer;
   transition: border-color 0.16s ease;
 }
@@ -562,7 +562,7 @@ onUnmounted(() => sequence++)
 
 .tier-reward__well > span {
   color: var(--ui-subtle);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tier-reward__well img {
@@ -591,7 +591,7 @@ onUnmounted(() => sequence++)
   justify-content: flex-end;
   gap: 3px;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
 }
 
@@ -602,7 +602,7 @@ onUnmounted(() => sequence++)
 
 .reward-description {
   max-width: min(280px, calc(100vw - 56px));
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -638,7 +638,7 @@ onUnmounted(() => sequence++)
   align-items: center;
   gap: 12px;
   padding: 9px 0;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .share-records li + li {
@@ -654,7 +654,7 @@ onUnmounted(() => sequence++)
 
 .share-records time {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -668,7 +668,7 @@ onUnmounted(() => sequence++)
   margin: 0;
   padding: 12px 0;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-align: center;
 }
 </style>

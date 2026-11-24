@@ -112,7 +112,17 @@ function getLevelForecast(user: any, progress: any, stats: any, automation: any,
         connected, autoHarvest: !!automation?.farm, quiet });
     // snapshotValid 用来区分「确实没有在田作物」和「快照暂时不可用」：
     // 前者要清掉前端缓存，后者要沿用上一次的有效值。
-    return { ...forecast, snapshotValid: valid && connected };
+    const lands = valid && connected ? snapshot.lands.filter((land: any) => land.unlocked) : null;
+    const occupiedIds = new Set<number>();
+    for (const land of lands || []) {
+        const phase = num(land.plant?.phases?.[0]?.phase);
+        if (!land.plant || phase === 0 || phase === 7) continue;
+        occupiedIds.add(num(land.id));
+        for (const id of land.slave_land_ids || []) occupiedIds.add(num(id));
+    }
+    return { ...forecast, snapshotValid: valid && connected,
+        plantedLandCount: lands ? lands.filter((land: any) => occupiedIds.has(num(land.id))).length : null,
+        unlockedLandCount: lands ? lands.length : null };
 }
 
 module.exports = { buildHarvestEvents, calculateLevelForecast, invalidateLandForecast, getLandForecastRevision, rememberLandForecast, isLandForecastStale, getLevelForecast };

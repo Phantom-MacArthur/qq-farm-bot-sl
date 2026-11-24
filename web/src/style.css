@@ -62,12 +62,27 @@ textarea * {
   --ui-table-head: #edf2eb;
   --ui-radius-control: 10px;
   /* 搜索、筛选、排序、刷新共用尺寸：高度固定，宽度由内容适配模板按文案撑开。 */
-  --ui-toolbar-control-height: 35px;
+  --ui-font-size-tiny-12: 12px;
+  --ui-font-size-small-13: 13px;
+  --ui-font-size-medium-14: 14px;
+  --ui-font-size-large-15: 15px;
+  /* 内容区标题栏：font-height 用于 font-size，表示字号，不是行高。 */
+  --ui-content-titlebar-font-height-large-15: var(--ui-font-size-large-15);
+  --ui-content-titlebar-font-height-medium-14: var(--ui-font-size-medium-14);
+  --ui-content-item-font-height-tiny-12: var(--ui-font-size-tiny-12);
+  --ui-content-titlebar-control-height-34: 34px;
+  --ui-content-item-control-height-30: 30px;
+  /* 紧凑内容区的垂直间距。 */
+  --ui-content-vertical-gap: 8px;
+  /* 进度条未完成区域：沿用个人信息经验条背景，随主题切换。 */
+  --ui-progress-track-bg: var(--ui-surface-soft);
   --ui-toolbar-control-padding: 12px;
   --ui-toolbar-control-gap: 4px;
   --ui-toolbar-control-icon-size: 16px;
   --ui-toolbar-width-slack: 2px;
   --ui-radius-card: 14px;
+  --ui-dialog-scroll-gap: 12px;
+  --ui-dialog-scroll-inset: 8px;
   --ui-shadow-sm: 0 1px 2px rgba(45, 66, 52, 0.04), 0 6px 20px rgba(45, 66, 52, 0.05);
   --ui-shadow-md: 0 12px 32px rgba(55, 75, 61, 0.1);
   --ui-shadow-lg: 0 24px 64px rgba(55, 75, 61, 0.15);
@@ -262,6 +277,7 @@ textarea * {
   --glass-highlight: rgba(255, 255, 255, 0.03);
   --ui-bg-glow: rgba(91, 189, 136, 0.045);
   --ui-bg-glow-2: rgba(130, 182, 214, 0.035);
+  --app-bg: var(--ui-bg);
   --chrome-bg: color-mix(in srgb, var(--ui-bg) 94%, transparent);
   --ui-table-head: #242a32;
 }
@@ -308,6 +324,33 @@ textarea * {
   background: transparent;
 }
 
+/* 弹窗内容与滚动条留出间距，滚动条外侧沿用卡片的内边距。 */
+.dialog-scroll {
+  --ui-dialog-scroll-thumb: var(--ui-muted);
+  padding-inline-end: var(--ui-dialog-scroll-gap);
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  scrollbar-color: var(--ui-dialog-scroll-thumb) transparent;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .dialog-scroll {
+    --ui-dialog-scroll-thumb: transparent;
+  }
+
+  .dialog-scroll:hover,
+  .dialog-scroll:focus-within {
+    --ui-dialog-scroll-thumb: var(--ui-muted);
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --ui-dialog-scroll-gap: 8px;
+    --ui-dialog-scroll-inset: 6px;
+  }
+}
+
 ::-webkit-scrollbar-thumb {
   background: rgba(100, 116, 139, 0.38);
   border: 2px solid transparent;
@@ -333,6 +376,26 @@ textarea * {
   background-clip: padding-box;
 }
 
+@supports not (scrollbar-color: auto) {
+  .dialog-scroll {
+    scrollbar-width: auto;
+  }
+
+  .dialog-scroll::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .dialog-scroll::-webkit-scrollbar-thumb,
+  .dialog-scroll::-webkit-scrollbar-thumb:hover,
+  .dark .dialog-scroll::-webkit-scrollbar-thumb,
+  .dark .dialog-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--ui-dialog-scroll-thumb);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+}
+
 /* 暗色模式下 select option 文字可见（仅 farm-input 下拉框） */
 .dark .farm-input option {
   background-color: #374151 !important;
@@ -347,7 +410,7 @@ body {
   padding: 0;
   /* 横向滚动统一交给应用外壳，避免根滚动条改变视口尺寸或遮住正文底部。 */
   overflow: hidden;
-  font-family: Inter, 'Microsoft YaHei', 'PingFang SC', ui-sans-serif, system-ui, sans-serif;
+  font-family: 'PingFang SC', 'Microsoft YaHei', Inter, ui-sans-serif, system-ui, sans-serif;
   letter-spacing: 0;
   color: var(--ui-ink);
   background: var(--app-bg);
@@ -432,7 +495,7 @@ th {
 
 .base-field__label {
   color: var(--theme-text);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-500);
   line-height: 1.4;
 }
@@ -487,7 +550,7 @@ th {
   border-radius: 3px;
   background: none;
   color: var(--theme-text);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1;
   opacity: 0.5;
   cursor: pointer;
@@ -517,7 +580,7 @@ th {
   background: transparent;
   cursor: pointer;
   font: inherit;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.4;
 }
 
@@ -558,14 +621,31 @@ th {
     box-shadow 0.16s ease;
 }
 
-.page-card-surface,
-.farm-panel {
+.page-card-surface {
+  --inset-top: 16px;
+  --inset-right: 16px;
+  --inset-bottom: 16px;
+  --inset-left: 16px;
   border: 1px solid var(--glass-border) !important;
   border-radius: var(--ui-radius-card) !important;
   background: var(--glass-card) !important;
   box-shadow:
     inset 0 1px 0 var(--glass-highlight),
     var(--ui-shadow-sm) !important;
+}
+
+/* Shared grid card shell with customizable border and background. */
+.grid-card {
+  border: 2px solid var(--grid-card-border, var(--ui-border));
+  border-radius: 16px;
+  background: var(--grid-card-bg, var(--ui-surface));
+  box-shadow: 0 1px 2px rgba(45, 66, 52, 0.05);
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.grid-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--ui-shadow-sm);
 }
 
 .farm-input {
@@ -726,6 +806,10 @@ th {
 }
 
 @container (max-width: 700px) {
+  .panel-titlebar .panel-refresh {
+    --refresh-label: none;
+  }
+
   .panel-multiselect-toggle__label {
     display: none;
   }
@@ -744,15 +828,27 @@ th {
 /* —— 列表/容器内相邻元素间的横线分割模板 ——
    统一使用 border-top + sibling 选择器，避免伪元素定位与滚动条预留区互相干扰。
    适用场景：<ul>/<ol> 里的 <li>，或任意容器内连续 <div>/<section> 等子元素序列。
-   只设模板本身，具体 padding 由业务组件控制。 */
+   通用列表记录统一使用下方的 12px 留白规范。 */
+/* 规范：分割线长度必须等于内容区完整宽度。
+   使用 panel-list 的列表保持 margin: 0、padding: 0，分割线由行元素的 border-top 提供。
+   内容留白设在行内，不在列表外叠加水平内距来缩短分割线。
+   panel-titlebar 只设置标题栏内距，panel-scroll-body 本身不添加内距。 */
 .list-divider > li + li,
-.has-divider > * + * {
+.has-divider > * + *,
+.divider-top {
   border-top: 1px solid var(--ui-border);
+}
+
+/* 行元素不设内距，留白交给内部内容层的外边距，分割线保持全宽。 */
+.panel-list.list-divider > li,
+.panel-list.has-divider > * {
+  margin-inline: 0 !important;
+  --inset-top: 12px; --inset-right: 12px; --inset-bottom: 12px; --inset-left: 12px;
 }
 
 /* —— 卡片标题栏统一格式 ——
    所有页面卡片顶部的标题栏共用：上下 16px 留白、下分隔线、上半圆角、与表头同底色，
-   并默认用 -16px 负 margin 出血贴卡片边缘（配合 page-card-surface 自带的 p-4/16px 内边距）。
+   默认用 -16px 外边距抵消卡片内容层的 16px 外边距，使背景与边框贴边。
    卡片本身没有内边距的（农场、活动列表）叠加 --flush 免出血；
    标题栏默认吸顶（top 取 --sticky-top，与上方子菜单保持原间距），无需再手动叠加 .panel-sticky；
    列方向、gap 等布局差异留在各页 scoped 里。 */
@@ -767,10 +863,47 @@ th {
   align-items: center;
   gap: 8px;
   margin: -16px -16px 0;
-  padding: 16px;
+  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
   border-bottom: 1px solid var(--ui-border);
   border-radius: var(--ui-radius-card) var(--ui-radius-card) 0 0;
   background: var(--ui-table-head);
+}
+
+/* 容器负责边框和背景，内部内容层通过外边距保留原有留白。 */
+:where(.margin-shell) {
+  display: flow-root;
+}
+.margin-shell {
+  padding: 0 !important;
+}
+.margin-content {
+  display: inherit;
+  flex: 1 1 auto;
+  flex-direction: inherit;
+  flex-wrap: inherit;
+  align-items: inherit;
+  justify-content: inherit;
+  align-content: inherit;
+  gap: inherit;
+  grid-template-columns: inherit;
+  grid-template-rows: inherit;
+  grid-template-areas: inherit;
+  grid-auto-flow: inherit;
+  grid-auto-rows: inherit;
+  grid-auto-columns: inherit;
+  justify-items: inherit;
+  grid-column: 1 / -1;
+  grid-row: 1 / -1;
+  align-self: stretch;
+  min-width: 0;
+  min-height: 0;
+  margin: var(--inset-top, 0px) var(--inset-right, 0px) var(--inset-bottom, 0px) var(--inset-left, 0px);
+}
+:where(.margin-content > *) {
+  --inset-top: 0px;
+  --inset-right: 0px;
+  --inset-bottom: 0px;
+  --inset-left: 0px;
 }
 
 .panel-titlebar--flush {
@@ -783,10 +916,9 @@ th {
    从结构上消除「圆角缺口透出滚过内容」的问题。
    用法：卡片容器加 .panel-scroll-layout；标题栏下方的内容包裹容器加 .panel-scroll-body。 */
 
-/* 存在已改造滚动卡片（.panel-scroll-layout）的页面：整页停止滚动，改由卡片内容区承接。
-   未改造的卡片页面保持原有整页滚动，避免内容被裁。 */
+/* 卡片内容区优先独立滚动；页面高度链不足时保留外层滚动作为兜底。 */
 .page-scroll:has(.panel-scroll-layout) {
-  overflow-y: hidden;
+  overflow-y: auto;
   /* 外层横向滚动条已占用的高度算入视口底部留白。 */
   --page-pad-bottom: max(0px, calc(var(--page-pad, 16px) - var(--page-bottom-inset, 0px)));
 }
@@ -808,7 +940,7 @@ th {
   flex: 0 1 auto;
 }
 /* 标题栏在滚动卡片内固定，不再吸顶 */
-.panel-scroll-layout > .panel-titlebar {
+.panel-scroll-layout > .margin-content > .panel-titlebar {
   position: relative;
   top: auto;
   flex: 0 0 auto;
@@ -820,6 +952,23 @@ th {
   min-width: 0;
   overflow-y: auto;
   border-radius: 0 0 var(--ui-radius-card) var(--ui-radius-card);
+}
+
+/* 资产卡片共用的当日净变化标记。 */
+.asset-daily-change {
+  overflow: hidden;
+  flex: none;
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+}
+
+.asset-daily-change--positive {
+  color: var(--ui-primary);
+}
+
+.asset-daily-change--negative {
+  color: var(--ui-danger);
 }
 /* —— 可复用：滚动卡片内的行式列表 ——
    放在 .panel-scroll-body 里的 <ul>/<ol> 上，解决同一类共性问题：列表用负 margin
@@ -872,14 +1021,14 @@ th {
   color: #fff;
   background: var(--ui-primary-fill);
   font-family: 'PingFang SC', 'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   text-align: center;
 }
 .date-leaf__day {
   margin-top: 2px;
   font-family: 'Noto Serif SC', 'Source Han Serif SC', 'Songti SC', SimSun, serif;
-  font-size: 28px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1.15;
   font-variant-numeric: tabular-nums;
 }
@@ -887,7 +1036,7 @@ th {
   padding-bottom: 6px;
   color: var(--ui-muted);
   font-family: 'PingFang SC', 'Microsoft YaHei', ui-sans-serif, system-ui, sans-serif;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
 }
 /* —— 可复用：悬浮滚动条 ——
@@ -947,26 +1096,6 @@ th {
   flex-direction: column;
 }
 
-/* 搜索、筛选、排序统一高度：覆盖 Naive UI 的尺寸变量，内部文本与箭头同步居中。
-   普通表单和操作按钮不受影响；新增控件可用 toolbar-control，筛选组可用 toolbar-filters。
-   页面内不再单独写高度，后续只调整 --ui-toolbar-control-height。 */
-:where(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters)
-  :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
-:where(.friends-toolbar .n-button-group, .toolbar-filters) .n-button,
-.toolbar-control:is(.n-input, .n-base-selection, .n-button),
-.toolbar-control :is(.n-input:not(.n-input--textarea), .n-base-selection),
-.catalog-sort {
-  --n-height: var(--ui-toolbar-control-height) !important;
-}
-
-/* 兜底：覆盖 :where() 降权导致无法命中 Naive UI 运行时 inline --n-height 的场景 */
-.panel-titlebar :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
-.book-toolbar :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
-.log-filters :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button),
-.toolbar-filters :is(.n-input:not(.n-input--textarea), .n-base-selection, .n-button) {
-  --n-height: var(--ui-toolbar-control-height) !important;
-}
-
 /* —— 内容适配宽度模板 ——
    搜索使用 BaseInput type="search"；筛选使用 BaseSelect fit-width；排序使用 CatalogSortButton。
    隐藏文案参与网格固有宽度计算，不参与交互或读屏；不按字符数估算，也不随输入/选中项伸缩。
@@ -977,28 +1106,16 @@ th {
 }
 
 .toolbar-fit {
-  --toolbar-font-size: 14px;
+  --toolbar-font-size: var(--ui-font-size-small-13);
   position: relative;
   display: inline-grid;
   grid-template-columns: max-content;
   width: max-content;
-  height: var(--ui-toolbar-control-height);
+  height: var(--ui-content-item-control-height-30) !important;
   flex: none;
   font-size: var(--toolbar-font-size);
   font-weight: var(--fw-400);
   line-height: 1.5;
-}
-
-.toolbar-fit[data-control-size='tiny'] {
-  --toolbar-font-size: 12px;
-}
-
-.toolbar-fit[data-control-size='small'] {
-  --toolbar-font-size: 13px;
-}
-
-.toolbar-fit[data-control-size='large'] {
-  --toolbar-font-size: 15px;
 }
 
 .toolbar-fit__measure {
@@ -1039,7 +1156,6 @@ th {
 .toolbar-fit .n-input,
 .toolbar-fit .n-base-selection {
   --n-font-size: var(--toolbar-font-size) !important;
-  --n-height: var(--ui-toolbar-control-height) !important;
 }
 
 .toolbar-fit--search .n-input {
@@ -1112,20 +1228,22 @@ th {
 .panel-refresh {
   /* 宽度交给 naive：圆形键靠 --n-width 才是正圆，这里只负责不被工具栏压缩 */
   flex: 0 0 auto;
-  --n-height: var(--ui-toolbar-control-height) !important;
-}
-
-/* 纯图标刷新键同步尺寸变量，避免只改高度后变成椭圆。 */
-.panel-refresh--icon-only {
-  --n-width: var(--ui-toolbar-control-height) !important;
 }
 
 /* 文本刷新键只按内容撑开，不继承页面为普通操作按钮设置的固定宽度。 */
-.panel-refresh:not(.panel-refresh--icon-only) {
+.panel-refresh:not(.panel-refresh--icon-only),
+.control-fit-content {
   width: max-content !important;
   min-width: 0 !important;
   --n-width: max-content !important;
   --n-padding: 0 var(--ui-toolbar-control-padding) !important;
+}
+
+/* 资源数量使用统一字号及等宽数字；万/亿换算由 formatCompactAmount 负责。 */
+.resource-amount {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 
 .panel-refresh .n-button__content {
@@ -1176,19 +1294,19 @@ th {
 }
 
 .offline-state__icon {
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .offline-state__title {
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-600);
 }
 
 .settings-page > :first-child h1 {
   margin: 0;
   color: var(--ui-ink);
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1.25;
 }
 
@@ -1414,34 +1532,19 @@ select:focus-visible {
   margin: 8px 0 0 !important;
 }
 
-/* 所有栏目的分区子菜单共用一套几何：整条左边缘不留边距，每个子菜单至少容纳
-   一个 1.2em 图标 + 8px 间隙 + 四个 14px 汉字（约 81px），相邻子菜单固定 16px  间距。
-   更长名称（好友黑名单、带计数徽章的黑名单）自行撑开，不裁切；
-   下划线宽度取 Tab 元素本身，因此只跨过图标加文本。 */
-.page-tabs {
-  --page-tab-min-width: 84px;
-  --page-tab-gap: 16px;
-}
-
 .page-tabs.n-tabs.n-tabs--line-type {
+  --page-tab-width: 104px;
+  --page-tab-gap: 16px;
   --n-tab-gap: var(--page-tab-gap) !important;
 }
 
-.page-tabs .n-tabs-tab-wrapper {
-  min-width: var(--page-tab-min-width);
-}
-
-/* 节令日历的页签只有纯文字（第二季度…），撑不满外层 84px 格子，
-   文字宽度又随名称长短浮动，看起来每个子菜单宽窄不一。
-   这里把统一宽度下沉到页签元素本身：每个页签至少 84px、文字靠左，
-   下划线随页签铺满整格，与其他页面「图标+四字」的观感对齐。 */
-.page-tabs.solar-tabs .n-tabs-tab-wrapper {
+.page-tabs.n-tabs.n-tabs--line-type .n-tabs-tab {
+  box-sizing: border-box;
+  flex: 0 0 var(--page-tab-width);
+  width: var(--page-tab-width);
   min-width: 0;
-}
-
-.page-tabs.solar-tabs .n-tabs-tab {
-  min-width: var(--page-tab-min-width);
   justify-content: flex-start;
+  overflow: hidden;
 }
 
 .panel-sticky {
@@ -1803,4 +1906,342 @@ select:focus-visible {
 
 .dark .dark\:bg-gray-600 {
   background-color: color-mix(in srgb, var(--ui-surface-soft) 70%, #ffffff 8%) !important;
+}
+
+/* 底部导航是悬浮的：牧场空间的卡片比农场页更高，滚动容器自身的 padding-bottom
+   在内容溢出时留不出导航的高度，最后一行卡片的按钮会被压在导航下面点不到。
+   这里按导航实际高度（66px）加下边距和安全区再补 12px 空隙。 */
+@media (max-width: 1023px) {
+  .app-main:has(+ .mobile-bottom-nav) .page-scroll {
+    padding-bottom: calc(66px + max(12px, env(safe-area-inset-bottom)) + 12px);
+  }
+}
+
+.farm-selection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.farm-mode-switch {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  min-width: 0;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  background: var(--ui-surface-soft);
+}
+
+.farm-mode-switch button {
+  display: inline-flex;
+  min-width: 0;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 7px 6px;
+  border-radius: 9px;
+  color: var(--ui-muted);
+  font-size: var(--ui-font-size-small-13);
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.farm-mode-switch button[aria-pressed='true'] {
+  color: var(--ui-primary);
+  background: var(--ui-surface-strong);
+  box-shadow: 0 1px 4px rgba(32, 58, 43, 0.08);
+  font-weight: var(--fw-650);
+}
+
+.farm-mode-switch button:focus-visible,
+.farm-selectbar__links button:focus-visible {
+  outline: 2px solid var(--ui-primary);
+  outline-offset: 2px;
+}
+
+.farm-selectbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  margin-left: auto;
+}
+
+.farm-selectbar__info {
+  display: flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--ui-muted);
+  font-size: var(--ui-font-size-small-13);
+  white-space: nowrap;
+}
+
+.farm-selectbar__info b {
+  color: var(--ui-primary);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.farm-selectbar__coverage {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+}
+
+.farm-selectbar__links {
+  display: inline-flex;
+  flex: none;
+  gap: 14px;
+}
+
+.farm-selectbar__links button {
+  color: var(--ui-primary);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  transition:
+    transform 120ms ease,
+    color 120ms ease;
+}
+
+.farm-selectbar__links button:active {
+  transform: scale(0.92);
+}
+
+.farm-mode-switch button:disabled,
+.farm-selectbar__links button:disabled {
+  color: var(--ui-subtle);
+  cursor: not-allowed;
+}
+
+.farm-selectbar .n-button {
+  min-width: 64px;
+  height: var(--ui-content-item-control-height-30);
+  flex: none;
+  border-radius: 10px;
+}
+
+
+/* Account, land and animal cards share their border and selected ring. */
+.selection-card {
+  border: 1px solid var(--glass-border) !important;
+  border-radius: var(--ui-radius-card) !important;
+}
+.selection-card.selection-card--selected,
+.selection-card.selection-card--selected:hover {
+  border-color: var(--glass-border) !important;
+  outline: 2px solid var(--ui-primary);
+  outline-offset: -2px;
+  box-shadow: inset 0 1px 0 var(--glass-highlight), var(--ui-shadow-sm) !important;
+}
+
+/* New card grids should use these shared spacing values. */
+:root {
+  --ui-card-grid-gap: 12px;
+  /* 卡片内容层距底边的默认外边距。 */
+  --ui-card-content-bottom-margin: 10px;
+  --ui-card-content-padding: 16px;
+}
+
+
+/* Toolbar loading/disabled state changes must not fade buttons during route refresh. */
+.panel-titlebar .n-button,
+.panel-titlebar .n-button *,
+.panel-multiselect-toggle,
+.panel-multiselect-toggle * {
+  transition: none !important;
+}
+
+
+/* Fixed panel headers do not scroll beneath the page header and need no page mask. */
+.page-scroll:has(.panel-scroll-layout) {
+  -webkit-mask-image: none;
+  mask-image: none;
+}
+
+/* Disabled actions share the PetPanel unavailable secondary button appearance.
+   Keep explicit colors so primary, secondary and native buttons render alike. */
+:root {
+  --ui-disabled-button-text: rgb(51, 54, 57);
+  --ui-disabled-button-bg: rgba(46, 51, 56, 0.05);
+  --ui-disabled-button-weight: 600;
+}
+.dark {
+  --ui-disabled-button-text: rgba(255, 255, 255, 0.82);
+  --ui-disabled-button-bg: rgba(255, 255, 255, 0.08);
+  --ui-disabled-button-weight: 560;
+}
+button:disabled,
+.n-button.n-button--disabled {
+  color: var(--ui-disabled-button-text) !important;
+  background: var(--ui-disabled-button-bg) !important;
+  font-weight: var(--ui-disabled-button-weight) !important;
+  opacity: 0.5 !important;
+}
+.n-button.n-button--disabled {
+  --n-text-color-disabled: var(--ui-disabled-button-text) !important;
+  --n-color-disabled: var(--ui-disabled-button-bg) !important;
+  --n-opacity-disabled: 0.5 !important;
+}
+.n-button.n-button--disabled :is(.n-button__border, .n-button__state-border) {
+  border-color: transparent !important;
+}
+
+/* 背包 tiny 操作按钮暂时使用组件自身的高度，便于预览。 */
+.n-button:not(.bag-item__action-tiny) {
+  height: var(--ui-content-item-control-height-30) !important;
+}
+/* 内容区标题栏标题与控件的统一入口。 */
+.panel-titlebar {
+  font-size: var(--ui-content-titlebar-font-height-large-15);
+}
+/* 标题栏控件 34px；条目和弹窗普通控件 30px。 */
+.panel-scroll-body,
+.panel-list {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+}
+:is(.n-button, .n-input:not(.n-input--textarea), .n-base-selection) {
+  --n-font-size: var(--ui-font-size-small-13) !important;
+}
+:is(.n-button:not(.bag-item__action-tiny), .n-input:not(.n-input--textarea), .n-base-selection) {
+  --n-height: var(--ui-content-item-control-height-30) !important;
+}
+:is(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters, .toolbar-control, .friends-toolbar)
+  :is(.n-button, .n-input:not(.n-input--textarea), .n-base-selection),
+.toolbar-control:is(.n-button, .n-input, .n-base-selection) {
+  --n-height: var(--ui-content-titlebar-control-height-34) !important;
+}
+:is(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters, .toolbar-control, .friends-toolbar)
+  :is(.n-button, .toolbar-fit),
+.toolbar-control.n-button {
+  height: var(--ui-content-titlebar-control-height-34) !important;
+}
+.n-button--circle {
+  --n-width: var(--ui-content-item-control-height-30) !important;
+}
+:is(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters, .toolbar-control, .friends-toolbar)
+  .n-button--circle {
+  --n-width: var(--ui-content-titlebar-control-height-34) !important;
+}
+.panel-titlebar :is(h1, h2) {
+  font-size: var(--ui-content-titlebar-font-height-large-15) !important;
+}
+.panel-titlebar :is(h3, h4, h5, h6) {
+  font-size: var(--ui-content-titlebar-font-height-medium-14) !important;
+}
+
+/* 内容区标题栏：主标题 15px，按钮、搜索框、筛选框文字 14px。
+   内容适配控件的测量文字同步字号，保证宽度与实际文字一致。 */
+:is(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters, .toolbar-control, .friends-toolbar)
+  :is(.n-button, .n-input:not(.n-input--textarea), .n-base-selection),
+.toolbar-control:is(.n-button, .n-input, .n-base-selection) {
+  --n-font-size: var(--ui-content-titlebar-font-height-medium-14) !important;
+}
+:is(.panel-titlebar, .book-toolbar, .log-filters, .toolbar-filters, .toolbar-control, .friends-toolbar)
+  .toolbar-fit {
+  --toolbar-font-size: var(--ui-content-titlebar-font-height-medium-14);
+}
+
+/* 筛选控件与测量文案占据同一网格，控件保留正常布局和点击区域。 */
+.toolbar-fit--select > .toolbar-fit__control {
+  position: relative;
+  inset: auto;
+  grid-area: 1 / 1;
+  align-self: stretch;
+}
+.toolbar-fit--select > .toolbar-fit__measure {
+  grid-area: 1 / 1;
+}
+
+/* Shared unfilled progress track; filled segments retain their status colors. */
+.ui-progress-track {
+  background: var(--ui-progress-track-bg) !important;
+}
+
+/* 区域徽标的背景随主题底色切换，字号和字重由所在区域决定。 */
+.ui-area-badge {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  line-height: 16px;
+  color: var(--ui-ink);
+  background: color-mix(in srgb, var(--ui-area-badge-tint, #5c9fd0) var(--ui-area-badge-strength, 18%), var(--ui-surface));
+}
+
+.ui-area-badge--ranch {
+  --ui-area-badge-tint: #65c38b;
+  --ui-area-badge-strength: 22%;
+}
+progress.ui-progress-track::-webkit-progress-bar {
+  background: var(--ui-progress-track-bg) !important;
+}
+.friend-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.friend-actions .friend-expand {
+  margin-inline-start: auto;
+}
+
+.mall-typography,
+.confirm-card:has(.quote--mall) {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: normal;
+  --ui-disabled-button-weight: 400;
+}
+
+.confirm-card:has(.quote--mall) :is(.n-card-header__main, .quote__count, .quote__plain, .quote__group h4, .quote b) {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: normal;
+}
+
+.confirm-card:has(.quote--mall) .n-button {
+  font-weight: normal;
+}
+
+.mall-typography :is(
+  .page-tabs .n-tabs-tab, .shop-asset, .shop-asset b, .shop-bar__status,
+  .goods-tag, .goods-price, .goods-price strong, .goods-card__single b,
+  .reward-total, .reward-chip b, .shop-message,
+  .empty-state__title, .empty-state__description, .offline-state__title, .offline-state__description,
+  .merchant-status, .merchant-status__text, .merchant-discount, .merchant-offer__qty,
+  .merchant-price, .merchant-price strong, .merchant-hint, .history-empty,
+  .history-row__name b, .history-row__price, .history-row__discount,
+  .purchase-head p b, .purchase-tag, .purchase-rewards b, .purchase-row__label,
+  .purchase-total, .stepper input, .dialog-kicker, .dialog-summary dd
+) {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: normal;
+}
+
+.mall-typography :is(
+  .goods-card__name, .merchant-offer__info h3, .merchant-offer__name, .history-row__name,
+  .purchase-head h2, .purchase-rewards__name, .dialog-goods strong
+) {
+  font-size: var(--ui-font-size-small-13);
+  font-weight: normal;
+}
+
+.mall-typography.purchase-dialog > h2 {
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: normal;
+}
+
+.mall-typography :is(.panel-scroll-body, .purchase-foot, .dialog-actions) :is(button, .n-button) {
+  font-size: var(--ui-font-size-small-13);
+  font-weight: normal;
+}
+
+.mall-typography .panel-titlebar :is(.n-button, .n-input, .n-base-selection) {
+  --n-font-size: var(--ui-content-item-font-height-tiny-12) !important;
+  --toolbar-font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: normal;
 }

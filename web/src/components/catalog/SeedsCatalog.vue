@@ -387,7 +387,7 @@ useReconnectRefresh(handleCalibrate)
               等级
             </th>
             <th
-              class="cursor-help px-3 py-3 font-medium"
+              class="px-3 py-3 font-medium"
               @mouseenter="showTip($event, '单季：经验÷成熟时间，双季：经验×2÷(成熟时间×1.5)')"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -395,7 +395,7 @@ useReconnectRefresh(handleCalibrate)
               经验
             </th>
             <th
-              class="cursor-help px-3 py-3 font-medium"
+              class="px-3 py-3 font-medium"
               @mouseenter="showTip($event, METRIC_FORMULAS.expPerHour)"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -403,7 +403,7 @@ useReconnectRefresh(handleCalibrate)
               经验/时
             </th>
             <th
-              class="cursor-help px-3 py-3 font-medium"
+              class="px-3 py-3 font-medium"
               @mouseenter="showTip($event, METRIC_FORMULAS.fertExpPerHour)"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -411,7 +411,7 @@ useReconnectRefresh(handleCalibrate)
               普通肥经验/时
             </th>
             <th
-              class="cursor-help px-3 py-3 font-medium"
+              class="px-3 py-3 font-medium"
               @mouseenter="showTip($event, METRIC_FORMULAS.profit)"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -419,7 +419,7 @@ useReconnectRefresh(handleCalibrate)
               利润/时
             </th>
             <th
-              class="cursor-help px-3 py-3 font-medium"
+              class="px-3 py-3 font-medium"
               @mouseenter="showTip($event, METRIC_FORMULAS.fertProfit)"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -431,13 +431,13 @@ useReconnectRefresh(handleCalibrate)
         <tbody class="divide-y divide-gray-100 dark:divide-gray-700">
           <tr v-for="item in paginated" :key="item.seedId">
             <td
-              class="sticky left-0 z-1 px-3 py-2 text-left"
+              class="sticky left-0 z-1 px-3 py-3 text-left"
               @mouseenter="showTip($event, seedInfoLines(item))"
               @mousemove="moveTip"
               @mouseleave="hideTip"
             >
               <div class="flex items-center gap-2">
-                <div class="relative h-10 w-10 flex shrink-0 items-center justify-center overflow-hidden border border-gray-200 rounded-lg bg-gray-100 dark:border-gray-600 dark:bg-gray-700">
+                <div class="h-8 w-8 flex shrink-0 items-center justify-center">
                   <img
                     v-if="item.image && !imageErrors[item.seedId]"
                     v-lazy-src="item.image"
@@ -458,7 +458,7 @@ useReconnectRefresh(handleCalibrate)
               {{ item.exp || '-' }}
             </td>
             <td
-              class="cursor-help px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
+              class="px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
               @mouseenter="showTip($event, metricFormulaText(item, 'expPerHour'))"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -466,7 +466,7 @@ useReconnectRefresh(handleCalibrate)
               {{ metricDisplay(item, 'expPerHour') }}
             </td>
             <td
-              class="cursor-help px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
+              class="px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
               @mouseenter="showTip($event, metricFormulaText(item, 'fertExpPerHour'))"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -474,7 +474,7 @@ useReconnectRefresh(handleCalibrate)
               {{ metricDisplay(item, 'fertExpPerHour') }}
             </td>
             <td
-              class="cursor-help px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
+              class="px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
               @mouseenter="showTip($event, metricFormulaText(item, 'profit'))"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -482,7 +482,7 @@ useReconnectRefresh(handleCalibrate)
               <span :class="isLimited(item) && !item.calibrated ? 'text-gray-400 dark:text-gray-500' : ''">{{ metricDisplay(item, 'profit') }}</span>
             </td>
             <td
-              class="cursor-help px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
+              class="px-3 py-2 text-emerald-600 font-medium dark:text-emerald-400"
               @mouseenter="showTip($event, metricFormulaText(item, 'fertProfit'))"
               @mousemove="moveTip"
               @mouseleave="hideTip"
@@ -523,7 +523,7 @@ useReconnectRefresh(handleCalibrate)
   border-radius: 8px;
   background: rgba(17, 24, 39, 0.92);
   color: #fff;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.5;
   white-space: nowrap;
   pointer-events: none;

@@ -28,7 +28,7 @@ const filterOptions = computed(() => props.filters.map(entry => ({
 <template>
   <!-- 吸顶元素只能在父元素范围内停留：没有 #body 时卡片只有标题栏那么高，吸顶挂在卡片上 -->
   <section class="book-card" :class="{ 'panel-sticky': !hasBody, 'panel-scroll-layout': hasBody }" :aria-label="label">
-    <div class="book-toolbar panel-titlebar panel-titlebar--flush">
+    <div class="book-toolbar panel-titlebar panel-titlebar--flush margin-shell"><span class="margin-content">
       <div v-if="$slots.overview" class="book-toolbar__overview">
         <slot name="overview" />
       </div>
@@ -40,7 +40,7 @@ const filterOptions = computed(() => props.filters.map(entry => ({
           <slot name="actions" />
         </div>
       </div>
-    </div>
+    </span></div>
     <div v-if="hasBody" class="book-card__body panel-scroll-body">
       <slot name="body" />
     </div>
@@ -67,7 +67,7 @@ const filterOptions = computed(() => props.filters.map(entry => ({
   flex-wrap: nowrap;
   align-items: stretch;
   gap: 0;
-  padding: 0;
+  --inset-top: 0; --inset-right: 0; --inset-bottom: 0; --inset-left: 0;
   border-radius: 0;
 }
 

@@ -60,7 +60,7 @@ withDefaults(defineProps<{
 }
 
 .empty-state__icon {
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .empty-state--error .empty-state__badge {
@@ -70,7 +70,7 @@ withDefaults(defineProps<{
 
 .empty-state__title {
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-600);
 }
 
@@ -78,7 +78,7 @@ withDefaults(defineProps<{
   max-width: 420px;
   margin: 0;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 

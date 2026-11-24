@@ -14,6 +14,7 @@ import OfflineState from '@/components/ui/OfflineState.vue'
 import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
+import { useFarmStore } from '@/stores/farm'
 import { useBagStore } from '@/stores/bag'
 import { usePetStore } from '@/stores/pet'
 import { useStatusStore } from '@/stores/status'
@@ -160,7 +161,7 @@ function setUseCount(value: unknown) {
   confirmModal.value.useCount = Math.max(1, Math.min(count, maxUseCount.value))
 }
 
-type BatchAction = 'sell' | 'lock' | 'unlock' | 'use'
+type BatchAction = 'sell' | 'lock' | 'unlock' | 'use' | 'plant'
 
 const batchAction = ref<BatchAction | null>(null)
 const batchMode = computed(() => batchAction.value !== null)
@@ -570,7 +571,7 @@ function toggleMultiSelect() {
   multiSelectEnabled.value = !multiSelectEnabled.value
   selectedForBatch.value.clear()
   batchSellResult.value = null
-  batchAction.value = multiSelectEnabled.value ? 'sell' : null
+  batchAction.value = multiSelectEnabled.value ? 'use' : null
   if (multiSelectEnabled.value)
     selectAllEligible()
 }
@@ -716,6 +717,30 @@ async function handleBatchUseClick() {
   }
 }
 
+const planting = ref(false)
+const farmStore = useFarmStore()
+
+async function plantEmptyLands() {
+  const accountId = currentAccountId.value
+  if (!accountId || planting.value || !isConnected.value) return
+  planting.value = true
+  try {
+    const result = await farmStore.operate(accountId, 'plant_empty')
+    if (accountId === currentAccountId.value) {
+      if (result?.hadWork) toastStore.success(`已种植 ${result.counts.plant} 块土地`)
+      else toastStore.info('当前没有可按策略种植的空地')
+      await bagStore.fetchBag(accountId)
+    }
+  }
+  catch (error) {
+    if (accountId === currentAccountId.value)
+      toastStore.error(getApiErrorMessage(error, '种植失败'))
+  }
+  finally {
+    planting.value = false
+  }
+}
+
 function handleBatchActionClick() {
   if (batchAction.value === 'sell')
     handleBatchSellClick()
@@ -791,10 +816,10 @@ useIntervalFn(loadBag, 60000)
 </script>
 
 <template>
-  <div class="personal-panel">
+  <div class="panel-fill">
     <!-- 标题栏始终渲染，离线/出错只替换下方内容，与任务页、宠物页一致 -->
-    <div class="personal-panel__card bag-panel-card page-card-surface rounded-2xl panel-scroll-layout">
-      <div class="bag-toolbar panel-titlebar shrink-0">
+    <div class="min-w-0 flex flex-col bag-panel-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <div class="bag-toolbar panel-titlebar shrink-0 margin-shell"><span class="margin-content">
         <BaseInput v-model="searchKeyword" type="search" clearable placeholder="输入名称搜索" />
         <BaseSelect v-model="selectedCategory" :options="CATEGORY_OPTIONS" fit-width aria-label="背包分类" />
         <div class="page-toolbar__actions bag-toolbar__actions">
@@ -803,7 +828,7 @@ useIntervalFn(loadBag, 60000)
             size="medium"
             :type="multiSelectEnabled ? 'default' : 'primary'"
             :secondary="!multiSelectEnabled"
-            :disabled="!isConnected || !items.length"
+            :disabled="!isConnected"
             :aria-label="multiSelectEnabled ? '取消' : '多选'"
             :title="multiSelectEnabled ? '取消' : '多选'"
             @click="toggleMultiSelect"
@@ -819,7 +844,7 @@ useIntervalFn(loadBag, 60000)
             @click="refreshBagOnDemand"
           />
         </div>
-      </div>
+      </span></div>
 
       <div class="panel-scroll-body">
         <EmptyState v-if="!currentAccountId" bare title="请先选择账号" icon="i-carbon-user-avatar" />
@@ -840,28 +865,30 @@ useIntervalFn(loadBag, 60000)
         <span class="i-carbon-circle-dash animate-spin text-4xl" />
       </div>
 
-      <div v-else-if="items.length === 0" class="page-card-surface rounded-xl p-8 text-center text-gray-500">
+      <div v-else-if="items.length === 0 && !multiSelectEnabled" class="page-card-surface rounded-xl text-center text-gray-500 margin-shell"><span class="margin-content !m-8">
         无可展示物品
-      </div>
+      </span></div>
 
       <template v-else>
         <div v-if="multiSelectEnabled" class="farm-selection-setup">
           <div class="farm-selection-row">
             <div class="farm-mode-switch" role="group" aria-label="多选操作类型">
-              <button type="button" :aria-pressed="batchAction === 'sell'" @click="toggleBatchMode('sell')">
-                <span class="i-carbon-shopping-cart-arrow-down" aria-hidden="true" />出售
+              <button type="button" :aria-pressed="batchAction === 'use'" @click="toggleBatchMode('use')">
+                <span class="i-carbon-play" aria-hidden="true" />使用</button>
+              <button type="button" :aria-pressed="batchAction === 'plant'" @click="toggleBatchMode('plant')">
+                <span class="i-carbon-sprout" aria-hidden="true" />种植
               </button>
               <button type="button" :aria-pressed="batchAction === 'lock'" @click="toggleBatchMode('lock')">
-                <span class="i-carbon-locked" aria-hidden="true" />锁定
-              </button>
+                <span class="i-carbon-locked" aria-hidden="true" />锁定</button>
               <button type="button" :aria-pressed="batchAction === 'unlock'" @click="toggleBatchMode('unlock')">
-                <span class="i-carbon-unlocked" aria-hidden="true" />解锁
-              </button>
-              <button type="button" :aria-pressed="batchAction === 'use'" @click="toggleBatchMode('use')">
-                <span class="i-carbon-play" aria-hidden="true" />使用
-              </button>
+                <span class="i-carbon-unlocked" aria-hidden="true" />解锁</button>
+              <button type="button" :aria-pressed="batchAction === 'sell'" @click="toggleBatchMode('sell')">
+                <span class="i-carbon-shopping-cart-arrow-down" aria-hidden="true" />出售</button>
             </div>
-            <div v-if="batchMode" class="farm-selectbar" role="toolbar" aria-label="所选物品操作">
+            <NButton v-if="batchAction === 'plant'" type="primary" :loading="planting" @click="plantEmptyLands">
+              按策略种植空地
+            </NButton>
+            <div v-else-if="batchMode" class="farm-selectbar" role="toolbar" aria-label="所选物品操作">
               <div class="farm-selectbar__info" role="status" aria-live="polite">
                 <span>已选 <b>{{ selectedBatchCount }}/{{ batchEligibleCount }}</b></span>
                 <span class="farm-selectbar__links">
@@ -890,7 +917,7 @@ useIntervalFn(loadBag, 60000)
             <article
               v-for="item in filteredItems"
               :key="itemKey(item)"
-              class="bag-item page-card-surface"
+              class="bag-item page-card-surface margin-shell"
               :class="batchMode ? {
                 'bag-item--selectable': isBatchEligible(item),
                 'bag-item--selected': selectedForBatch.has(itemKey(item)),
@@ -899,7 +926,7 @@ useIntervalFn(loadBag, 60000)
               :role="batchMode && isBatchEligible(item) ? 'checkbox' : undefined"
               :aria-checked="batchMode && isBatchEligible(item) ? selectedForBatch.has(itemKey(item)) : undefined"
               @click="batchMode && toggleBatchSelection(item)"
-            >
+            ><span class="margin-content">
               <!-- 右上角仅显示可选项的选择状态。 -->
               <template v-if="batchMode">
                 <span
@@ -941,10 +968,11 @@ useIntervalFn(loadBag, 60000)
               </div>
 
               <!-- 每张卡都有底栏：左侧操作，右侧数量。卡片结构一致，因此等高；数量不再压在图标上。 -->
-              <footer class="bag-item__foot">
+              <footer class="bag-item__foot divider-top margin-shell"><span class="margin-content">
                 <span v-if="!batchMode && itemActions(item).length" class="bag-item__ops" @click.stop>
                   <NButton
                     size="tiny"
+                    class="bag-item__action-tiny"
                     :type="itemActions(item)[0]!.key === 'use' ? 'primary' : 'default'"
                     secondary
                     :title="itemActions(item)[0]!.title"
@@ -970,13 +998,13 @@ useIntervalFn(loadBag, 60000)
                   <template v-if="item.hoursText">{{ item.hoursText }}</template>
                   <template v-else>×{{ formatNumber(item.count) }}</template>
                 </span>
-              </footer>
-            </article>
+              </span></footer>
+            </span></article>
           </div>
         </div>
       </template>
       </div>
-    </div>
+    </span></div>
 
     <ConfirmModal
       :show="confirmModal.show"
@@ -1049,7 +1077,7 @@ useIntervalFn(loadBag, 60000)
   display: grid;
   /* 最窄布局（内容区 780px，卡片内宽约 746px）下正好放下 6 列：6 × 112 + 5 × 12 = 732；窗口更宽时自动增列 */
   grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));
-  grid-auto-rows: 1fr;
+  align-items: start;
   gap: 12px;
 }
 
@@ -1060,11 +1088,12 @@ useIntervalFn(loadBag, 60000)
   min-width: 0;
   flex-direction: column;
   align-items: center;
-  gap: 4px;
-  padding: 12px 8px 10px !important;
+  --bag-item-gap: 4px;
+  gap: var(--bag-item-gap);
+  --inset-top: 12px; --inset-right: 8px; --inset-bottom: var(--ui-card-content-bottom-margin); --inset-left: 8px;
   text-align: center;
+  background: transparent !important;
   transition:
-    background-color 0.15s ease,
     opacity 0.15s ease;
 }
 
@@ -1076,13 +1105,12 @@ useIntervalFn(loadBag, 60000)
 
 .bag-item__thumb {
   position: relative;
-  width: 60px;
-  height: 60px;
+  width: 46px;
+  height: 46px;
   display: grid;
-  margin-bottom: 4px;
+  margin-bottom: 8px;
   place-items: center;
   border-radius: 16px;
-  background: var(--ui-surface-soft);
 }
 
 .bag-item__thumb img {
@@ -1093,7 +1121,7 @@ useIntervalFn(loadBag, 60000)
 
 .bag-item__fallback {
   color: var(--ui-subtle);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
 }
 
@@ -1104,9 +1132,8 @@ useIntervalFn(loadBag, 60000)
   min-height: 30px;
   align-items: center;
   gap: 4px;
-  margin-top: auto;
-  padding-top: 8px;
-  border-top: 1px dashed var(--ui-border);
+  margin-top: calc(var(--ui-content-vertical-gap) - var(--bag-item-gap));
+  --inset-top: 8px;
 }
 
 .bag-item__qty {
@@ -1114,7 +1141,7 @@ useIntervalFn(loadBag, 60000)
   margin-left: auto;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-400);
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -1124,7 +1151,7 @@ useIntervalFn(loadBag, 60000)
 
 .bag-item__qty.is-hours {
   color: var(--ui-blue);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .bag-item__ops {
@@ -1146,14 +1173,14 @@ useIntervalFn(loadBag, 60000)
   color: #fff;
   background: var(--ui-warning-fill);
   box-shadow: 0 0 0 2px var(--ui-surface-strong);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .bag-item__name {
   width: 100%;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-400);
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -1167,7 +1194,6 @@ useIntervalFn(loadBag, 60000)
   justify-content: center;
   gap: 4px 8px;
   color: var(--ui-muted);
-  font-size: 11px;
   line-height: 18px;
 }
 
@@ -1206,14 +1232,14 @@ useIntervalFn(loadBag, 60000)
   max-width: 100%;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .bag-panel-card {
   --bag-panel-pad: 16px;
-  padding: var(--bag-panel-pad);
+  --inset-top: var(--bag-panel-pad); --inset-right: var(--bag-panel-pad); --inset-bottom: var(--bag-panel-pad); --inset-left: var(--bag-panel-pad);
 }
 
 .bag-grid.is-selecting {
@@ -1258,7 +1284,7 @@ useIntervalFn(loadBag, 60000)
   padding: 7px 6px;
   border-radius: 9px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 18px;
   white-space: nowrap;
 }
@@ -1292,7 +1318,7 @@ useIntervalFn(loadBag, 60000)
   justify-content: space-between;
   gap: 12px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   white-space: nowrap;
 }
 
@@ -1310,7 +1336,7 @@ useIntervalFn(loadBag, 60000)
 
 .farm-selectbar__links button {
   color: var(--ui-primary);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   transition:
     transform 120ms ease,
     color 120ms ease;
@@ -1328,7 +1354,7 @@ useIntervalFn(loadBag, 60000)
 
 .farm-selectbar :deep(.n-button) {
   min-width: 64px;
-  height: 36px;
+  height: var(--ui-content-item-control-height-30);
   flex: none;
   border-radius: 10px;
 }
@@ -1392,7 +1418,6 @@ useIntervalFn(loadBag, 60000)
 .bag-item--selected:hover {
   outline: 2px solid var(--ui-primary);
   outline-offset: -1px;
-  background: color-mix(in srgb, var(--ui-primary-soft) 70%, var(--ui-surface)) !important;
 }
 
 .bag-item--disabled {
@@ -1410,7 +1435,7 @@ useIntervalFn(loadBag, 60000)
   border-radius: 50%;
   color: #fff;
   background: var(--ui-surface-strong);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   transition:
     background-color 0.15s ease,
     border-color 0.15s ease;
@@ -1448,21 +1473,21 @@ useIntervalFn(loadBag, 60000)
   gap: 4px;
   margin: 0.9rem 0 0;
   color: var(--n-text-color-2);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.5;
   text-align: center;
 }
 
 .use-quantity-hint strong {
   color: var(--theme-primary, #438d63);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1;
 }
 
 .use-quantity > span {
   display: block;
   margin-bottom: 8px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 
@@ -1491,7 +1516,7 @@ useIntervalFn(loadBag, 60000)
 .sachet-detail__row span,
 .sachet-detail__message span {
   color: var(--n-text-color-3);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 
@@ -1511,7 +1536,21 @@ useIntervalFn(loadBag, 60000)
 
 .sachet-detail__message strong {
   color: var(--n-text-color);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1.55;
 }
+</style>
+
+<style scoped>
+/* 分割线贴齐卡片边缘，底栏内容仍与卡片正文对齐。 */
+.bag-item__foot {
+  width: calc(100% + 16px);
+  margin-inline: -8px;
+  --inset-left: 8px;
+  --inset-right: 8px;
+}
+</style>
+
+<style scoped>
+.bag-item :deep(*) { font-weight: var(--fw-400) !important; }
 </style>

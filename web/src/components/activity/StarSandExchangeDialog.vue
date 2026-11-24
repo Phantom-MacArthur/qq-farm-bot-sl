@@ -284,7 +284,7 @@ onBeforeUnmount(() => unlockPage(false))
 .exchange-dialog h2 {
   margin: 0;
   color: #fff4bd;
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
   letter-spacing: 0.08em;
   text-shadow: 0 2px 3px #664a18;
 }
@@ -293,7 +293,7 @@ onBeforeUnmount(() => unlockPage(false))
   top: -10px;
   right: -9px;
   width: 38px;
-  height: 38px;
+  height: var(--ui-content-item-control-height-30);
   padding: 0;
   border: 2px solid #b6e8fa;
   border-radius: 50%;
@@ -329,7 +329,7 @@ onBeforeUnmount(() => unlockPage(false))
   object-fit: contain;
 }
 .goods-picture span {
-  font-size: 45px;
+  font-size: var(--ui-font-size-large-15);
   color: #bce9f8;
 }
 .goods-copy {
@@ -342,13 +342,13 @@ onBeforeUnmount(() => unlockPage(false))
 .goods-copy strong {
   overflow: hidden;
   color: white;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .goods-copy span {
   color: #cce9f6;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .balance-row {
   display: flex;
@@ -368,7 +368,7 @@ onBeforeUnmount(() => unlockPage(false))
 .quantity-section label {
   display: block;
   margin-bottom: 7px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-700);
 }
 .quantity-control {
@@ -378,14 +378,14 @@ onBeforeUnmount(() => unlockPage(false))
 }
 .quantity-control button,
 .quantity-control input {
-  height: 40px;
+  height: var(--ui-content-item-control-height-30);
   border: 1px solid #81c8e8;
   border-radius: 9px;
 }
 .quantity-control button {
   color: white;
   background: #286ea9;
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   cursor: pointer;
 }
@@ -398,7 +398,7 @@ onBeforeUnmount(() => unlockPage(false))
   padding: 0 7px;
   color: #42310e;
   background: #fff9d8;
-  font-size: 17px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   text-align: center;
   outline: none;
@@ -408,13 +408,13 @@ onBeforeUnmount(() => unlockPage(false))
   box-shadow: 0 0 0 3px rgba(255, 239, 145, 0.25);
 }
 .quantity-control .maximum-button {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .validation-message,
 .limit-message {
   min-height: 17px;
   margin: 5px 2px 0;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .validation-message {
   color: #ffd1c9;
@@ -431,7 +431,7 @@ onBeforeUnmount(() => unlockPage(false))
   border-radius: 11px;
   color: #d9edf8;
   background: rgba(7, 30, 78, 0.42);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .totals span {
   display: flex;
@@ -444,7 +444,7 @@ onBeforeUnmount(() => unlockPage(false))
 .confirmation-copy {
   margin: 12px 5px;
   color: #bcd9e8;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.55;
   text-align: center;
 }
@@ -454,7 +454,7 @@ onBeforeUnmount(() => unlockPage(false))
   gap: 9px;
 }
 .dialog-actions button {
-  min-height: 44px;
+  min-height: var(--ui-content-item-control-height-30);
   border-radius: 12px;
   font-weight: var(--fw-700);
   cursor: pointer;

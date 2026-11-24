@@ -257,7 +257,7 @@ onBeforeUnmount(() => store.reset())
 
     <NModal v-model:show="rewardsOpen">
       <NCard class="max-w-xl w-[calc(100vw-32px)]" title="藏品评分奖励" closable @close="rewardsOpen = false">
-        <div class="milestone-list custom-scrollbar">
+        <div class="milestone-list dialog-scroll custom-scrollbar">
           <div v-for="milestone in data?.milestones" :key="milestone.level" class="milestone" :class="{ 'is-claimed': milestone.claimed, 'is-reached': milestone.reached && !milestone.claimed }">
             <div class="milestone__score">
               <b>{{ milestone.score.toLocaleString() }}</b><small>评分</small>
@@ -306,7 +306,7 @@ onBeforeUnmount(() => store.reset())
   min-height: 240px;
   place-items: center;
   color: var(--ui-primary);
-  font-size: 28px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 /* 固定最小列宽自动排列：同一行卡片等宽等高，与作物图鉴的条目网格一致。 */
@@ -328,7 +328,7 @@ onBeforeUnmount(() => store.reset())
   color: var(--tile-accent);
   background: var(--ui-surface-strong);
   box-shadow: var(--ui-shadow-sm);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 16px;
   transform: translateX(-50%);
 }
@@ -339,7 +339,7 @@ onBeforeUnmount(() => store.reset())
   justify-content: center;
   gap: 1px;
   color: var(--ui-border-strong);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tile-stars .is-lit {
@@ -349,7 +349,7 @@ onBeforeUnmount(() => store.reset())
 .tile-stars.is-large {
   height: 16px;
   justify-content: flex-start;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .collection-detail {
@@ -371,7 +371,6 @@ onBeforeUnmount(() => store.reset())
   flex: none;
   place-items: center;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--tile-accent) 10%, var(--ui-surface-soft));
 }
 
 .collection-detail__well img {
@@ -397,7 +396,7 @@ onBeforeUnmount(() => store.reset())
   align-items: center;
   gap: 6px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .collection-detail__series b {
@@ -405,7 +404,7 @@ onBeforeUnmount(() => store.reset())
   border-radius: 5px;
   color: var(--tile-accent);
   background: color-mix(in srgb, var(--tile-accent) 13%, transparent);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 18px;
 }
@@ -413,7 +412,7 @@ onBeforeUnmount(() => store.reset())
 .collection-detail__heading p {
   margin: 0;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -436,13 +435,13 @@ onBeforeUnmount(() => store.reset())
 
 .collection-detail__stats dt {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .collection-detail__stats dd {
   margin: 2px 0 0;
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-600);
   font-variant-numeric: tabular-nums;
 }
@@ -455,7 +454,7 @@ onBeforeUnmount(() => store.reset())
 
 .collection-detail__block > strong {
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
 }
 
@@ -473,7 +472,7 @@ onBeforeUnmount(() => store.reset())
   border-radius: 999px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .collection-detail__costs b {
@@ -497,7 +496,7 @@ onBeforeUnmount(() => store.reset())
   border-radius: 10px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
 }
 
@@ -517,7 +516,7 @@ onBeforeUnmount(() => store.reset())
   padding: 10px 12px;
   border: 1px solid var(--ui-border);
   border-radius: 12px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .milestone.is-reached {
@@ -535,13 +534,13 @@ onBeforeUnmount(() => store.reset())
 }
 
 .milestone__score b {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-variant-numeric: tabular-nums;
 }
 
 .milestone__score small {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .milestone__rewards {

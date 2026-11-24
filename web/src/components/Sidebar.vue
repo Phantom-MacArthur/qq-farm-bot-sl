@@ -6,14 +6,18 @@ import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
-import { menuRoutes } from '@/router/menu'
+import { useRoute } from 'vue-router'
+import { getSpaceMenu } from '@/router/menu'
 import { useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
+import { useAppUpdateStore } from '@/stores/app-update'
 import { useStatusStore } from '@/stores/status'
 
+const route = useRoute()
 const accountStore = useAccountStore()
 const statusStore = useStatusStore()
 const appStore = useAppStore()
+const { reconnecting: panelReconnecting } = storeToRefs(useAppUpdateStore())
 const { currentAccount } = storeToRefs(accountStore)
 const { status, realtimeConnected } = storeToRefs(statusStore)
 const { sidebarCollapsed, sidebarAutoCollapsed, sidebarToggleLabel } = storeToRefs(appStore)
@@ -37,7 +41,7 @@ const now = useNow({ interval: 1000 })
 
 async function checkConnection() {
   try {
-    const res = await api.get('/api/ping')
+    const res = await api.get('/api/ping', { skipErrorToast: true } as any)
     systemConnected.value = true
     if (res.data.ok && res.data.data) {
       if (res.data.data.uptime) {
@@ -124,6 +128,14 @@ const uptime = computed(() => {
 })
 
 const connectionStatus = computed(() => {
+  if (panelReconnecting.value) {
+    return {
+      text: '正在重连',
+      color: 'bg-amber-500',
+      pulse: true,
+    }
+  }
+
   if (!systemConnected.value) {
     return {
       text: '系统离线',
@@ -157,7 +169,7 @@ const connectionStatus = computed(() => {
 })
 
 const navItems = computed(() => {
-  return menuRoutes
+  return getSpaceMenu(route.meta.gameSpace === 'ranch')
     .map(item => ({
       path: item.path ? `/${item.path}` : '/',
       label: item.label,
@@ -315,7 +327,7 @@ const navItems = computed(() => {
 
 .sidebar-footer__uptime {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -325,7 +337,7 @@ const navItems = computed(() => {
   align-items: center;
   gap: 4px;
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1;
   text-decoration: none;
   white-space: nowrap;
@@ -349,7 +361,7 @@ const navItems = computed(() => {
   justify-content: center;
   border-radius: 10px;
   color: var(--ui-muted);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 20px;
   transition:
     color 0.15s ease,
@@ -381,12 +393,12 @@ const navItems = computed(() => {
 }
 
 .sidebar-tooltip-content strong {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
 }
 
 .sidebar-tooltip-content span {
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   opacity: 0.78;
 }
 
@@ -398,7 +410,7 @@ nav a:hover {
   width: 20px;
   height: 20px;
   flex: 0 0 20px;
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 20px;
   color: var(--ui-muted);
 }

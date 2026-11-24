@@ -17,6 +17,7 @@ const { updateStatusGold } = require('../status');
 const { getBagSeeds } = require('../warehouse');
 const { getCareerInfoOrNull } = require('../career');
 const { getAllLands, buyGoods, removePlant, fertilizeOne } = require('./api');
+const { isRipeningOnlyMode, runRipeningFertilizer } = require('./ripening');
 const {
     selectFutureLayoutReservation,
     getRegisteredLayout,
@@ -31,7 +32,6 @@ const {
     buildLandMap,
     getOrganicFertilizerTargetsFromLands,
     filterLandIdsForNormalFertilizer,
-    getFastMatureLands,
     normalizeFertilizerLandTypes,
     formatFertilizerLandTypes,
     filterLandIdsByTypes,
@@ -188,8 +188,9 @@ async function plantSeeds(seedId: number | string, landIds: number[], options: {
             for (const expectedId of layout.landIds) reservedLandIds.add(expectedId);
         } catch (e: any) {
             uncertain = true;
-            logWarn('种植', `土地#${landId} 失败: ${e.message}`, {
-                module: 'farm', event: '种植种子', result: 'rpc_uncertain', seedId: toNum(seedId), landId
+            const id = toNum(seedId);
+            logWarn('种植', `土地#${landId} 播种${getPlantNameBySeedId(id)}(${id})失败，${e.message}`, {
+                module: 'farm', event: '种植种子', result: 'rpc_uncertain', seedId: id, landId
             });
             if (options.propagateErrors) throw e;
             break;
@@ -310,16 +311,13 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
         plantSize: Math.max(1, toNum(seed && seed.plantSize) || getPlantSizeBySeedId(seed && seed.seedId)),
         // 拿不到土地类型时按不限制处理，避免整轮种不下去。
         landTypes: landTypeAvailable ? resolveSeedLandTypes(bagSeedLandTypes, seed && seed.seedId) : null,
-        stateLevel,
     }));
     // log('种植', `背包种子原始: ${bagSeedCandidates.map((s: any) => `${s.name}(${s.seedId})x${s.count},lv${s.requiredLevel},size${s.plantSize}`).join('; ')}`, {
     //     module: 'farm', event: '种植种子', result: 'bag_raw', priority: priorityList, stateLevel,
     // });
 
-    // 背包里已有的种子不再用玩家等级过滤：等级限制主要限制购买，拥有后应允许尝试种植。
-    // 不可种的种子服务端会拒绝，这里记录后继续下一优先种子。
+    // 背包已有种子按优先级选取，种植资格由服务端校验。
     const skippedSeeds: any[] = [];
-    const levelLockedSeeds: any[] = [];
     const usableSeeds = sortBagSeedsForPlanting(
         bagSeedCandidates.filter((seed: any) => {
             if (seed.count <= 0) {
@@ -330,20 +328,11 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
                 skippedSeeds.push({ seedId: seed.seedId, name: seed.name, reason: 'invalid_size', plantSize: seed.plantSize });
                 return false;
             }
-            if (seed.requiredLevel > seed.stateLevel) {
-                levelLockedSeeds.push({ seedId: seed.seedId, name: seed.name, requiredLevel: seed.requiredLevel, stateLevel: seed.stateLevel });
-            }
             return true;
         }),
         priorityList,
     );
 
-    const levelLockedSeedIds = new Set<number>(levelLockedSeeds.map((s: any) => toNum(s && s.seedId)));
-    if (levelLockedSeeds.length > 0) {
-        // log('种植', `背包种子等级锁定但仍尝试: ${levelLockedSeeds.map((s: any) => `${s.name}(${s.seedId}) 需等级${s.requiredLevel}>当前${s.stateLevel}`).join('; ')}`, {
-        //     module: 'farm', event: '种植种子', result: 'bag_seed_level_lock_try', strategy: 'bag_priority', levelLocked: levelLockedSeeds,
-        // });
-    }
     if (skippedSeeds.length > 0) {
         log('种植', `背包种子不可种植: ${skippedSeeds.map((s: any) => `${s.name}(${s.seedId}) ${s.reason}`).join('; ')}`, {
             module: 'farm', event: '种植种子', result: 'bag_seed_skip', strategy: 'bag_priority', skipped: skippedSeeds,
@@ -460,20 +449,12 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
             if (!result.uncertain && remainingLandIds.length > 0 && isSlicedPlanting(pacing)) pacing.deferred = true;
         }
         
-        if (result.uncertain) {
-            // 等级锁定的种子尝试失败后，不应阻止第二优先策略补种其他空地。
-            if (levelLockedSeedIds.has(seed.seedId)) {
-                log('种植', `背包种子 ${seed.name} 为等级锁定种子，尝试失败但不阻止第二优先策略`, {
-                    module: 'farm', event: '种植种子', result: 'bag_level_lock_fail_continue', seedId: seed.seedId,
-                    requested: layouts.length, planted: result.planted,
-                });
-            } else {
-                fallbackAllowed = false;
-                logWarn('种植', `背包种子 ${seed.name} 的种植或占地状态不确定，为避免误购商店种子，本轮不执行第二优先策略`, {
-                    module: 'farm', event: '种植种子', result: 'bag_plant_uncertain', seedId: seed.seedId,
-                    requested: layouts.length, planted: result.planted
-                });
-            }
+        if (result.uncertain && seed.requiredLevel <= stateLevel) {
+            fallbackAllowed = false;
+            logWarn('种植', `背包种子 ${seed.name} 的种植或占地状态不确定，为避免误购商店种子，本轮不执行第二优先策略`, {
+                module: 'farm', event: '种植种子', result: 'bag_plant_uncertain', seedId: seed.seedId,
+                requested: layouts.length, planted: result.planted
+            });
         }
     }
 
@@ -1022,6 +1003,11 @@ async function runFertilizerByConfig(plantedLands: any[] = [], options: { skipNo
     const { fertilize, fertilizeOrganicLoop } = require('./api');
     const automation = getAutomation() || {};
     const fertilizerConfig = automation.fertilizer || 'none';
+    if (isRipeningOnlyMode(fertilizerConfig)) return { normal: 0, organic: 0 };
+    const { skipNormal = false } = options;
+    if (skipNormal && fertilizerConfig === 'smart') {
+        return { normal: 0, organic: await runRipeningFertilizer(automation, undefined, options.propagateErrors) };
+    }
     const reason = String(options.reason || '').trim().toLowerCase() === 'multi_season' ? 'multi_season' : 'normal';
     const reasonLabel = reason === 'multi_season' ? '多季补肥' : '常规施肥';
     const eventName = reason === 'multi_season' ? '多季节施肥' : '常规施肥';
@@ -1039,8 +1025,6 @@ async function runFertilizerByConfig(plantedLands: any[] = [], options: { skipNo
         });
         return { normal: 0, organic: 0 };
     }
-
-    const { skipNormal = false } = options;
 
     if (fertilizerConfig === 'none') {
         log('施肥', `${reasonLabel}：当前施肥策略为不施肥，跳过`, {
@@ -1186,28 +1170,12 @@ async function runFertilizerByConfig(plantedLands: any[] = [], options: { skipNo
         }
     }
     else if (fertilizerConfig === 'smart') {
-        let organicTargets: number[] = [];
-        const smartSeconds = toNum(automation.fertilizer_smart_seconds) || 300;
         try {
-            const latest = await getAllLands();
-            organicTargets = getFastMatureLands(latest && latest.lands, smartSeconds);
+            const snapshot = normalTargets.length === 0 && latestLands.length > 0 ? latestLands : undefined;
+            fertilizedOrganic = await runRipeningFertilizer(automation, snapshot, options.propagateErrors);
         } catch (e: any) {
-            logWarn('施肥', `获取全农场地块失败 ${e.message}`);
+            logWarn('施肥', `临熟催熟失败: ${e.message}`);
             if (options.propagateErrors) throw e;
-        }
-
-        if (organicTargets.length > 0) {
-            fertilizedOrganic = await fertilizeOrganicLoop(organicTargets, options.propagateErrors);
-            if (fertilizedOrganic > 0) {
-                log('施肥', `有机化肥循环施肥完成，共施${fertilizedOrganic} 次`, {
-                    module: 'farm',
-                    event: '施肥',
-                    result: 'ok',
-                    type: 'organic',
-                    count: fertilizedOrganic,
-                });
-                recordOperation('fertilize', fertilizedOrganic);
-            }
         }
     }
 

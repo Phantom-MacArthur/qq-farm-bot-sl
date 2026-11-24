@@ -3,13 +3,14 @@ const { Buffer } = require('node:buffer');
 const { performance } = require('node:perf_hooks');
 const { EventEmitter } = require('node:events');
 const WebSocket = require('ws');
+const { util: protobufUtil } = require('protobufjs');
 const { CONFIG } = require('../config/config');
 const { getClientVersion, getLoginDeviceInfo, isWechatPlatform } = require('./client-profile');
 const { createScheduler } = require('../services/scheduler');
 const { updateStatusFromLogin, updateStatusGold, updateStatusLevel } = require('../services/status');
 const { invalidateLandForecast } = require('../services/level-forecast');
 const { types } = require('./proto');
-const { toLong, toNum, syncServerTime, log, logWarn, sleep } = require('./utils');
+const { toLong, toNum, syncServerTime, getServerTimeSec, formatDateKeyInTimeZone, log, logWarn, sleep } = require('./utils');
 const cryptoWasm = require('./crypto-wasm');
 const { GatewayTokenProvider } = require('./gateway-token');
 const { MAX_HEARTBEAT_MISSES, shouldTerminateForHeartbeat } = require('./keepalive-policy');
@@ -40,6 +41,7 @@ const BUSINESS_QUEUE_WAIT_MS = 12000;
 
 // ============ 事件发射器 (用于推送通知) ============
 const networkEvents = new EventEmitter();
+let hosted: import('../session/hosted-network').HostedNetwork | undefined;
 
 // ============ 内部状态 ============
 type ConnectionPhase = 'connecting' | 'login' | 'online';
@@ -52,6 +54,7 @@ interface ConnectionContext {
     id: number;
     socket: WebSocket;
     phase: ConnectionPhase;
+    writeTail?: Promise<void>;
     intentionalClose: boolean;
     finalized: boolean;
     loginInitialized: boolean;
@@ -62,6 +65,9 @@ interface ConnectionContext {
 }
 
 interface SendMsgOptions {
+    prepareSend?: () => Promise<void>;
+    beforeSend?: () => Error | null;
+    onSent?: () => void;
     timeoutMs?: number;
     expectedErrorCodes?: readonly number[];
     /** 兼容旧调用：high→critical、low→background、normal 视为「未表态」交给环境班次。 */
@@ -85,6 +91,9 @@ interface PendingRequest {
 }
 
 interface QueuedRequest {
+    prepareSend?: () => Promise<void>;
+    beforeSend?: () => Error | null;
+    onSent?: () => void;
     context: ConnectionContext;
     serviceName: string;
     methodName: string;
@@ -201,6 +210,7 @@ function oldestPendingAgeMs(): number {
 
 /** 后台任务用来判断「现在该不该占用连接」的负载快照。 */
 function getGatewayLoad(): GatewayLoad {
+    if (hosted?.load) return hosted.load;
     return {
         pending: pendingCallbacks.size,
         queued: requestQueue.length,
@@ -274,7 +284,7 @@ function drainRequestQueue(): void {
                 drainRequestQueue();
             },
         } : undefined;
-        sendMsg(request.context, request.serviceName, request.methodName, request.bodyBytes, pending).then((sent) => {
+        sendMsg(request.context, request.serviceName, request.methodName, request.bodyBytes, pending, request).then((sent) => {
             if (sent) {
                 if (!request.expectReply) {
                     settleQueuedRequest(request, undefined, { body: Buffer.alloc(0), meta: {} });
@@ -355,6 +365,8 @@ const userState = {
     goldBean: 0,
     openId: '',
     avatarUrl: '',
+    globalSceneId: 1,
+    unlockedSceneIds: [] as number[],
 };
 
 function getUserState() { return userState; }
@@ -429,6 +441,37 @@ function requestAffectsOwnFarm(serviceName: string, methodName: string, bodyByte
     }
     return false;
 }
+
+const shareInfoState = new Map<string, { shareCount: string; claimed: boolean; dateKey: string }>();
+function shareDateKey(): string {
+    const nowMs = typeof getServerTimeSec === 'function' ? getServerTimeSec() * 1000 : Date.now();
+    return typeof formatDateKeyInTimeZone === 'function'
+        ? formatDateKeyInTimeZone(nowMs, 'Asia/Shanghai')
+        : new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(nowMs);
+}
+function applyShareInfos(infos: Record<string, any>): void {
+    const dateKey = shareDateKey();
+    for (const [key, info] of Object.entries(infos || {})) {
+        const id = /^\d+$/.test(key) ? key : protobufUtil.longFromHash(key, false).toString();
+        shareInfoState.set(id, { shareCount: String(info?.share_count ?? 0), claimed: Boolean(info?.is_claimed), dateKey });
+    }
+}
+function getDailyShareInfo(id: number): any {
+    const dateKey = shareDateKey();
+    const state = shareInfoState.get(String(id));
+    return state?.dateKey === dateKey ? { ...state } : { shareCount: '0', claimed: false, dateKey };
+}
+
+async function loginGameScene(globalSceneId: number): Promise<any> {
+    const body = types.PlayerSceneLoginRequest.encode({ global_scene_id: globalSceneId }).finish();
+    const response = await sendMsgAsync('gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', body);
+    const scene = types.PlayerSceneLoginReply.decode(response.body);
+    const data = globalSceneId === 2 ? scene.big_farm_scene_ext_data : scene.farm_scene_ext_data;
+    if (scene.global_scene_id !== globalSceneId || !data?.length) throw new Error('游戏场景登录回包不完整');
+    userState.globalSceneId = globalSceneId;
+    if (toNum(scene.server_time) > 0) syncServerTime(toNum(scene.server_time));
+    return scene;
+}
 function getWsErrorState() { return { ...wsErrorState }; }
 function setWsErrorState(code: number, message: string): void {
     wsErrorState = { code: Number(code) || 0, at: Date.now(), message: message || '' };
@@ -479,7 +522,7 @@ function isCurrentConnection(context: ConnectionContext): boolean {
     return currentConnection === context && ws === context.socket && !context.finalized;
 }
 
-async function sendMsg(context: ConnectionContext, serviceName: string, methodName: string, bodyBytes: Buffer, pending?: PendingRequest): Promise<boolean> {
+async function sendMsg(context: ConnectionContext, serviceName: string, methodName: string, bodyBytes: Buffer, pending?: PendingRequest, hooks?: Pick<SendMsgOptions, 'prepareSend' | 'beforeSend' | 'onSent'> & { settled?: boolean }): Promise<boolean> {
     if (!isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
         log('系统', '[WS] 连接未打开');
         return false;
@@ -488,25 +531,39 @@ async function sendMsg(context: ConnectionContext, serviceName: string, methodNa
     clientSeq += 1;
     // 加密前登记在途请求，确保排队器能准确计算并发槽位。
     if (pending) pendingCallbacks.set(seq, pending);
-    const encoded = await encodeMsg(serviceName, methodName, bodyBytes, seq);
-    if (pending && pendingCallbacks.get(seq) !== pending) return false;
-    if (!isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
-        if (pending) {
-            pendingCallbacks.delete(seq);
-            pending.callback(Object.assign(new Error(`连接未打开: ${methodName}`), { code: 'GAME_OFFLINE' }));
+    const write = async () => {
+        const encoded = await encodeMsg(serviceName, methodName, bodyBytes, seq);
+        if (hooks?.settled || (pending && pendingCallbacks.get(seq) !== pending)) return false;
+        if (hooks?.prepareSend) {
+            await hooks.prepareSend();
+            if (hooks?.settled || (pending && pendingCallbacks.get(seq) !== pending)) return false;
         }
-        return false;
-    }
-    try {
-        context.socket.send(encoded);
-    } catch (err: any) {
-        if (pending) {
-            pendingCallbacks.delete(seq);
-            pending.callback(err);
+        if (!isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
+            if (pending) {
+                pendingCallbacks.delete(seq);
+                pending.callback(Object.assign(new Error(`连接未打开: ${methodName}`), { code: 'GAME_OFFLINE' }));
+            }
+            return false;
         }
-        return false;
-    }
-    return true;
+        const blocked = hooks?.beforeSend?.();
+        if (blocked) throw blocked;
+        try {
+            context.socket.send(encoded);
+            hooks?.onSent?.();
+        } catch (err: any) {
+            if (pending) {
+                pendingCallbacks.delete(seq);
+                pending.callback(err);
+            }
+            return false;
+        }
+        return true;
+    };
+    // 宿主内的业务发送可能等待后端确认，按已经分配的序号写入同一条连接。
+    if (process.env.FARM_GATEWAY_WORKER !== '1') return write();
+    const result = (context.writeTail || Promise.resolve()).then(write);
+    context.writeTail = result.then(() => {}, () => {});
+    return result;
 }
 
 /** Promise 版发送 */
@@ -525,6 +582,17 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
         { priority: options.priority, requestClass: options.requestClass, criticalLane },
         getAmbientRequestClass(),
     );
+    if (hosted) {
+        return hosted.request(serviceName, methodName, bodyBytes, { timeoutMs, requestClass, criticalLane, expectReply, expectedErrorCodes: [...expectedErrorCodes] }, options)
+            .then(result => {
+                invalidateForecastForReply(serviceName, methodName);
+                return result;
+            }, error => {
+                if (error.name === 'GatewayError') Object.setPrototypeOf(error, GatewayError.prototype);
+                if (error.name === 'GatewayBusyError') Object.setPrototypeOf(error, GatewayBusyError.prototype);
+                throw error;
+            });
+    }
     return new Promise((resolve, reject) => {
         const context = currentConnection;
         if (!context || !isCurrentConnection(context) || context.socket.readyState !== WebSocket.OPEN) {
@@ -563,6 +631,9 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
             criticalLane,
             enqueuedAt: performance.now(),
             expectReply,
+            prepareSend: options.prepareSend,
+            beforeSend: options.beforeSend,
+            onSent: options.onSent,
         };
         requestQueue.push(request);
         networkScheduler.setTimeoutTask(request.timeoutKey, timeoutMs, () => {
@@ -599,10 +670,10 @@ function sendMsgAsync(serviceName: string, methodName: string, bodyBytes: Buffer
     });
 }
 
-async function sendMsgNoReply(serviceName: string, methodName: string, bodyBytes: Buffer): Promise<void> {
+async function sendMsgNoReply(serviceName: string, methodName: string, bodyBytes: Buffer, onSent?: () => void): Promise<void> {
     // 即使调用方不需要回包，也必须经过同一调度器，不能绕过心跳/ACE保护和并发上限。
     // 不写死班次，交给环境班次判定：后台任务发的通知不该被当成前台流量。
-    await sendMsgAsync(serviceName, methodName, bodyBytes, { expectReply: false });
+    await sendMsgAsync(serviceName, methodName, bodyBytes, { expectReply: false, onSent });
 }
 
 // ============ 消息处理 ============
@@ -624,6 +695,7 @@ function handleMessage(data: Buffer): void {
         // Notify
         if (msgType === 3) {
             handleNotify(msg);
+            networkEvents.emit('sessionNotify', buf);
             return;
         }
 
@@ -653,6 +725,11 @@ function handleMessage(data: Buffer): void {
     } catch (err: any) {
         logWarn('解码', err.message);
     }
+}
+
+function invalidateForecastForReply(service: string, method: string) {
+    if ((service === 'gamepb.plantpb.PlantService' && method !== 'AllLands')
+        || (service === 'gamepb.itempb.ItemService' && method === 'Use')) invalidateLandForecast();
 }
 
 function handleNotify(msg: any): void {
@@ -735,6 +812,19 @@ function handleNotify(msg: any): void {
             return;
         }
 
+        if (type === 'gamepb.shoppb.RotationShopNotify') {
+            const rotation = types.RanchRotationShopNotify.decode(eventBody).shops.find((shop: any) => toNum(shop.shop_id) === 7);
+            if (rotation) networkEvents.emit('ranchMarketVisitChanged', rotation);
+            return;
+        }
+
+        if (type === 'gamepb.homesteadpb.FacilitiesNotify') {
+            const notify = types.RanchFacilitiesNotify.decode(eventBody);
+            const hostGid = toNum(notify.host_gid);
+            if (hostGid > 0 && hostGid === userState.gid) networkEvents.emit('ranchFacilitiesChanged', notify.facilities);
+            return;
+        }
+
         // 物品变化通知
         if (type.includes('ItemNotify')) {
             try {
@@ -764,6 +854,9 @@ function handleNotify(msg: any): void {
                         } else if (delta !== 0) {
                             userState.coupon = Math.max(0, Number(userState.coupon || 0) + delta);
                         }
+                    } else if ((id === 7002 || id === 1008) && delta > 0) {
+                        // 集市货币到账后唤醒牧场例程，按最新余额和报价兑换。
+                        networkEvents.emit('ranchMarketStockReady', { id, count, delta });
                     } else if (id === 1005) {
                         if (count > 0) {
                             userState.goldBean = count;
@@ -772,6 +865,7 @@ function handleNotify(msg: any): void {
                         }
                     }
                 }
+                networkEvents.emit('itemChanges', items);
             } catch {}
             return;
         }
@@ -781,6 +875,7 @@ function handleNotify(msg: any): void {
             try {
                 const notify = types.BasicNotify.decode(eventBody);
                 if (notify.basic) {
+                    if (hasOwn(notify.basic, 'share_infos')) applyShareInfos(notify.basic.share_infos);
                     if (hasOwn(notify.basic, 'level')) {
                         const nextLevel = toNum(notify.basic.level);
                         if (Number.isFinite(nextLevel) && nextLevel > 0) userState.level = nextLevel;
@@ -826,10 +921,16 @@ function handleNotify(msg: any): void {
                 const notify = types.FriendAddedNotify.decode(eventBody);
                 const friends = notify.friends || [];
                 if (friends.length > 0) {
-                    const names = friends.map((f: any) => f.name || f.remark || `GID:${toNum(f.gid)}`).join(', ');
+                    const names = friends.map((f: any) => f.name || f.remark || '未命名好友').join(', ');
                     log('好友', `新好友: ${names}`);
                 }
             } catch {}
+            return;
+        }
+
+        if (type.includes('GlobalSceneUnlockNotify')) {
+            const notify = types.GlobalSceneUnlockNotify.decode(eventBody);
+            userState.unlockedSceneIds = [...new Set([...userState.unlockedSceneIds, ...notify.unlocked_scenes])];
             return;
         }
 
@@ -850,7 +951,7 @@ function handleNotify(msg: any): void {
             try {
                 const notify = types.TaskInfoNotify.decode(eventBody);
                 if (notify.task_info) {
-                    networkEvents.emit('taskInfoNotify', notify.task_info);
+                    networkEvents.emit('taskInfoNotify', notify.task_info, { globalSceneId: userState.globalSceneId });
                 }
             } catch {}
             return;
@@ -903,7 +1004,9 @@ function handleNotify(msg: any): void {
         // 图鉴奖励红点通知
         if (type.includes('IllustratedRewardRedDotNotifyV2')) {
             try {
-                networkEvents.emit('illustratedRewardRedDot');
+                const notify = types.IllustratedRewardRedDotNotifyV2.decode(eventBody);
+                networkEvents.emit('illustratedRewardRedDot', notify);
+                networkEvents.emit('ranchBookReward', 'normal', notify.ranch_reward_available);
             } catch {}
             return;
         }
@@ -1004,6 +1107,9 @@ async function sendLogin(context: ConnectionContext, onLoginSuccess?: () => void
         userState.exp = toNum(reply.basic.exp);
         userState.openId = String(reply.basic.open_id || '').trim();
         userState.avatarUrl = String(reply.basic.avatar_url || '').trim();
+        userState.unlockedSceneIds = modern ? (reply.unlocked_scene_ids || []).map(toNum) : [1];
+        shareInfoState.clear();
+        applyShareInfos(reply.basic.share_infos);
 
         updateStatusFromLogin({
             name: userState.name,
@@ -1052,13 +1158,8 @@ async function sendLogin(context: ConnectionContext, onLoginSuccess?: () => void
             await fetchUserSettings();
             if (!isCurrentConnection(context)) return;
             if (modern) {
-                const sceneBody = types.PlayerSceneLoginRequest.encode({ global_scene_id: 1 }).finish();
-                const sceneResponse = await sendMsgAsync('gamepb.globalscenepb.GlobalSceneService', 'PlayerSceneLogin', sceneBody);
+                await loginGameScene(1);
                 if (!isCurrentConnection(context)) return;
-                const scene = types.PlayerSceneLoginReply.decode(sceneResponse.body);
-                if (scene.global_scene_id !== 1 || !scene.farm_scene_ext_data?.length) {
-                    throw new Error('农场场景登录回包不完整');
-                }
             }
             if (onLoginSuccess) await onLoginSuccess();
         } catch (e: any) {
@@ -1106,6 +1207,7 @@ function startHeartbeat(context: ConnectionContext): void {
             );
             if (!isCurrentConnection(context)) return;
             heartbeat.replies += 1;
+            networkEvents.emit('sessionTelemetry');
             lastHeartbeatMono = performance.now();
             heartbeatMissCount = 0;
             try {
@@ -1148,6 +1250,7 @@ function startHeartbeat(context: ConnectionContext): void {
  * 时和业务回包一样会把 lastInboundMono 推到最新。
  */
 function startWebSocketPing(context: ConnectionContext): void {
+    if (typeof networkScheduler.setIntervalTask !== 'function') return;
     networkScheduler.clear('ws_ping_interval');
     // 记录本次连接是否见过至少一个 pong，用来区分「服务器不支持 ws ping」和「服务器静默」。
     let everSawPong = false;
@@ -1258,6 +1361,10 @@ function finalizeConnection(context: ConnectionContext, details: DisconnectDetai
 
 // ============ WebSocket 连接 ============
 function connect(code: string | null, onLoginSuccess?: () => void): void {
+    if (hosted) {
+        void hosted.connect(code, onLoginSuccess);
+        return;
+    }
     const authCode = String(code || '').trim();
     if (!authCode) throw new Error('连接缺少一次性 Code');
     if (currentConnection && !currentConnection.finalized) throw new Error('WebSocket 连接已存在');
@@ -1352,7 +1459,8 @@ function connect(code: string | null, onLoginSuccess?: () => void): void {
     });
 }
 
-function cleanup(reason = '网络清理'): void {
+function cleanup(reason = '网络清理'): void | Promise<void> {
+    if (hosted) return hosted.release('close');
     const context = currentConnection;
     if (!context) {
         clearNetworkRuntime(reason);
@@ -1363,15 +1471,51 @@ function cleanup(reason = '网络清理'): void {
     try { context.socket.close(); } catch {}
 }
 
-function getWs(): WebSocket | null { return ws; }
+function getWs() { return hosted ? hosted.socket : ws; }
+
+function getSessionSnapshot() {
+    return { userState: { ...userState }, shares: [...shareInfoState], serverTime: getServerTimeSec(), ...getSessionTelemetry() };
+}
+
+function getSessionTelemetry() {
+    return { load: getGatewayLoad(), heartbeatReplies: currentConnection?.heartbeat?.replies || 0 };
+}
+
+function configureHostedSession(config: any) {
+    if (!process.env.FARM_SESSION_SOCKET) return;
+    const { HostedNetwork } = require('../session/hosted-network');
+    networkEvents.on('ws_error', (data: any) => setWsErrorState(data.code, data.message));
+    hosted = new HostedNetwork(config, networkEvents, (snapshot: any) => {
+        clearWsErrorState();
+        Object.assign(userState, snapshot.userState);
+        shareInfoState.clear();
+        for (const [key, value] of snapshot.shares) shareInfoState.set(key, value);
+        syncServerTime(snapshot.serverTime * 1000);
+        updateStatusFromLogin(userState);
+    }, (body: Buffer) => handleNotify(types.GateMessage.decode(body)));
+}
+
+function invalidateGameScene(reason = '游戏场景状态未知，需要重新登录'): void {
+    if (hosted) {
+        hosted.invalidate(reason);
+        return;
+    }
+    const context = currentConnection;
+    if (!context) return;
+    finalizeConnection(context, { source: 'game_scene_unknown', reason });
+    (context.socket as any).terminate();
+}
 
 module.exports = {
-    connect, cleanup, getWs,
+    connect, cleanup, getWs, configureHostedSession,
+    getSessionSnapshot, getSessionTelemetry,
+    activateHostedSession: () => hosted?.activate(),
+    detachHostedSession: () => hosted ? hosted.release('detach') : cleanup(),
     buildLoginBody, buildHeartbeatBody,
     sendMsgAsync, sendMsgNoReply,
     getGatewayLoad, isGatewayIdleForBackground, waitForGatewayIdle,
     GatewayError, GatewayBusyError,
-    getUserState,
+    getUserState, loginGameScene, invalidateGameScene, applyShareInfos, getDailyShareInfo,
     getWsErrorState,
     networkEvents,
 };

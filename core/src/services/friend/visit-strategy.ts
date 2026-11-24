@@ -11,6 +11,7 @@ const {
     getFriendsListCacheTtlSec,
 } = require('../../models/store');
 const { getUserState } = require('../../utils/network');
+const { isGatewayYieldError } = require('../../utils/low-priority-gate');
 const { toNum, getServerTimeSec, getSystemClockMinutes, log, logWarn, sleep, randomDelay } = require('../../utils/utils');
 
 const {
@@ -206,16 +207,16 @@ function addFriendToBlacklist(friendGid: any, friendName: string, reason: string
     const sent: boolean = postToMaster({
         type: 'friend_blacklist_add',
         gid,
-        friendName: friendName || `GID:${gid}`,
+        friendName: friendName || '未命名好友',
         reason: String(reason || ''),
     });
     if (!sent) return false;
 
-    logWarn('好友', `检测到封禁好友，已自动加入黑名单: ${friendName || `GID:${gid}`}`, {
+    logWarn('好友', `检测到封禁好友，已自动加入黑名单: ${friendName || '未命名好友'}`, {
         module: 'friend',
         event: '加黑名单',
         result: 'auto_blocked',
-        friendName: friendName || `GID:${gid}`,
+        friendName: friendName || '未命名好友',
         friendGid: gid,
         reason: String(reason || ''),
     });
@@ -224,7 +225,7 @@ function addFriendToBlacklist(friendGid: any, friendName: string, reason: string
 
 export function handleFriendEnterError(friendGid: any, friendName: string, error: any): { handled: boolean; kind: string } {
     const gid: number = toNum(friendGid);
-    const displayName: string = String(friendName || '').trim() || `GID:${gid}`;
+    const displayName: string = String(friendName || '').trim() || '未命名好友';
     const reason: string = String((error && error.message) || error || '');
     if (isEnterFarmBannedError(error)) {
         addFriendToBlacklist(gid, displayName, reason);
@@ -388,7 +389,7 @@ export function cacheFriendsListFromReply(reply: any): any[] {
         .filter((f: any) => toNum(f.gid) !== state.gid && f.name !== '小小农夫' && f.remark !== '小小农夫')
         .map((f: any) => ({
             gid: toNum(f.gid),
-            name: f.remark || f.name || `GID:${toNum(f.gid)}`,
+            name: f.remark || f.name || '未命名好友',
             avatarUrl: String(f.avatar_url || '').trim(),
             level: toNum(f.level),
             gold: toNum(f.gold),
@@ -605,7 +606,7 @@ export async function doFriendOperation(friendGid: any, opType: string, propagat
     try {
         enterReply = await enterFriendFarm(gid);
     } catch (e: any) {
-        const handled: { handled: boolean; kind: string } = handleFriendEnterError(gid, `GID:${gid}`, e);
+        const handled: { handled: boolean; kind: string } = handleFriendEnterError(gid, '未命名好友', e);
         if (handled.handled && handled.kind === 'blacklist') {
             return { ok: true, opType, count: 0, message: '好友已自动加入黑名单' };
         }
@@ -777,6 +778,8 @@ export async function visitFriend(
     try {
         enterReply = await enterFriendFarm(gid);
     } catch (e: any) {
+        // 连接异常交给整轮巡查处理，不能当作单个好友失败后继续扫名单。
+        if (isGatewayYieldError(e) || String(e.message).includes('stage=pending')) throw e;
         const handled: { handled: boolean; kind: string } = handleFriendEnterError(gid, name, e);
         if (handled.handled && handled.kind === 'blacklist') {
             return { acted: false, entered: false };
@@ -917,7 +920,7 @@ export async function deleteFriend(friendGid: any): Promise<{ ok: true; gid: num
     const cached: any = Array.isArray(friendsListCache)
         ? friendsListCache.find((friend: any) => toNum(friend.gid) === gid)
         : null;
-    const name: string = String((cached && cached.name) || '').trim() || `GID:${gid}`;
+    const name: string = String((cached && cached.name) || '').trim() || '未命名好友';
 
     await delFriend(gid);
     removeFriendFromFriendsListCache(gid);

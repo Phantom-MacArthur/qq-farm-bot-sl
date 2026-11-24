@@ -120,7 +120,7 @@ const meta = computed(() => {
 
 .activity-header__back {
   flex: none;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .activity-header__title {
@@ -132,7 +132,7 @@ h1 {
   margin: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   line-height: 1.3;
   letter-spacing: 0;
@@ -147,7 +147,7 @@ h1 {
   margin: 3px 0 0;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.4;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -160,7 +160,7 @@ h1 {
 
 .activity-header__meta-icon {
   flex: none;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .activity-header__badge {
@@ -170,7 +170,7 @@ h1 {
   border-radius: 999px;
   color: #2f7a52;
   background: #e4f1e7;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 18px;
 }
@@ -191,7 +191,7 @@ h1 {
   border-radius: 999px;
   color: var(--ui-warning);
   background: var(--ui-warning-soft);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
 }
 

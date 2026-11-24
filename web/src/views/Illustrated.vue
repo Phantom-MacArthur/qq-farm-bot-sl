@@ -35,13 +35,13 @@ const currentTab = computed<BookTab>({
         <span class="inline-flex items-center gap-2"><span class="i-carbon-gem" />超变图鉴</span>
       </NTab>
       <NTab name="collection">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-trophy" />藏品</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-trophy" />藏品图鉴</span>
       </NTab>
       <NTab name="catalog">
         <span class="inline-flex items-center gap-2"><span class="i-carbon-catalog" />变异宝典</span>
       </NTab>
       <NTab name="items">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-tool-box" />道具</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-tool-box" />道具图鉴</span>
       </NTab>
     </PageTabs>
     <SeedsCatalog v-if="currentTab === 'seeds'" />

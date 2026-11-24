@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import { io } from 'socket.io-client'
 import { computed, ref } from 'vue'
 import api, { confirmAccountConnection, getApiErrorMessage } from '@/api'
+import { LOG_CACHE_LIMIT } from '@/constants/log-filters'
 import { useAccountStore } from '@/stores/account'
 
 // Define interfaces for better type checking
@@ -34,6 +35,7 @@ interface DailyGiftsResponse {
   timeZone?: string
   growth: DailyGift
   gifts: DailyGift[]
+  ranch?: { unlocked: boolean, gifts: Array<Partial<DailyGift> & { key: string }> }
 }
 
 export const useStatusStore = defineStore('status', () => {
@@ -48,6 +50,9 @@ export const useStatusStore = defineStore('status', () => {
   const loading = ref(false)
   const error = ref('')
   const realtimeConnected = ref(false)
+  const realtimeReconnecting = ref(false)
+  const realtimeReconnectCount = ref(0)
+  const serverWebBuildId = ref('')
   const realtimeLogsEnabled = ref(true)
   const currentRealtimeAccountId = ref('')
 
@@ -59,12 +64,16 @@ export const useStatusStore = defineStore('status', () => {
   })
 
   let socket: Socket | null = null
+  let hasRealtimeConnected = false
+  let reconnectDelayTimer: ReturnType<typeof setTimeout> | null = null
   let statusRequestSequence = 0
   let diamondRequestSequence = 0
 
   function normalizeStatusPayload(input: any) {
     return (input && typeof input === 'object') ? { ...input } : {}
   }
+
+  let logRequestSequence = 0
 
   function normalizeLogEntry(input: any) {
     const entry = (input && typeof input === 'object') ? { ...input } : {}
@@ -79,8 +88,8 @@ export const useStatusStore = defineStore('status', () => {
   function pushRealtimeLog(entry: any) {
     const next = normalizeLogEntry(entry)
     logs.value.push(next)
-    if (logs.value.length > 300)
-      logs.value = logs.value.slice(-300)
+    if (logs.value.length > LOG_CACHE_LIMIT)
+      logs.value = logs.value.slice(-LOG_CACHE_LIMIT)
   }
 
   function handleRealtimeStatus(payload: any) {
@@ -104,9 +113,27 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function handleRealtimeLogsSnapshot(payload: any) {
+    // 筛选启用时实时日志已暂停，全量快照会把筛选结果覆盖回全量日志，
+    // 导致列表在「筛选结果」和「全部日志」之间来回跳。
+    if (!realtimeLogsEnabled.value)
+      return
     const body = (payload && typeof payload === 'object') ? payload : {}
     const list = Array.isArray(body.logs) ? body.logs : []
-    logs.value = list.map((item: any) => normalizeLogEntry(item))
+    logs.value = list.slice(-LOG_CACHE_LIMIT).map(normalizeLogEntry)
+  }
+
+  function clearReconnectDelayTimer() {
+    if (reconnectDelayTimer) {
+      clearTimeout(reconnectDelayTimer)
+      reconnectDelayTimer = null
+    }
+  }
+
+  function handleReconnectAttempt() {
+    if (!hasRealtimeConnected)
+      return
+    clearReconnectDelayTimer()
+    realtimeReconnecting.value = true
   }
 
   function ensureRealtimeSocket() {
@@ -123,7 +150,13 @@ export const useStatusStore = defineStore('status', () => {
     })
 
     socket.on('connect', () => {
+      clearReconnectDelayTimer()
+      const wasConnected = hasRealtimeConnected
+      hasRealtimeConnected = true
+      if (wasConnected && !realtimeConnected.value)
+        realtimeReconnectCount.value++
       realtimeConnected.value = true
+      realtimeReconnecting.value = false
       if (currentRealtimeAccountId.value) {
         socket?.emit('subscribe', { accountId: currentRealtimeAccountId.value })
       }
@@ -132,18 +165,42 @@ export const useStatusStore = defineStore('status', () => {
       }
     })
 
-    socket.on('disconnect', () => {
+    socket.on('ready', (payload: any) => {
+      const id = String(payload?.webBuildId || '').trim()
+      if (id)
+        serverWebBuildId.value = id
+    })
+
+    socket.on('panel:version', (payload: any) => {
+      const id = String(payload?.webBuildId || '').trim()
+      if (id)
+        serverWebBuildId.value = id
+    })
+
+    socket.on('disconnect', (reason: any) => {
       realtimeConnected.value = false
+      if (hasRealtimeConnected && String(reason || '') !== 'io client disconnect' && !reconnectDelayTimer && !realtimeReconnecting.value) {
+        reconnectDelayTimer = setTimeout(() => {
+          reconnectDelayTimer = null
+          if (!realtimeConnected.value && hasRealtimeConnected)
+            realtimeReconnecting.value = true
+        }, 600)
+      }
     })
 
     socket.on('connect_error', (err) => {
       realtimeConnected.value = false
+      if (hasRealtimeConnected && String(err?.message || '') !== 'Unauthorized') {
+        clearReconnectDelayTimer()
+        realtimeReconnecting.value = true
+      }
       console.error('[realtime] 连接失败:', err.message)
     })
 
     socket.on('status:update', handleRealtimeStatus)
     socket.on('log:new', handleRealtimeLog)
     socket.on('logs:snapshot', handleRealtimeLogsSnapshot)
+    ;(socket.io as any)?.on?.('reconnect_attempt', handleReconnectAttempt)
     return socket
   }
 
@@ -152,6 +209,8 @@ export const useStatusStore = defineStore('status', () => {
     const accountChanged = nextAccountId !== currentRealtimeAccountId.value
     currentRealtimeAccountId.value = nextAccountId
     if (accountChanged) {
+      logRequestSequence++
+      logs.value = []
       statusRequestSequence++
       status.value = null
       loading.value = false
@@ -173,14 +232,20 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function disconnectRealtime() {
+    clearReconnectDelayTimer()
+    hasRealtimeConnected = false
+    realtimeReconnecting.value = false
     if (!socket)
       return
     socket.off('connect')
+    socket.off('ready')
+    socket.off('panel:version')
     socket.off('disconnect')
     socket.off('connect_error')
     socket.off('status:update', handleRealtimeStatus)
     socket.off('log:new', handleRealtimeLog)
     socket.off('logs:snapshot', handleRealtimeLogsSnapshot)
+    ;(socket.io as any)?.off?.('reconnect_attempt', handleReconnectAttempt)
     socket.disconnect()
     socket = null
     realtimeConnected.value = false
@@ -220,7 +285,9 @@ export const useStatusStore = defineStore('status', () => {
   async function fetchLogs(accountId: string, options: any = {}) {
     if (!accountId && options.accountId !== 'all')
       return
-    const params: any = { limit: 100, ...options }
+    const request = ++logRequestSequence
+    const selectedAccount = String(useAccountStore().currentAccountId || '')
+    const params: any = { limit: LOG_CACHE_LIMIT, ...options }
     const headers: any = {}
     if (accountId && accountId !== 'all') {
       headers['x-account-id'] = accountId
@@ -231,10 +298,8 @@ export const useStatusStore = defineStore('status', () => {
 
     try {
       const { data } = await api.get('/api/logs', { headers, params })
-      if (data.ok) {
-        logs.value = data.data
-        error.value = ''
-      }
+      if (request === logRequestSequence && selectedAccount === String(useAccountStore().currentAccountId || '') && data.ok && Array.isArray(data.data))
+        logs.value = data.data.slice(-LOG_CACHE_LIMIT).map(normalizeLogEntry)
     }
     catch (e: any) {
       console.error(e)
@@ -291,7 +356,10 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function setRealtimeLogsEnabled(enabled: boolean) {
-    realtimeLogsEnabled.value = !!enabled
+    if (realtimeLogsEnabled.value !== enabled) {
+      logRequestSequence++
+      realtimeLogsEnabled.value = enabled
+    }
   }
 
   return {
@@ -304,6 +372,9 @@ export const useStatusStore = defineStore('status', () => {
     loading,
     error,
     realtimeConnected,
+    realtimeReconnecting,
+    realtimeReconnectCount,
+    serverWebBuildId,
     currentAccountConnected,
     realtimeLogsEnabled,
     fetchStatus,

@@ -8,6 +8,7 @@ const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum, log, sleep, getSystemDateKey } = require('../utils/utils');
 const { describeRewardItems } = require('../utils/reward-items');
+const { recordFarmReward } = require('./farm-reward-history');
 const { getAutomation } = require('../models/store');
 
 const ORGANIC_FERTILIZER_MALL_GOODS_ID: number = 1002;
@@ -28,6 +29,7 @@ let freeGiftLastAt: number = 0;
 let freeGiftLastCheckAt: number = 0;
 // 免费礼包领取后商品不再处于免费可领，奖励清单只能在领取前记下。
 let freeGiftRewards: any[] = [];
+let freeGiftPreview: { date: string; rewards: any[] } | null = null;
 
 async function getMallListBySlotType(slotType: number = 1, subSlotType: number = 0): Promise<any> {
     const body: Uint8Array = types.GetMallListBySlotTypeRequest.encode(types.GetMallListBySlotTypeRequest.create({
@@ -313,6 +315,19 @@ function isDoneTodayByKey(key: string): boolean {
     return String(key || '') === getSystemDateKey();
 }
 
+function isDailyFreeGift(goods: any): boolean {
+    return goods?.is_free === true && !goods.ad_only && !goods.share?.share_only
+        && toNum(goods.price?.count) === 0 && Number(goods.goods_id || 0) > 0;
+}
+
+function getFreeGiftRewardPreview(goods: any[]) {
+    const dailyBenefit = goods.filter(item => String(item?.name || '').trim() === '每日福利'
+        && item.is_free === true && toNum(item.price?.count) === 0);
+    const dailyBenefitRewards = describeRewardItems(dailyBenefit.flatMap(item => item.reward_items || []));
+    if (dailyBenefitRewards.length) return dailyBenefitRewards;
+    return describeRewardItems(goods.filter(isDailyFreeGift).flatMap(item => item.reward_items || []));
+}
+
 async function buyFreeGifts(force: boolean = false): Promise<number> {
     const now: number = Date.now();
     if (!force && isDoneTodayByKey(freeGiftDoneDateKey)) return 0;
@@ -321,7 +336,8 @@ async function buyFreeGifts(force: boolean = false): Promise<number> {
 
     try {
         const goods: any[] = await getMallGoodsList(1);
-        const free: any[] = goods.filter((g: any) => !!g && g.is_free === true && g.is_available === true && !g.ad_only && !g.share?.share_only && toNum(g.price?.count) === 0 && Number(g.goods_id || 0) > 0);
+        freeGiftPreview = { date: getSystemDateKey(), rewards: getFreeGiftRewardPreview(goods) };
+        const free = goods.filter(g => isDailyFreeGift(g) && g.is_available === true);
         if (!free.length) {
             freeGiftDoneDateKey = getSystemDateKey();
             log('商城', '今日暂无可领取免费礼包', {
@@ -333,12 +349,14 @@ async function buyFreeGifts(force: boolean = false): Promise<number> {
         }
 
         let bought: number = 0;
-        const boughtGoods: any[] = [];
+        const receivedRewards: any[] = [];
         for (const g of free) {
             try {
-                await purchaseMallGoods(Number(g.goods_id || 0), 1);
+                const receipt = await purchaseMallGoods(Number(g.goods_id || 0), 1);
                 bought += 1;
-                boughtGoods.push(g);
+                const rewards = describeRewardItems(receipt.reward_items);
+                recordFarmReward('mall_free_gifts', rewards, g.name);
+                receivedRewards.push(...(rewards.length ? rewards : describeRewardItems(g.reward_items)));
             } catch {
                 // 单个失败跳过
             }
@@ -346,7 +364,7 @@ async function buyFreeGifts(force: boolean = false): Promise<number> {
         freeGiftDoneDateKey = getSystemDateKey();
         if (bought > 0) {
             freeGiftLastAt = Date.now();
-            freeGiftRewards = describeRewardItems(boughtGoods.flatMap((g: any) => (Array.isArray(g.reward_items) ? g.reward_items : [])));
+            freeGiftRewards = receivedRewards;
             log('商城', `自动购买免费礼包 x${bought}`, {
                 module: 'task',
                 event: FREE_GIFTS_DAILY_KEY,
@@ -609,6 +627,7 @@ module.exports = {
         doneToday: freeGiftDoneDateKey === getSystemDateKey(),
         lastCheckAt: freeGiftLastCheckAt,
         lastClaimAt: freeGiftLastAt,
-        rewards: freeGiftLastAt > 0 && getSystemDateKey(freeGiftLastAt) === getSystemDateKey() ? freeGiftRewards : [],
+        rewards: freeGiftRewards.length && freeGiftLastAt > 0 && getSystemDateKey(freeGiftLastAt) === getSystemDateKey()
+            ? freeGiftRewards : freeGiftPreview?.date === getSystemDateKey() ? freeGiftPreview.rewards : [],
     }),
 };

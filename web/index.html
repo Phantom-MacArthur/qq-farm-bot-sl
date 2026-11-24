@@ -11,6 +11,16 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <title>QQ农场智能助手</title>
+    <script>
+      (() => {
+        try {
+          const mode = localStorage.getItem('theme_mode') || 'system'
+          const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        } catch (_) { /* storage may be unavailable */ }
+      })()
+    </script>
 </head>
 <body>
 <div id="app"></div>

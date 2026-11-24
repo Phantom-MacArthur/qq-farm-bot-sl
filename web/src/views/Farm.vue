@@ -6,17 +6,17 @@ import FarmPanel from '@/components/FarmPanel.vue'
 import PageTabs from '@/components/PageTabs.vue'
 import TaskPanel from '@/components/TaskPanel.vue'
 
-type PersonalTab = 'farm' | 'bag' | 'task'
+type FarmTab = 'farm' | 'bag' | 'task'
 
-const currentTab = ref<PersonalTab>('farm')
+const currentTab = ref<FarmTab>('farm')
 
-const tabPanels: Record<PersonalTab, any> = {
+const tabPanels: Record<FarmTab, any> = {
   farm: FarmPanel,
   bag: BagPanel,
   task: TaskPanel,
 }
 
-const visitedTabs = ref<PersonalTab[]>(['farm'])
+const visitedTabs = ref<FarmTab[]>(['farm'])
 
 watch(currentTab, (tab) => {
   if (!visitedTabs.value.includes(tab))
@@ -28,13 +28,13 @@ watch(currentTab, (tab) => {
   <div class="page-stack flex flex-col">
     <PageTabs v-model:value="currentTab" animated>
       <NTab name="farm">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-grid" />农场</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-grid" />我的农场</span>
       </NTab>
       <NTab name="bag">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-box" />背包</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-box" />农场背包</span>
       </NTab>
       <NTab name="task">
-        <span class="inline-flex items-center gap-2"><span class="i-carbon-task" />任务</span>
+        <span class="inline-flex items-center gap-2"><span class="i-carbon-task" />农场奖励</span>
       </NTab>
     </PageTabs>
 
@@ -47,20 +47,4 @@ watch(currentTab, (tab) => {
 </template>
 
 <style scoped>
-/* 个人页的面板随页面整体滚动：Tab 吸顶，面板工具栏在桌面端吸在 Tab 下方（.panel-sticky），
-   手机端随内容滚走，列表获得接近整屏的阅读区域。 */
-:deep(.personal-panel) {
-  display: flex;
-  min-width: 0;
-  min-height: 0;
-  flex: 1 1 auto;
-  flex-direction: column;
-  gap: 16px;
-}
-
-:deep(.personal-panel__card) {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
 </style>
