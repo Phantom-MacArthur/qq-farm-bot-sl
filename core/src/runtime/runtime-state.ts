@@ -159,6 +159,12 @@ function createRuntimeState(options: RuntimeStateOptions) {
             sessionGoldGained: 0,
             sessionCouponGained: 0,
             sessionGoldBeanGained: 0,
+            todayAssetGains: {
+                gold: null, coupon: null, goldBean: null,
+                ranchCoupon: null, pinecone: null, grass: null, dung: null,
+                diamond: null, fertilizerNormal: null, fertilizerOrganic: null,
+                canNormal: null, canOrganic: null,
+            },
             lastExpGain: 0,
             lastGoldGain: 0,
             limits: {},

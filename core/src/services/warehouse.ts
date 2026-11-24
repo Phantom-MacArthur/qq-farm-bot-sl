@@ -651,7 +651,24 @@ async function getBagDetail(): Promise<any> {
         if (cb !== ca) return cb - ca;
         return Number(a.id || 0) - Number(b.id || 0);
     });
-    return { totalKinds: items.length, items, originalItems, systemItems };
+    const fertilizerBalances: Record<string, number> = {};
+    if (Array.isArray(bagReply?.item_bag?.items) || Array.isArray(bagReply?.items)) {
+        for (const [id, key] of [[1011, 'fertilizerNormal'], [1012, 'fertilizerOrganic']] as const) {
+            const entries = rawItems.filter((it: any) => toNum(it.id) === id);
+            if (entries.every((it: any) => it.count != null && Number.isSafeInteger(Number(it.count)) && Number(it.count) >= 0)) {
+                fertilizerBalances[key] = entries.reduce((sum: number, it: any) => sum + Number(it.count), 0);
+            }
+        }
+    }
+    for (const [id, key] of [[1011, 'fertilizerNormal'], [1012, 'fertilizerOrganic']] as const) {
+        const count = fertilizerBalances[key];
+        if (count !== undefined && !systemItems.some((item: any) => item.id === id)) {
+            systemItems.push({ id, count, name: getItemById(id)?.name || String(id),
+                interactionType: 'fertilizerbucket', hoursText: `${(count / 3600).toFixed(1)}??` });
+        }
+    }
+    const todayAssetGains = require('./stats').recordAssetBalances(fertilizerBalances);
+    return { totalKinds: items.length, items, originalItems, systemItems, todayAssetGains };
 }
 
 // ============ 出售逻辑 ============
@@ -673,6 +690,8 @@ async function sellAllFruits(): Promise<void> {
         const names: string[] = [];
         for (const item of items) {
             const id: number = toNum(item.id);
+            // 牧草也是农场果实，保留所有批次供牧草机使用。
+            if (id === 7001) continue;
             const count: number = toNum(item.count);
             const expireTime: number = getItemExpireTime(item);
             if (isFruitItemId(id) && count > 0

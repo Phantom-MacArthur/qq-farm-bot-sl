@@ -36,7 +36,7 @@ function selectTab(tab: MallTab) {
 </script>
 
 <template>
-  <div class="mall-page page-stack" :class="{ 'mall-page--fill': activeTab === 'mystery' }">
+  <div class="mall-page mall-typography page-stack" :class="{ 'mall-page--fill': activeTab === 'mystery' }">
     <PageTabs :value="activeTab" @update:value="selectTab">
       <NTab v-for="tab in tabs" :key="tab.key" :name="tab.key" :disabled="purchasing && activeTab !== tab.key">
         <span class="inline-flex items-center gap-2">

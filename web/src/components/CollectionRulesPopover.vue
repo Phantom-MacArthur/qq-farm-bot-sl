@@ -59,10 +59,10 @@ function close() {
   max-width: calc(100vw - 60px);
   flex-direction: column;
   gap: 10px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .collection-rules > strong {
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 .collection-rule {
   display: flex;

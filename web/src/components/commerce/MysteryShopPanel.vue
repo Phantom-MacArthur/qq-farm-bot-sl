@@ -131,8 +131,8 @@ onUnmounted(() => {
 
 <template>
   <div class="mystery-panel panel-fill">
-    <section class="mystery-card page-card-surface rounded-2xl panel-scroll-layout">
-      <div class="mystery-head panel-titlebar shrink-0">
+    <section class="mystery-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <div class="mystery-head panel-titlebar shrink-0 margin-shell"><span class="margin-content">
         <CommerceShopBar
           class="mystery-shopbar"
           :status="!isOffline && mystery ? shopStatus : undefined"
@@ -144,7 +144,7 @@ onUnmounted(() => {
           refresh-label="刷新神秘商人"
           @refresh="load"
         />
-      </div>
+      </span></div>
 
       <div class="mystery-body panel-scroll-body panel-scroll-body--bleed">
         <div v-if="!isOffline && ((error && mystery) || notice)" class="shop-message" :class="{ 'is-success': !!notice && !error }" role="status">
@@ -204,8 +204,8 @@ onUnmounted(() => {
             暂无购买记录，手动和自动购买都会记录在这里。
           </p>
           <ul v-else class="history-list panel-list has-divider" aria-label="购买历史">
-            <li v-for="record in mysteryHistory" :key="record.id" class="history-row">
-              <CommerceItemImage :src="record.itemImage" :alt="record.itemName" size="sm" />
+            <li v-for="record in mysteryHistory" :key="record.id" class="history-row margin-shell"><span class="margin-content">
+              <CommerceItemImage :src="record.itemImage" :alt="record.itemName" size="sm" fit-visible-pixels />
               <div class="history-row__main">
                 <div class="history-row__name" :title="`${record.itemName} #${record.itemId}`">
                   {{ record.itemName }} <b>×{{ record.itemCount.toLocaleString() }}</b>
@@ -222,16 +222,16 @@ onUnmounted(() => {
                   {{ recordDiscountLabel(record) }}
                 </div>
               </div>
-            </li>
+            </span></li>
           </ul>
         </template>
       </div>
-    </section>
+    </span></section>
 
     <Teleport to="body">
       <Transition name="merchant-dialog">
         <div v-if="!isOffline && purchaseDialogOpen && mystery?.npc" class="purchase-overlay" role="presentation" @click.self="!mysteryPurchasing && (purchaseDialogOpen = false)">
-          <section class="purchase-dialog" role="dialog" aria-modal="true" aria-labelledby="mystery-purchase-title">
+          <section class="purchase-dialog mall-typography" role="dialog" aria-modal="true" aria-labelledby="mystery-purchase-title">
             <button class="dialog-close" type="button" aria-label="关闭" :disabled="mysteryPurchasing" @click="purchaseDialogOpen = false">
               <div class="i-carbon-close" />
             </button>
@@ -278,6 +278,14 @@ onUnmounted(() => {
   gap: 14px;
 }
 
+.mystery-card:has(.history-list) {
+  --inset-bottom: 0px;
+}
+
+.mystery-card:has(.history-list:first-child) {
+  gap: 0;
+}
+
 .mystery-shopbar {
   flex: 1;
   min-width: 0;
@@ -296,12 +304,20 @@ onUnmounted(() => {
   margin-inline: var(--panel-pad, 16px);
 }
 
+.mystery-body:has(.history-list) {
+  gap: 0;
+}
+
+.mystery-body:has(.history-list) > :not(.history-list) + :not(.history-list) {
+  margin-block-start: 14px;
+}
+
 .shop-loading {
   display: grid;
   min-height: 240px;
   place-items: center;
   color: var(--ui-primary);
-  font-size: 28px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .shop-message {
@@ -309,7 +325,7 @@ onUnmounted(() => {
   border-radius: var(--ui-radius-control);
   color: var(--ui-danger);
   background: var(--ui-danger-soft);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .shop-message.is-success {
@@ -330,14 +346,14 @@ onUnmounted(() => {
 .merchant-status__icon {
   flex: none;
   color: var(--ui-violet);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 
 .merchant-status__text {
   min-width: 0;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-overflow: ellipsis;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -350,7 +366,7 @@ onUnmounted(() => {
   border-radius: 999px;
   color: #fff;
   background: var(--ui-danger-fill);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   line-height: 20px;
 }
@@ -372,13 +388,23 @@ onUnmounted(() => {
   height: 84px;
   border: 0;
   border-radius: 20px;
-  background: var(--ui-surface-soft);
+}
+
+.history-row :deep(.item-image) {
+  width: 44px;
+  height: 44px;
+  border: 0;
+}
+
+.history-row :deep(.item-image img) {
+  width: 100%;
+  height: 100%;
 }
 
 .merchant-offer__qty {
   flex: none;
   color: var(--ui-muted);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   font-variant-numeric: tabular-nums;
 }
@@ -397,7 +423,7 @@ onUnmounted(() => {
   gap: 8px;
   margin: 0;
   color: var(--ui-ink);
-  font-size: 17px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
 }
 
@@ -411,7 +437,7 @@ onUnmounted(() => {
 .merchant-offer__info p {
   margin: 0;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -419,7 +445,7 @@ onUnmounted(() => {
 .merchant-price del {
   margin-left: 6px;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .merchant-price {
@@ -428,7 +454,7 @@ onUnmounted(() => {
   gap: 4px;
   margin-top: 4px;
   color: var(--ui-warning);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-variant-numeric: tabular-nums;
 }
 
@@ -450,7 +476,7 @@ onUnmounted(() => {
   margin: 0;
   padding: 10px 18px 14px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
@@ -476,10 +502,8 @@ onUnmounted(() => {
 
 /* 购买历史铺满正文宽度，分割线走全局 .has-divider 模板，超出高度在列表内部滚动。 */
 .history-list {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-height: 0;
-  padding: 0;
-  list-style: none;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -489,9 +513,9 @@ onUnmounted(() => {
   flex: 1 1 auto;
   min-height: 0;
   place-items: center;
-  padding: 28px 18px;
+  margin-block: 12px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-align: center;
 }
 
@@ -499,15 +523,7 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 18px 10px 12px;
-}
-
-/* 历史里的物品图不需要方块底板，去掉边框与底色只留图形。 */
-.history-row :deep(.item-image) {
-  width: 32px;
-  height: 32px;
-  border: 0;
-  background: transparent;
+  --inset-right: 18px;
 }
 
 .history-row__main {
@@ -518,7 +534,7 @@ onUnmounted(() => {
 .history-row__name {
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -533,7 +549,7 @@ onUnmounted(() => {
 .history-row__meta {
   margin-top: 2px;
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -544,7 +560,7 @@ onUnmounted(() => {
 
 .history-row__price {
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -553,7 +569,7 @@ onUnmounted(() => {
 .history-row__discount {
   margin-top: 2px;
   color: var(--ui-warning);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .purchase-overlay {
@@ -593,12 +609,12 @@ onUnmounted(() => {
 }
 .dialog-kicker {
   color: var(--ui-violet);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .purchase-dialog h2 {
   margin: 4px 42px 18px 0;
-  font-size: 21px;
+  font-size: var(--ui-font-size-large-15);
 }
 .dialog-goods {
   display: flex;
@@ -620,14 +636,14 @@ onUnmounted(() => {
 }
 .dialog-goods strong {
   overflow: hidden;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .dialog-goods span {
   margin-top: 3px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .dialog-summary {
   margin: 14px 0 18px;
@@ -641,7 +657,7 @@ onUnmounted(() => {
 }
 .dialog-summary dt {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .dialog-summary dd {
   margin: 0;
@@ -654,7 +670,7 @@ onUnmounted(() => {
   gap: 9px;
 }
 .dialog-actions button {
-  height: 42px;
+  height: var(--ui-content-item-control-height-30);
   border: 1px solid var(--ui-border-strong);
   border-radius: 10px;
   color: var(--ui-ink);

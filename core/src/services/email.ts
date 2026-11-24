@@ -275,6 +275,8 @@ async function checkAndClaimEmails(force: boolean = false): Promise<{ claimed: n
             if (batchClaimed.has(`${boxType}:${String(m.id || '')}`)) continue;
             try {
                 const rep: any = await claimEmail(boxType, String(m.id || ''));
+                const { describeRewardItems } = require('../utils/reward-items');
+                require('./farm-reward-history').recordFarmReward(DAILY_KEY, describeRewardItems(rep.items), '邮箱奖励');
                 if (Array.isArray(rep.items) && rep.items.length > 0) {
                     rewards.push(...rep.items);
                 }

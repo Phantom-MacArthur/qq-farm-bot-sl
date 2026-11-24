@@ -40,7 +40,7 @@ function handleShowChange(show: boolean) {
       :aria-label="closeLabel"
       @close="emit('close')"
     >
-      <div class="activity-rules-paper">
+      <div class="activity-rules-paper dialog-scroll">
         <slot name="guide" />
         <slot>
           <div v-if="rules?.paragraphs.length" class="activity-rules-copy">
@@ -69,7 +69,7 @@ function handleShowChange(show: boolean) {
 
 .activity-rules-copy {
   color: var(--ui-ink, var(--n-text-color));
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   line-height: 1.7;
 }
 

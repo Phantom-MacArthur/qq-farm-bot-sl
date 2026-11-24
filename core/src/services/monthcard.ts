@@ -7,6 +7,7 @@ const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, toNum, getSystemDateKey } = require('../utils/utils');
 const { describeRewardItems } = require('../utils/reward-items');
+const { recordFarmReward } = require('./farm-reward-history');
 
 const DAILY_KEY: string = 'month_card_gift';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
@@ -77,7 +78,7 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
         lastHasCard = infos.length === 0 ? false : (claimable.length > 0 || isClaimedToday() ? true : null);
         lastHasClaimable = claimable.length > 0;
         if (claimable.length > 0) lastRewards = describeRewardItems(claimable.map((x: any) => x.reward));
-        else if (!isClaimedToday()) lastRewards = [];
+        else if (!isClaimedToday()) lastRewards = describeRewardItems(infos.filter(info => Number(info?.goods_id) > 0).map(info => info.reward));
         if (!infos.length) {
             markDoneToday();
             lastResult = 'none';
@@ -104,6 +105,7 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
             try {
                 const ret: any = await claimMonthCardReward(Number(info.goods_id || 0));
                 const items: any[] = Array.isArray(ret && ret.items) ? ret.items : [];
+                recordFarmReward(DAILY_KEY, describeRewardItems(items), '月卡礼包');
                 claimedItems.push(...items);
                 const reward: string = getRewardSummary(items);
                 log('月卡', reward ? `领取成功 → ${reward}` : '领取成功', {

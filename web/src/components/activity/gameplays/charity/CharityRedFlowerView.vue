@@ -116,7 +116,7 @@ watch(() => props.activity?.loveBalance, () => confirmingDonate.value = false)
           </div>
           <strong>{{ globalPercent.toFixed(2) }}%</strong>
         </header>
-        <div class="global-track" role="progressbar" :aria-valuenow="globalPercent" aria-valuemin="0" aria-valuemax="100">
+        <div class="global-track ui-progress-track" role="progressbar" :aria-valuenow="globalPercent" aria-valuemin="0" aria-valuemax="100">
           <span :style="{ width: `${globalPercent}%` }" />
         </div>
         <div class="global-detail">
@@ -334,7 +334,7 @@ watch(() => props.activity?.loveBalance, () => confirmingDonate.value = false)
 
 .overview-mark {
   color: #d94c58;
-  font-size: 34px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .overview-title div,
@@ -347,12 +347,12 @@ watch(() => props.activity?.loveBalance, () => confirmingDonate.value = false)
 
 small {
   color: #718078;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 h2 {
   margin: 2px 0 0;
-  font-size: 17px;
+  font-size: var(--ui-font-size-large-15);
   letter-spacing: 0;
 }
 
@@ -379,13 +379,13 @@ h2 {
 
 .overview-metrics span {
   color: #718078;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .overview-metrics strong {
   margin-top: 4px;
   overflow-wrap: anywhere;
-  font-size: 19px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .eligible {
@@ -406,7 +406,7 @@ h2 {
 
 .global-band header > strong {
   color: #245f88;
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .global-track {
@@ -427,14 +427,14 @@ h2 {
 
 .global-detail > span {
   color: #53635b;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .inline-reward {
   min-width: 0;
   gap: 7px;
   color: #53635b;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .inline-reward img,
@@ -459,7 +459,7 @@ h2 {
 }
 
 .command-item button {
-  min-height: 36px;
+  min-height: var(--ui-content-item-control-height-30);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -482,7 +482,7 @@ button:disabled {
 .settlement-status {
   flex: none;
   color: #53635b;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 
@@ -509,7 +509,7 @@ button:disabled {
   flex: none;
   margin-top: 3px;
   color: #247455;
-  font-size: 24px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .donate-command .command-icon {
@@ -532,7 +532,7 @@ button:disabled {
 
 .command-copy > span {
   color: #718078;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .command-item > button,
@@ -634,7 +634,7 @@ button:disabled {
   justify-content: center;
   gap: 5px;
   margin: 6px 0;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .milestone small {
@@ -658,7 +658,7 @@ button:disabled {
   border-radius: 5px;
   color: #177a51;
   background: #effaf4;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .milestone-claim:disabled {
@@ -682,7 +682,7 @@ button:disabled {
 
 .settlement-band > div:first-child > span {
   color: #7161a8;
-  font-size: 25px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .settlement-band > div:first-child div {
@@ -713,7 +713,7 @@ button:disabled {
 .rules-section p {
   margin: 10px 0 0;
   color: #53635b;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.7;
   white-space: pre-line;
 }
@@ -728,6 +728,6 @@ button:disabled {
 }
 
 .empty-state span {
-  font-size: 34px;
+  font-size: var(--ui-font-size-large-15);
 }
 </style>

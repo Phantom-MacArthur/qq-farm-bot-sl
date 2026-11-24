@@ -144,3 +144,28 @@ test('session efficiency starts at login and resets its numerator and denominato
     assert.equal(next.sessionElapsedSeconds, 0);
     assert.equal(next.sessionExpGained, 0);
 });
+
+
+test('overview counts occupied land footprints independently of forecast eligibility and max level', () => {
+    const box = { exports: {} };
+    const filename = path.resolve(__dirname, '../dist/services/level-forecast.js');
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), { module: box, exports: box.exports,
+        require: name => name.includes('gameConfig') ? { getPlantById: plant } : { getServerTimeSec: () => now } });
+    const api = box.exports;
+    const user = { gid: 1 };
+    const stats = { connection: { connected: true } };
+    const query = (account = user) => api.getLevelForecast(account, null, stats, {}, false);
+    assert.equal(query().unlockedLandCount, null);
+    api.rememberLandForecast([
+        land(1, now, { slave_land_ids: [2, 3, 4], buff: null }),
+        ...[2, 3, 4].map(id => ({ id, unlocked: true, master_land_id: 1 })),
+        { id: 5, unlocked: true },
+        land(6, now, { plant: { phases: [{ phase: 7 }] } }),
+        land(7, now, { unlocked: false }),
+    ], user, api.getLandForecastRevision());
+    assert.equal(query().plantedLandCount, 4);
+    assert.equal(query().unlockedLandCount, 6);
+    assert.equal(query({ gid: 2 }).plantedLandCount, null);
+    stats.connection.connected = false;
+    assert.equal(query().unlockedLandCount, null);
+});

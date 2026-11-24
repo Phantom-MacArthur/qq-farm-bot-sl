@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
+import RewardHistory from '@/components/RewardHistory.vue'
 import DailyOverview from '@/components/DailyOverview.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
 import OfflineState from '@/components/ui/OfflineState.vue'
@@ -11,12 +12,31 @@ import { useStatusStore } from '@/stores/status'
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
-const { dailyGifts, dailyGiftsLoading, dailyGiftsError, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
+const { dailyGifts, dailyGiftsLoading, dailyGiftsError, status, loading: statusLoading, realtimeConnected } = storeToRefs(statusStore)
 const { currentAccountId, currentAccount } = storeToRefs(accountStore)
 
 const presence = useAccountPresence()
 const isOffline = computed(() => presence.value === 'offline')
 const isConnected = computed(() => presence.value === 'online')
+const displayedGifts = computed(() => {
+  const overview = dailyGifts.value
+  const snapshot = status.value?.farmGiftRewards
+  if (!overview || !snapshot || snapshot.date !== overview.date
+    || String(status.value.accountId || '') !== String(currentAccountId.value || ''))
+    return overview
+
+  return {
+    ...overview,
+    gifts: overview.gifts.map((gift) => {
+      if (gift.key !== 'mall_free_gifts' && gift.key !== 'daily_share')
+        return gift
+      const receipt = snapshot[gift.key]
+      return receipt?.doneToday && receipt.lastAt > 0 && receipt.rewards?.length && receipt.lastAt >= (gift.lastAt || 0)
+        ? { ...gift, ...receipt }
+        : gift
+    }),
+  }
+})
 
 async function refresh() {
   if (isConnected.value)
@@ -56,11 +76,11 @@ watch([currentAccountId, presence], ([id, next], [prevId]) => {
 </script>
 
 <template>
-  <div class="personal-panel">
-    <section class="personal-panel__card task-panel-card page-card-surface rounded-2xl panel-scroll-layout">
-      <div class="task-toolbar panel-titlebar shrink-0">
+    <section class="min-w-0 flex flex-col task-panel-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <div class="task-toolbar panel-titlebar shrink-0 margin-shell"><span class="margin-content">
         <!-- 按钮组走全局 .page-toolbar__actions 推到最右，与宠物页一致 -->
         <div class="page-toolbar__actions">
+          <RewardHistory />
           <RefreshButton
             title="刷新任务"
             :loading="manualRefreshing"
@@ -68,7 +88,7 @@ watch([currentAccountId, presence], ([id, next], [prevId]) => {
             @click="refreshTasksOnDemand"
           />
         </div>
-      </div>
+      </span></div>
       <div class="panel-scroll-body panel-scroll-body--bleed">
         <EmptyState v-if="!currentAccountId" bare title="请先选择账号" icon="i-carbon-user-avatar" />
         <OfflineState v-else-if="isOffline" />
@@ -83,17 +103,17 @@ watch([currentAccountId, presence], ([id, next], [prevId]) => {
             </button>
           </div>
           <!-- 成长任务与每日礼包合并为同一列表 -->
-          <DailyOverview :daily-gifts="dailyGifts" :platform="currentAccount?.platform" />
+          <DailyOverview :daily-gifts="displayedGifts" :platform="currentAccount?.platform" plain-rewards />
         </template>
       </div>
-    </section>
-  </div>
+    </span></section>
+
 </template>
 
 <style scoped>
 .task-panel-card {
   --panel-pad: 16px;
-  padding: var(--panel-pad);
+  --inset-top: var(--panel-pad); --inset-right: var(--panel-pad); --inset-bottom: 0px; --inset-left: var(--panel-pad);
 }
 
 .task-error {

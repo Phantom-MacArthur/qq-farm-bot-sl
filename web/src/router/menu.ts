@@ -6,23 +6,43 @@ export interface MenuItem {
   component: () => Promise<any>
   meta?: {
     fullBleed?: boolean
+    gameSpace?: 'ranch'
+    ranchSection?: 'ranch' | 'illustrated' | 'mall' | 'friends' | 'activity'
   }
 }
 
+const overviewMenuItem: MenuItem = {
+  path: '',
+  name: 'dashboard',
+  label: '概览',
+  icon: 'i-carbon-dashboard',
+  component: () => import('@/views/Dashboard.vue'),
+}
+
+const accountSettingsMenuItem: MenuItem = {
+  path: 'settings',
+  name: 'Settings',
+  label: '账号设置',
+  icon: 'i-carbon-settings',
+  component: () => import('@/views/Settings.vue'),
+}
+
+const systemSettingsMenuItem: MenuItem = {
+  path: 'system-settings',
+  name: 'SystemSettings',
+  label: '系统设置',
+  icon: 'i-carbon-settings-services',
+  component: () => import('@/views/Settings.vue'),
+}
+
 export const menuRoutes: MenuItem[] = [
+  overviewMenuItem,
   {
-    path: '',
-    name: 'dashboard',
-    label: '概览',
-    icon: 'i-carbon-dashboard',
-    component: () => import('@/views/Dashboard.vue'),
-  },
-  {
-    path: 'personal',
-    name: 'personal',
-    label: '个人',
-    icon: 'i-carbon-user',
-    component: () => import('@/views/Personal.vue'),
+    path: 'farm',
+    name: 'farm',
+    label: '农场',
+    icon: 'i-carbon-sprout',
+    component: () => import('@/views/Farm.vue'),
   },
   {
     path: 'pets',
@@ -67,18 +87,19 @@ export const menuRoutes: MenuItem[] = [
     icon: 'i-carbon-shopping-cart',
     component: () => import('@/views/GameMall.vue'),
   },
-  {
-    path: 'settings',
-    name: 'Settings',
-    label: '账号设置',
-    icon: 'i-carbon-settings',
-    component: () => import('@/views/Settings.vue'),
-  },
-  {
-    path: 'system-settings',
-    name: 'SystemSettings',
-    label: '系统设置',
-    icon: 'i-carbon-settings-services',
-    component: () => import('@/views/Settings.vue'),
-  },
+  accountSettingsMenuItem,
+  systemSettingsMenuItem,
 ]
+
+export const ranchMenuRoutes: MenuItem[] = [
+  { path: 'ranch', name: 'ranch', label: '牧场', icon: 'i-carbon-pet-image-o', component: () => import('@/views/Ranch.vue'), meta: { gameSpace: 'ranch', ranchSection: 'ranch' } },
+  { path: 'ranch/illustrated', name: 'ranch-illustrated', label: '图鉴', icon: 'i-carbon-book', component: () => import('@/views/Ranch.vue'), meta: { gameSpace: 'ranch', ranchSection: 'illustrated' } },
+  { path: 'ranch/activity', name: 'ranch-activity-center', label: '活动', icon: 'i-carbon-gift', component: () => import('@/views/Ranch.vue'), meta: { gameSpace: 'ranch', ranchSection: 'activity' } },
+  { path: 'ranch/friends', name: 'ranch-friends', label: '好友', icon: 'i-carbon-user-multiple', component: () => import('@/views/Ranch.vue'), meta: { gameSpace: 'ranch', ranchSection: 'friends' } },
+  { path: 'ranch/game-mall', name: 'ranch-game-mall', label: '游戏商城', icon: 'i-carbon-shopping-cart', component: () => import('@/views/Ranch.vue'), meta: { gameSpace: 'ranch', ranchSection: 'mall' } },
+]
+
+export const allMenuRoutes = [...menuRoutes, ...ranchMenuRoutes]
+export function getSpaceMenu(inRanch: boolean) {
+  return inRanch ? [overviewMenuItem, ...ranchMenuRoutes, accountSettingsMenuItem, systemSettingsMenuItem] : menuRoutes
+}

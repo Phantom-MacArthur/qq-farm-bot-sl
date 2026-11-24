@@ -12,6 +12,7 @@ import ConfirmModal from '@/components/ConfirmModal.vue'
 import PageTabs from '@/components/PageTabs.vue'
 import PlantingStrategyPanel from '@/components/PlantingStrategyPanel.vue'
 import AccountFeatureSettings from '@/components/settings/AccountFeatureSettings.vue'
+import AutomationSettingsForm from '@/components/settings/AutomationSettingsForm.vue'
 import AutoCodeRefreshCard from '@/components/settings/AutoCodeRefreshCard.vue'
 import BagSeedPriorityItem from '@/components/settings/BagSeedPriorityItem.vue'
 import OfflineReminderCard from '@/components/settings/OfflineReminderCard.vue'
@@ -52,8 +53,8 @@ const accountStore = useAccountStore()
 const settingStore = useSettingStore()
 const statusStore = useStatusStore()
 
-type SettingsTab = 'account' | 'account-config' | 'notification'
-const settingsTabKeys: SettingsTab[] = ['account', 'account-config', 'notification']
+type SettingsTab = 'account' | 'account-config' | 'ranch-config' | 'notification'
+const settingsTabKeys: SettingsTab[] = ['account', 'account-config', 'ranch-config', 'notification']
 /** 旧地址（?tab=strategy / automation）统一落到合并后的常规设置页，避免书签失效。 */
 const LEGACY_SETTINGS_TABS: Record<string, SettingsTab> = {
   strategy: 'account-config',
@@ -101,8 +102,12 @@ watch(activeTab, (newTab) => {
   }
 })
 
-watch(() => route.name, () => {
+watch(() => route.name, async () => {
   activeTab.value = getInitialSettingsTab()
+  if (isSystemSettingsPage.value)
+    await Promise.all([loadSystemConfig(), loadCaptureConfigSettings(), fetchAutoCodeRefresh()])
+  else if (currentAccountId.value && loadedAccountId.value !== currentAccountId.value)
+    await loadStrategyData(currentAccountId.value)
 })
 
 watch(() => route.query.tab, (value) => {
@@ -115,7 +120,8 @@ watch(() => route.query.tab, (value) => {
 
 const tabs = [
   { key: 'account', label: '账号管理', icon: 'i-carbon-user-profile' },
-  { key: 'account-config', label: '常规设置', icon: 'i-carbon-settings-adjust' },
+  { key: 'account-config', label: '农场设置', icon: 'i-carbon-settings-adjust' },
+  { key: 'ranch-config', label: '牧场设置', icon: 'i-carbon-settings' },
   { key: 'notification', label: '下线通知', icon: 'i-carbon-notification' },
 ] as const
 
@@ -1033,6 +1039,69 @@ const localAutomationSettings = ref({
   autoAcceptRequireOwnLevel: false,
 })
 
+const currentAccountConnected = computed(() => !!currentAccountId.value && isAccountConnected(currentAccountId.value))
+const ranchModel = ref<any>({ automation: {} })
+const ranchSaving = ref(false)
+const ranchAnimalOptions = ref<Array<{ value: number, label: string, kind: string }>>([])
+const ranchAnimalOptionsLoading = ref(false)
+const ranchAnimalOptionsError = ref('')
+watch(settings, value => {
+  ranchModel.value = value ? JSON.parse(JSON.stringify(value)) : { automation: {} }
+}, { immediate: true })
+async function loadRanchAnimalOptions(accountId = currentAccountId.value) {
+  if (!accountId)
+    return
+  ranchAnimalOptionsLoading.value = true
+  ranchAnimalOptions.value = []
+  ranchAnimalOptionsError.value = ''
+  try {
+    const { data } = await api.get('/api/ranch/automation-options', { skipErrorToast: true } as any)
+    if (accountId === currentAccountId.value) {
+      if (data?.ok && Array.isArray(data.data))
+        ranchAnimalOptions.value = data.data
+      else
+        ranchAnimalOptionsError.value = getApiErrorMessage(data, '牧场动物选项读取失败')
+    }
+  }
+  catch (error) {
+    if (accountId === currentAccountId.value)
+      ranchAnimalOptionsError.value = getApiErrorMessage(error, '牧场动物选项读取失败')
+  }
+  finally {
+    if (accountId === currentAccountId.value)
+      ranchAnimalOptionsLoading.value = false
+  }
+}
+watch(currentAccountId, (accountId) => {
+  ranchModel.value = { automation: {} }
+  ranchAnimalOptions.value = []
+  void loadRanchAnimalOptions(accountId)
+}, { immediate: true })
+async function saveRanchSettings() {
+  const accountId = currentAccountId.value
+  if (!accountId || !settings.value)
+    return
+  ranchSaving.value = true
+  try {
+    const auto = ranchModel.value.automation || {}
+    if ((auto.ranch_strategy === 'preferred' || auto.ranch_strategy === 'bag_priority' && auto.ranch_bag_fallback === 'preferred') && !ranchAnimalOptions.value.length) {
+      showAlert('请先加载牧场动物选项', 'danger')
+      return
+    }
+    const ranch = Object.fromEntries(Object.entries(auto).filter(([key]) => key.startsWith('ranch_')))
+    const result = await settingStore.saveSettings(accountId, { automation: { ...settings.value.automation, ...ranch } })
+    if (!result.ok)
+      showAlert(result.error || '牧场设置保存失败', 'danger')
+    if (result.ok && accountId === currentAccountId.value) {
+      ranchModel.value = JSON.parse(JSON.stringify(settings.value))
+      showAlert('牧场设置已保存')
+    }
+  }
+  finally {
+    ranchSaving.value = false
+  }
+}
+
 const fertilizerOptions = [
   { label: '普通 + 有机', value: 'both' },
   { label: '普通 + 快成熟有机', value: 'smart' },
@@ -1762,7 +1831,7 @@ async function confirmDefaultPlanOperation() {
           </span>
         </NTab>
       </PageTabs>
-      <PageTabs v-else :value="activeSystemTab" @update:value="setActiveSystemTab">
+      <PageTabs v-else-if="isSystemSettingsPage" :value="activeSystemTab" @update:value="setActiveSystemTab">
         <NTab v-for="tab in systemTabs" :key="tab.key" :name="tab.key">
           <span class="inline-flex items-center gap-2">
             <span :class="tab.icon" />
@@ -1773,8 +1842,8 @@ async function confirmDefaultPlanOperation() {
 
       <div class="settings-body panel-fill">
         <!-- 账号管理 -->
-        <div v-if="!isSystemSettingsPage && activeTab === 'account'" class="account-panel page-card-surface rounded-2xl panel-scroll-layout">
-          <div class="account-toolbar panel-titlebar">
+        <div v-if="!isSystemSettingsPage && activeTab === 'account'" class="account-panel page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+          <div class="account-toolbar panel-titlebar margin-shell"><span class="margin-content">
             <div class="account-actions">
               <template v-if="!selectionMode">
                 <BaseButton
@@ -1853,7 +1922,7 @@ async function confirmDefaultPlanOperation() {
                 <span class="panel-multiselect-toggle__label">{{ selectionMode ? '取消' : '多选' }}</span>
               </BaseButton>
             </div>
-          </div>
+          </span></div>
 
           <div class="account-body panel-scroll-body">
             <div v-if="accountsLoading && accounts.length === 0" class="py-8 text-center text-gray-500">
@@ -1889,10 +1958,10 @@ async function confirmDefaultPlanOperation() {
               <div
                 v-for="acc in accounts"
                 :key="acc.id"
-                class="relative cursor-pointer border cartoon-card rounded-2xl bg-white p-3 shadow-md transition-all duration-200 dark:bg-gray-800"
+                class="selection-card relative cursor-pointer border cartoon-card rounded-2xl bg-white p-3 shadow-md transition-all duration-200 dark:bg-gray-800"
                 :class="[
-                  selectionMode && isAccountSelected(acc) ? 'account-card--selected' : '',
-                  !selectionMode && String(currentAccountId) === String(acc.id) ? 'account-card--current' : '',
+                  selectionMode && isAccountSelected(acc) ? 'selection-card--selected' : '',
+                  !selectionMode && String(currentAccountId) === String(acc.id) ? 'selection-card--selected' : '',
                 ]"
                 :role="selectionMode ? 'checkbox' : undefined"
                 :aria-checked="selectionMode ? isAccountSelected(acc) : undefined"
@@ -1912,7 +1981,7 @@ async function confirmDefaultPlanOperation() {
                    横跨组件完整宽度，不单独定义局部样式 -->
                 <div class="has-divider">
                   <div class="min-w-0 flex items-center gap-3 pr-7">
-                    <div class="h-11 w-11 flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-gray-100 dark:bg-gray-700">
+                    <div class="h-11 w-11 flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-100 dark:bg-gray-700">
                       <img
                         v-if="canShowAccountAvatar(acc)"
                         :src="getAccountAvatar(acc)"
@@ -2013,7 +2082,7 @@ async function confirmDefaultPlanOperation() {
               @confirm="confirmClearStopped"
             />
           </div>
-        </div>
+        </span></div>
 
         <!-- 常规设置 -->
         <div v-else-if="!isSystemSettingsPage && activeTab === 'account-config'" class="space-y-4 panel-fill">
@@ -2209,6 +2278,23 @@ async function confirmDefaultPlanOperation() {
           </SettingsPanel>
         </div>
 
+        <!-- 牧场设置：仅保存 ranch_ 字段，不覆盖农场草稿 -->
+        <div v-else-if="!isSystemSettingsPage && activeTab === 'ranch-config'" class="space-y-4 panel-fill">
+          <SettingsPanel>
+            <BaseButton variant="primary" :loading="ranchSaving" :disabled="!currentAccountId || loadedAccountId !== currentAccountId" @click="saveRanchSettings">
+              <span class="i-carbon-save" />
+              <span>保存牧场设置</span>
+            </BaseButton>
+            <template #body>
+              <div v-if="!currentAccountId || loadedAccountId !== currentAccountId" class="py-8 text-center text-gray-500">请选择账号并等待配置加载</div>
+              <template v-else>
+                <AutomationSettingsForm v-model="ranchModel" in-ranch panel="strategy" hide-save :saving="ranchSaving" :ranch-animal-options="ranchAnimalOptions" :ranch-animal-options-loading="ranchAnimalOptionsLoading" :ranch-animal-options-error="ranchAnimalOptionsError" :account-id="currentAccountId" :connected="currentAccountConnected" :fertilizer-land-type-options="fertilizerLandTypeOptions" :fertilizer-options="fertilizerOptions" @save="saveRanchSettings" @reload-animals="loadRanchAnimalOptions" />
+                <AutomationSettingsForm v-model="ranchModel" in-ranch panel="automation" hide-save :saving="ranchSaving" :fertilizer-land-type-options="fertilizerLandTypeOptions" :fertilizer-options="fertilizerOptions" @save="saveRanchSettings" />
+              </template>
+            </template>
+          </SettingsPanel>
+        </div>
+
         <!-- 下线通知 -->
         <div v-else-if="!isSystemSettingsPage && activeTab === 'notification'" class="space-y-4 panel-fill">
           <SettingsPanel>
@@ -2263,8 +2349,8 @@ async function confirmDefaultPlanOperation() {
         <!-- 系统设置 -->
         <div v-else-if="isSystemSettingsPage" class="space-y-4">
           <div class="system-settings-content flex flex-col gap-4">
-            <section v-if="activeSystemTab === 'environment'" class="page-card-surface rounded-lg p-4">
-              <div class="panel-titlebar mb-4 justify-between">
+            <section v-if="activeSystemTab === 'environment'" class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-4">
+              <div class="panel-titlebar mb-4 justify-between margin-shell"><span class="margin-content">
                 <div class="ml-auto flex shrink-0 items-center gap-2">
                   <BaseButton variant="secondary" class="!w-auto !min-w-0" :disabled="systemConfigLoading" :loading="systemConfigSaving" @click="handleResetSystemConfig">
                     重置
@@ -2273,7 +2359,7 @@ async function confirmDefaultPlanOperation() {
                     保存运行环境
                   </BaseButton>
                 </div>
-              </div>
+              </span></div>
 
               <div v-if="systemConfigLoading" class="py-8 text-center text-gray-500">
                 <span class="i-svg-spinners-90-ring-with-bg inline-block text-2xl" />
@@ -2353,7 +2439,7 @@ async function confirmDefaultPlanOperation() {
                   </div>
                 </div>
               </div>
-            </section>
+            </span></section>
 
             <AutoCodeRefreshCard
               v-if="activeSystemTab === 'refresh'"
@@ -2364,8 +2450,8 @@ async function confirmDefaultPlanOperation() {
             />
 
             <div v-if="activeSystemTab === 'login'" class="min-w-0 flex flex-col gap-4">
-              <section class="page-card-surface rounded-lg p-4">
-                <div class="panel-titlebar mb-4 justify-between">
+              <section class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-4">
+                <div class="panel-titlebar mb-4 justify-between margin-shell"><span class="margin-content">
                   <div class="ml-auto flex shrink-0 items-center gap-2">
                     <BaseButton
                       variant="secondary"
@@ -2384,7 +2470,7 @@ async function confirmDefaultPlanOperation() {
                       保存登录设置
                     </BaseButton>
                   </div>
-                </div>
+                </span></div>
 
                 <div class="grid grid-cols-2 gap-2">
                   <BaseSwitch v-model="localCaptureConfig.enabled" label="启用抓包登录" />
@@ -2412,7 +2498,7 @@ async function confirmDefaultPlanOperation() {
                     placeholder="请输入 NapCat 接口签名"
                   />
                 </div>
-              </section>
+              </span></section>
             </div>
           </div>
         </div>
@@ -2467,7 +2553,7 @@ async function confirmDefaultPlanOperation() {
 }
 
 .system-settings-content :deep(.base-switch__label) {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: 600;
 }
 
@@ -2551,7 +2637,7 @@ async function confirmDefaultPlanOperation() {
 
 .account-selection-links button {
   color: var(--ui-primary);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
   cursor: pointer;
   transition:
@@ -2589,7 +2675,7 @@ async function confirmDefaultPlanOperation() {
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 2px 7px rgba(40, 62, 53, 0.14);
   color: #257458;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   transition:
     background 160ms ease,
     border-color 160ms ease,
@@ -2610,11 +2696,7 @@ async function confirmDefaultPlanOperation() {
    描边用 outline（不占布局），边框宽度恒为全局的 1px：卡片高度由内容决定，
    一旦边框在 1px/2px 之间切换，整行卡片会跟着变高变矮（切多选、切换当前账号时最明显）。
    outline-offset 取负值让描边画在卡片内侧，不向外延申，避免上下描边被容器裁剪。 */
-.cartoon-card.account-card--selected,
-.cartoon-card.account-card--current {
-  outline: 2px solid var(--ui-primary);
-  outline-offset: -2px;
-}
+
 
 /* 卡片宽度不写死：每列最小 240px，剩余宽度平均分给各列，
    浏览器变宽时自动多排一列并占满整行，不会在右侧留一条空档。 */
@@ -2622,7 +2704,7 @@ async function confirmDefaultPlanOperation() {
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px;
+  --inset-top: 16px; --inset-right: 16px; --inset-bottom: 16px; --inset-left: 16px;
 }
 
 .account-grid {
@@ -2631,14 +2713,14 @@ async function confirmDefaultPlanOperation() {
   gap: 16px;
 }
 
-/* 卡片三个动作：等分整行宽度，按钮高度比工具栏按钮矮一档（36px → 30px），
-   字号跟着收一档，保证窄卡片里“停止/凭据/清理”都能排下。 */
+/* 卡片三个动作：等分整行宽度，高度引用内容区标题栏控件标准，
+   字号使用 small，保证窄卡片里“停止/凭据/清理”都能排下。 */
 .account-card-btn {
   flex: 1 1 0;
   min-width: 0;
-  height: 30px;
-  min-height: 30px;
-  font-size: 13px;
+  height: var(--ui-content-item-control-height-30);
+  min-height: var(--ui-content-item-control-height-30);
+  font-size: var(--ui-font-size-small-13);
 }
 
 .account-card-btn :deep(.n-button__content) {

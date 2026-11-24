@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { formatNumber } from '@/utils/format-number'
+import { formatNumber, formatRewardAmount } from '@/utils/format-number'
 
 const props = withDefaults(defineProps<{
   dailyGifts: any
   /** 账号平台；微信账号不展示 QQ 会员等 QQ 专属任务。 */
   platform?: string
+  plainRewards?: boolean
 }>(), { platform: '' })
 
 type StatusTone = 'done' | 'claimable' | 'progress' | 'pending' | 'off' | 'error'
@@ -69,7 +70,8 @@ function formatTime(timestamp: number) {
 
 function growthRow(growth: any): TaskRow {
   const task = growth.currentTask || growth.tasks?.[0] || null
-  const base = { key: 'growth_task', label: '成长任务', icon: 'i-carbon-growth', rewardHint: '—' }
+  const label = growth.showOverallProgress ? `成长任务 ${growth.completedCount}/${growth.totalCount}` : '成长任务'
+  const base = { key: 'growth_task', label, icon: 'i-carbon-growth', rewardHint: '—' }
   if (!task)
     return { ...base, desc: '成长任务已全部完成', rewards: [], status: '已完成', tone: 'done' }
   const progress = Number(task.progress) || 0
@@ -80,6 +82,8 @@ function growthRow(growth: any): TaskRow {
     return { ...base, desc, rewards, status: '已领取', tone: 'done' }
   if (task.isCompleted)
     return { ...base, desc, rewards, status: '待领取', tone: 'claimable' }
+  if (task.isLocked)
+    return { ...base, desc, rewards, status: '未解锁', tone: 'off' }
   return { ...base, desc, rewards, status: '进行中', tone: 'progress' }
 }
 
@@ -216,7 +220,7 @@ function rewardTitle(reward: any) {
 <template>
   <!-- 离线提示由 TaskPanel 负责；已登录但没取到数据时只留错误条，不再放占位 -->
   <ul v-if="rows.length" class="task-list panel-list list-divider" aria-label="每日礼包与任务列表">
-    <li v-for="row in rows" :key="row.key" class="task-row" :class="`is-${row.tone}`">
+    <li v-for="row in rows" :key="row.key" class="task-row margin-shell" :class="`is-${row.tone}`"><span class="margin-content">
       <span class="task-row__icon" aria-hidden="true"><span :class="row.icon" /></span>
       <div class="task-row__info">
         <strong class="task-row__name">{{ row.label }}</strong>
@@ -228,7 +232,8 @@ function rewardTitle(reward: any) {
         </p>
       </div>
       <div class="task-row__rewards">
-        <span v-if="row.rewards.length" class="task-rewards" role="list" aria-label="奖励">
+        <span v-if="row.rewards.length" class="task-rewards" :class="{ 'task-rewards--plain': plainRewards }" role="list" aria-label="奖励">
+          <span v-if="plainRewards" class="task-rewards__label" aria-hidden="true">奖励: </span>
           <span
             v-for="(reward, rIdx) in row.rewards"
             :key="rIdx"
@@ -247,7 +252,7 @@ function rewardTitle(reward: any) {
               @error="rewardImageErrors[reward.id] = true"
             >
             <span v-else class="task-reward__icon task-reward__fallback" aria-hidden="true">{{ String(reward.name || '物').slice(0, 1) }}</span>
-            <span aria-hidden="true">×{{ formatNumber(reward.count) }}</span>
+            <span aria-hidden="true">×{{ formatRewardAmount(reward.id, reward.count) }}</span>
           </span>
         </span>
         <span v-else class="task-row__no-reward">{{ row.rewardHint }}</span>
@@ -255,7 +260,7 @@ function rewardTitle(reward: any) {
       <span class="task-row__status" :class="`is-${row.tone}`">
         <span :class="STATUS_ICONS[row.tone]" aria-hidden="true" />{{ row.status }}
       </span>
-    </li>
+    </span></li>
   </ul>
 </template>
 
@@ -270,11 +275,11 @@ function rewardTitle(reward: any) {
   grid-template-columns: 40px minmax(0, 1fr) minmax(0, max-content) 92px;
   align-items: center;
   gap: 8px 14px;
-  padding: 14px 18px;
+  --inset-top: 14px; --inset-right: 18px; --inset-bottom: 14px; --inset-left: 18px;
 }
 
 .task-row:first-child {
-  padding-block-start: 12px;
+  --inset-top: 12px;
 }
 
 .task-row__icon {
@@ -286,7 +291,7 @@ function rewardTitle(reward: any) {
   border-radius: 12px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .task-row.is-done .task-row__icon {
@@ -314,7 +319,7 @@ function rewardTitle(reward: any) {
 
 .task-row__name {
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-600);
 }
 
@@ -323,7 +328,7 @@ function rewardTitle(reward: any) {
   margin: 0;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -341,7 +346,7 @@ function rewardTitle(reward: any) {
 
 .task-row__no-reward {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 /* 状态放最右，图标 + 文案，不只靠颜色区分 */
@@ -358,7 +363,7 @@ function rewardTitle(reward: any) {
   border-radius: 999px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   white-space: nowrap;
 }
@@ -405,7 +410,7 @@ function rewardTitle(reward: any) {
   border-radius: 999px;
   color: var(--ui-ink);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -414,6 +419,22 @@ function rewardTitle(reward: any) {
 .task-reward--extra {
   border-style: dashed;
   border-color: var(--ui-warning);
+}
+
+.task-rewards--plain .task-reward {
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+}
+
+.task-rewards--plain .task-reward--extra {
+  color: var(--ui-warning);
+}
+
+.task-rewards__label {
+  color: var(--ui-muted);
+  white-space: nowrap;
 }
 
 .task-reward__icon {
@@ -429,7 +450,11 @@ function rewardTitle(reward: any) {
   border-radius: 999px;
   color: var(--ui-muted);
   background: var(--ui-surface-solid);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
+}
+
+.task-rewards--plain .task-reward__fallback {
+  background: none;
 }
 
 /* 窄屏：奖励换到名称下方，状态仍在右侧 */
@@ -439,7 +464,7 @@ function rewardTitle(reward: any) {
       'icon info    status'
       '.    rewards rewards';
     grid-template-columns: 40px minmax(0, 1fr) auto;
-    padding-inline: 16px;
+    --inset-left: 16px; --inset-right: 16px;
   }
 
   .task-row__rewards,

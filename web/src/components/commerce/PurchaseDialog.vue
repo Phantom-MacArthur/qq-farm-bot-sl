@@ -2,17 +2,29 @@
 import type { MallGoodsDto } from '@/stores/commerce'
 import { NButton } from 'naive-ui/es/button'
 import { computed, ref, watch } from 'vue'
-import { formatCompactAmount, formatNumber } from '@/utils/format-number'
+import { formatCompactAmount } from '@/utils/format-number'
 import { purchaseMaxCount } from '@/utils/purchase-count'
 import CommerceItemImage from './CommerceItemImage.vue'
 
+type PurchaseItem = Pick<MallGoodsDto['price'], 'id' | 'name' | 'image'> & { count: number | string }
+type PurchaseGoods = Pick<MallGoodsDto, 'name' | 'isFree' | 'purchasable' | 'originalPrice'> & {
+  id: number | string
+  discountText?: string
+  rewards: PurchaseItem[]
+  price: PurchaseItem & { balance: number | string | null }
+  limit: Pick<NonNullable<MallGoodsDto['limit']>, 'remaining'> | null
+}
+
 const props = defineProps<{
   open: boolean
-  goods: MallGoodsDto | null
+  goods: PurchaseGoods | null
   limitLabel?: string
   showCurrencyName?: boolean
   hideRewards?: boolean
   pending?: boolean
+  quantityCap?: number
+  confirmLabel?: string
+  mallTypography?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,27 +34,43 @@ const emit = defineEmits<{
 
 const count = ref(1)
 const maxCount = computed(() => purchaseMaxCount({
+  cap: props.quantityCap,
   limitRemaining: props.goods?.limit?.remaining ?? null,
   costs: props.goods?.isFree ? [] : [{ id: props.goods?.price?.id, count: props.goods?.price?.count, balance: props.goods?.price?.balance }],
 }))
-const totalCost = computed(() => (props.goods?.price.count || 0) * count.value)
+const totalCost = computed(() => {
+  const price = props.goods?.price.count ?? 0
+  return typeof price === 'string' ? BigInt(price) * BigInt(count.value) : price * count.value
+})
 const balanceUnknown = computed(() => !props.goods?.isFree && props.goods?.price.balance == null)
 const insufficient = computed(() => {
   const balance = props.goods?.price.balance
-  return !props.goods?.isFree && balance !== null && balance !== undefined && totalCost.value > balance
+  if (props.goods?.isFree || balance == null)
+    return false
+  return typeof totalCost.value === 'bigint' ? totalCost.value > BigInt(balance) : totalCost.value > Number(balance)
 })
 
+function fullAmount(amount: number | string | bigint) {
+  return (typeof amount === 'string' ? BigInt(amount) : amount).toLocaleString()
+}
+
 watch(() => [props.open, props.goods?.id], () => count.value = 1)
+watch(maxCount, () => setCount(count.value))
 
 function setCount(value: number) {
-  count.value = Math.min(maxCount.value, Math.max(1, Math.floor(value) || 1))
+  count.value = Math.max(1, Math.min(maxCount.value, Math.floor(value) || 1))
+}
+function inputCount(event: Event) {
+  const input = event.target as HTMLInputElement
+  setCount(Number(input.value))
+  input.value = String(count.value)
 }
 </script>
 
 <template>
   <Teleport to="body">
     <div v-if="open && goods" class="purchase-mask" @click.self="!pending && emit('close')">
-    <section class="purchase-dialog" role="dialog" aria-modal="true" :aria-label="`购买${goods.name}`">
+    <section class="purchase-dialog" :class="{ 'mall-typography': mallTypography }" role="dialog" aria-modal="true" :aria-label="`购买${goods.name}`">
       <!-- 头部：小图 + 名称 + 单价，主图不再单独占据大块面积 -->
       <header class="purchase-head">
         <CommerceItemImage :src="goods.rewards[0]?.image" :alt="goods.rewards[0]?.name" size="md" />
@@ -55,7 +83,7 @@ function setCount(value: number) {
             <template v-else>
               单价
               <CommerceItemImage :src="goods.price.image" :alt="goods.price.name" size="sm" />
-              <b :title="showCurrencyName ? `${goods.price.name} ${formatNumber(goods.price.count)}` : undefined">{{ showCurrencyName ? formatCompactAmount(goods.price.count) : goods.price.count.toLocaleString() }}</b>
+              <b :title="showCurrencyName ? `${goods.price.name} ${fullAmount(goods.price.count)}` : undefined">{{ showCurrencyName ? formatCompactAmount(Number(goods.price.count)) : fullAmount(goods.price.count) }}</b>
               <del v-if="goods.originalPrice">{{ goods.originalPrice.toLocaleString() }}</del>
             </template>
             <span v-if="goods.discountText" class="purchase-tag">{{ goods.discountText }}</span>
@@ -66,16 +94,16 @@ function setCount(value: number) {
         </button>
       </header>
 
-      <div class="purchase-body">
+      <div class="purchase-body dialog-scroll">
         <template v-if="!hideRewards">
           <div class="purchase-section-label">
             每份包含<span v-if="goods.rewards.length > 1"> · {{ goods.rewards.length }} 件</span>
           </div>
-          <ul class="purchase-rewards">
+          <ul class="purchase-rewards dialog-scroll">
             <li v-for="reward in goods.rewards" :key="reward.id">
               <CommerceItemImage :src="reward.image" :alt="reward.name" size="sm" />
               <span class="purchase-rewards__name">{{ reward.name }}</span>
-              <b>×{{ reward.count.toLocaleString() }}</b>
+              <b>×{{ fullAmount(reward.count) }}</b>
             </li>
           </ul>
         </template>
@@ -89,7 +117,7 @@ function setCount(value: number) {
             <button type="button" title="减少" aria-label="减少" :disabled="pending || count <= 1" @click="setCount(count - 1)">
               <span class="i-carbon-subtract" />
             </button>
-            <input :value="count" inputmode="numeric" aria-label="购买数量" :disabled="pending" @input="setCount(Number(($event.target as HTMLInputElement).value))">
+            <input :value="count" inputmode="numeric" aria-label="购买数量" :disabled="pending || maxCount < 1" @input="inputCount">
             <button type="button" title="增加" aria-label="增加" :disabled="pending || count >= maxCount" @click="setCount(count + 1)">
               <span class="i-carbon-add" />
             </button>
@@ -99,12 +127,12 @@ function setCount(value: number) {
         <div class="purchase-row purchase-row--total">
           <div>
             <span class="purchase-row__label">合计</span>
-            <small v-if="!goods.isFree && goods.price.balance != null">余额 {{ goods.price.balance.toLocaleString() }}</small>
+            <small v-if="!goods.isFree && goods.price.balance != null">余额 {{ fullAmount(goods.price.balance) }}</small>
           </div>
           <strong v-if="goods.isFree" class="purchase-total is-free">免费</strong>
           <strong v-else class="purchase-total" :class="{ 'is-short': insufficient }">
             <CommerceItemImage :src="goods.price.image" :alt="goods.price.name" size="sm" />
-            <span :title="showCurrencyName ? `${goods.price.name} ${formatNumber(totalCost)}` : undefined">{{ showCurrencyName ? formatCompactAmount(totalCost) : totalCost.toLocaleString() }}</span>
+            <span :title="showCurrencyName ? `${goods.price.name} ${fullAmount(totalCost)}` : undefined">{{ showCurrencyName ? formatCompactAmount(Number(totalCost)) : fullAmount(totalCost) }}</span>
           </strong>
         </div>
 
@@ -120,8 +148,8 @@ function setCount(value: number) {
         <NButton :disabled="pending" @click="emit('close')">
           取消
         </NButton>
-        <NButton type="primary" :loading="pending" :disabled="pending || insufficient || balanceUnknown || !goods.purchasable" @click="emit('confirm', count)">
-          {{ pending ? '购买中' : goods.isFree ? '确认领取' : '确认购买' }}
+        <NButton type="primary" :loading="pending" :disabled="pending || maxCount < 1 || insufficient || balanceUnknown || !goods.purchasable" @click="emit('confirm', count)">
+          {{ pending ? '购买中' : (confirmLabel || (goods.isFree ? '确认领取' : '确认购买')) }}
         </NButton>
       </footer>
     </section>
@@ -168,7 +196,6 @@ function setCount(value: number) {
   height: 52px;
   border: 0;
   border-radius: 14px;
-  background: var(--ui-surface-soft);
 }
 
 .purchase-head__text {
@@ -179,7 +206,7 @@ function setCount(value: number) {
 .purchase-head h2 {
   margin: 0;
   overflow: hidden;
-  font-size: 17px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   line-height: 1.35;
   text-overflow: ellipsis;
@@ -193,13 +220,13 @@ function setCount(value: number) {
   gap: 4px;
   margin: 4px 0 0;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
 .purchase-head p b {
   color: var(--ui-warning);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .purchase-head p del {
@@ -233,7 +260,7 @@ function setCount(value: number) {
   place-items: center;
   border-radius: 9px;
   color: var(--ui-muted);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .purchase-close:hover:not(:disabled) {
@@ -245,13 +272,14 @@ function setCount(value: number) {
   min-height: 0;
   flex-direction: column;
   gap: 14px;
-  padding: 16px 20px 4px;
+  margin-inline: var(--ui-dialog-scroll-inset);
+  padding: 16px calc(20px - var(--ui-dialog-scroll-inset)) 4px;
   overflow-y: auto;
 }
 
 .purchase-section-label {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
 }
 
@@ -260,7 +288,8 @@ function setCount(value: number) {
   max-height: 232px;
   gap: 2px;
   margin: -6px 0 0;
-  padding: 6px;
+  padding-block: 6px;
+  padding-inline-start: 6px;
   overflow-y: auto;
   border-radius: var(--ui-radius-control);
   background: var(--ui-surface-soft);
@@ -281,19 +310,18 @@ function setCount(value: number) {
   height: 30px;
   border: 0;
   border-radius: 8px;
-  background: var(--ui-surface-strong);
 }
 
 .purchase-rewards__name {
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .purchase-rewards b {
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
 }
 
@@ -311,13 +339,13 @@ function setCount(value: number) {
 }
 
 .purchase-row__label {
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
 }
 
 .purchase-row small {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -331,7 +359,7 @@ function setCount(value: number) {
   align-items: center;
   gap: 4px;
   color: var(--ui-warning);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   font-variant-numeric: tabular-nums;
 }
 
@@ -376,7 +404,7 @@ function setCount(value: number) {
   outline: 0;
   color: var(--ui-ink);
   background: transparent;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-600);
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -388,7 +416,7 @@ function setCount(value: number) {
   border-radius: 8px;
   color: var(--ui-danger);
   background: var(--ui-danger-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .purchase-foot {
@@ -399,6 +427,6 @@ function setCount(value: number) {
 }
 
 .purchase-foot :deep(.n-button) {
-  height: 38px;
+  height: var(--ui-content-item-control-height-30);
 }
 </style>

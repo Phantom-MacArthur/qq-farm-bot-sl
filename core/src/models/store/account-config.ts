@@ -3,12 +3,14 @@ export {};
 
 const sharedState = require('./shared-state');
 const { assertEmailClaimHour } = require('../../utils/hour-of-day');
+const { normalizeRanchSetting, migrateRanchMarketAutomation } = require('../../config/ranch-automation');
 const { readKnownFriendGidsCache, writeKnownFriendGidsCache } = require('./gid-cache');
 
 const {
     globalConfig,
     normalizeAccountConfig,
     cloneAccountConfig,
+    normalizeFertilizerMode,
     normalizeFertilizerLandTypes,
     normalizeKnownFriendGids,
     normalizeKnownFriendGidSyncCooldownSec,
@@ -98,6 +100,8 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         knownFriendGidSyncCooldownSec: cfg.knownFriendGidSyncCooldownSec,
         friendsListCacheTtlSec: cfg.friendsListCacheTtlSec,
         friendBlacklist: [...(cfg.friendBlacklist || [])],
+        ranchFriendBlacklist: [...(cfg.ranchFriendBlacklist || [])],
+        plantBlacklist: [...(cfg.plantBlacklist || [])],
         stealDelaySeconds: Math.max(0, Math.min(300, Number(cfg.stealDelaySeconds) || 0)),
         plantDelaySeconds: Math.max(0, Math.min(60, Number(cfg.plantDelaySeconds) || 0)),
         fertilizerBuyOrganicCount: Math.max(0, Math.min(10000, Number(cfg.fertilizerBuyOrganicCount) || 0)),
@@ -132,13 +136,14 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
     const next = normalizeAccountConfig(current, sharedState.accountFallbackConfig);
 
     if (cfg.automation && typeof cfg.automation === 'object') {
-        for (const [k, v] of Object.entries(cfg.automation)) {
+        for (const [k, v] of Object.entries(migrateRanchMarketAutomation(cfg.automation))) {
             if ((next.automation as any)[k] === undefined) continue;
             if (k === 'fertilizer') {
-                const allowed = ['both', 'normal', 'organic', 'smart', 'none'];
-                (next.automation as any)[k] = allowed.includes(v as string) ? v : (next.automation as any)[k];
+                next.automation.fertilizer = normalizeFertilizerMode(v, next.automation.fertilizer);
             } else if (k === 'fertilizer_land_types') {
                 (next.automation as any)[k] = normalizeFertilizerLandTypes(v, next.automation.fertilizer_land_types);
+            } else if (k.startsWith('ranch_')) {
+                (next.automation as any)[k] = normalizeRanchSetting(k, v);
             } else if (k === 'fertilizer_smart_seconds') {
                 (next.automation as any)[k] = Math.max(30, Math.min(3600, Number(v) || 300));
             } else {
@@ -177,6 +182,14 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
 
     if (Array.isArray(cfg.friendBlacklist)) {
         next.friendBlacklist = cfg.friendBlacklist.map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
+    }
+
+    if (Array.isArray(cfg.ranchFriendBlacklist)) {
+        next.ranchFriendBlacklist = cfg.ranchFriendBlacklist.map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
+    }
+
+    if (Array.isArray(cfg.plantBlacklist)) {
+        next.plantBlacklist = cfg.plantBlacklist.map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
     }
 
     if (cfg.knownFriendGids !== undefined) {
@@ -383,6 +396,27 @@ function addFriendToBlacklist(accountId: unknown, gid: unknown): boolean {
     return true;
 }
 
+function getRanchFriendBlacklist(accountId?: unknown): number[] {
+    return [...(getAccountConfigSnapshot(accountId).ranchFriendBlacklist || [])];
+}
+
+function setRanchFriendBlacklist(accountId: unknown, list: unknown[]): number[] {
+    const current = getAccountConfigSnapshot(accountId);
+    const next = normalizeAccountConfig(current, sharedState.accountFallbackConfig);
+    next.ranchFriendBlacklist = Array.isArray(list) ? list.map(Number).filter(n => Number.isFinite(n) && n > 0) : [];
+    setAccountConfigSnapshot(accountId, next);
+    return [...next.ranchFriendBlacklist];
+}
+
+function addRanchFriendToBlacklist(accountId: unknown, gid: unknown): boolean {
+    const gidNum = Number(gid);
+    if (!gidNum || gidNum <= 0) return false;
+    const current = getRanchFriendBlacklist(accountId);
+    if (current.includes(gidNum)) return false;
+    setRanchFriendBlacklist(accountId, [...current, gidNum]);
+    return true;
+}
+
 function getStealDelaySeconds(accountId?: unknown): number {
     return Math.max(0, Math.min(300, Number(getAccountConfigSnapshot(accountId).stealDelaySeconds) || 0));
 }
@@ -450,6 +484,9 @@ module.exports = {
     getFriendBlacklist,
     setFriendBlacklist,
     addFriendToBlacklist,
+    getRanchFriendBlacklist,
+    setRanchFriendBlacklist,
+    addRanchFriendToBlacklist,
     getStealDelaySeconds,
     getPlantDelaySeconds,
     getFertilizerBuyOrganicCount,

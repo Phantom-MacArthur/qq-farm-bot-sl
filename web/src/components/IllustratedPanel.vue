@@ -18,12 +18,15 @@ import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { vLazySrc } from '@/directives/lazy-src'
 import { useAccountStore } from '@/stores/account'
 import { useIllustratedStore } from '@/stores/illustrated'
+import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
+import { purchaseMaxCount } from '@/utils/purchase-count'
 
 const props = withDefaults(defineProps<{ bookType?: 'crop' | 'mutant' }>(), { bookType: 'crop' })
 const accountStore = useAccountStore()
 const illustratedStore = useIllustratedStore()
 const { currentAccountId } = storeToRefs(accountStore)
+const { status } = storeToRefs(useStatusStore())
 const presence = useAccountPresence()
 const isOffline = computed(() => presence.value === 'offline')
 const isConnected = computed(() => presence.value === 'online')
@@ -33,6 +36,7 @@ const isMutant = computed(() => currentType.value === 'mutant')
 const bookName = computed(() => isMutant.value ? '超变图鉴' : '作物图鉴')
 const detailsOpen = ref(false)
 const claiming = ref(false)
+const clearing = ref(false)
 const rewardList = ref<HTMLElement | null>(null)
 let claimRevision = 0
 const toast = useToastStore()
@@ -47,6 +51,7 @@ const query = ref('')
 const book = computed(() => data.value?.[currentType.value] || null)
 const items = computed<any[]>(() => Array.isArray(book.value?.items) ? book.value.items : [])
 const collectedCount = computed(() => items.value.filter(item => item.unlocked).length)
+const freshItems = computed<any[]>(() => items.value.filter((item: any) => item.isNew))
 const purchasableCount = computed(() => items.value.filter(canPurchaseSeed).length)
 const illustratedBuffs = computed(() => Array.isArray(book.value?.buffs) ? book.value.buffs : [])
 const currentIllustratedBuffs = computed(() => Array.isArray(book.value?.currentBuffs) ? book.value.currentBuffs : [])
@@ -121,8 +126,22 @@ const progressHint = computed(() => {
 })
 
 let purchaseRevision = 0
-const purchaseMax = computed(() => Math.min(9999, selectedSeedItem.value?.shopSeed?.remainingPurchaseCount ?? 9999))
+const purchaseMax = computed(() => purchaseMaxCount({
+  limitRemaining: selectedSeedItem.value?.shopSeed?.remainingPurchaseCount ?? null,
+  costs: [{ count: selectedSeedItem.value?.shopSeed?.price ?? 0, balance: status.value?.status?.gold }],
+}))
 const purchaseValid = computed(() => isConnected.value && Number.isSafeInteger(purchaseCount.value) && purchaseCount.value >= 1 && purchaseCount.value <= purchaseMax.value)
+watch(items, (entries) => {
+  if (selectedSeedItem.value) {
+    selectedSeedItem.value = entries.find(item => item.seedId === selectedSeedItem.value.seedId) ?? null
+    if (!selectedSeedItem.value)
+      purchaseDialogOpen.value = false
+  }
+})
+watch(purchaseMax, (maximum) => {
+  if (purchaseCount.value > maximum)
+    purchaseCount.value = Math.max(1, maximum)
+})
 function canPurchaseSeed(item: any) {
   const seed = item?.shopSeed
   return !!(isConnected.value && seed?.goodsId && !seed.locked && !seed.soldOut && !seed.unknownMeta && !seed.requiresUnlockCard && Number.isSafeInteger(seed.price) && seed.price > 0)
@@ -131,6 +150,11 @@ function openSeedPurchase(item: any) {
   if (!canPurchaseSeed(item) || purchasingSeedId.value !== null)
     return
   selectedSeedItem.value = item
+  if (purchaseMax.value < 1) {
+    toast.error(status.value?.status?.gold == null ? '金币余额未确认，请刷新后重试' : '金币余额不足')
+    selectedSeedItem.value = null
+    return
+  }
   purchaseCount.value = 1
   purchaseDialogOpen.value = true
 }
@@ -221,6 +245,27 @@ async function claimRewards() {
       claiming.value = false
   }
 }
+async function clearAllNew() {
+  const accountId = currentAccountId.value
+  const fruitIds = freshItems.value.map((item: any) => Number(item.fruitId) || 0)
+  if (clearing.value || loading.value || !accountId || !isConnected.value)
+    return
+  clearing.value = true
+  try {
+    const cleared = await illustratedStore.clearNew(accountId, fruitIds)
+    if (cleared.length)
+      toast.success(`已读 ${cleared.length} 条新增图鉴`)
+    else
+      toast.warning('没有未读图鉴')
+  }
+  catch (cause) {
+    toast.error(getApiErrorMessage(cause, '图鉴已读清除失败'))
+  }
+  finally {
+    clearing.value = false
+  }
+}
+
 async function scrollToNextReward() {
   await nextTick()
   const target = rewardList.value?.querySelector<HTMLElement>('[data-next="true"]')
@@ -254,7 +299,9 @@ watch([currentAccountId, isConnected], () => {
     <div v-else-if="presence === 'unknown' || (loading && !data)" class="book-loading" role="status" aria-label="正在读取图鉴">
       <span class="i-svg-spinners-90-ring-with-bg" />
     </div>
-    <OfflineState v-else-if="error" />
+    <EmptyState v-else-if="error" tone="error" title="图鉴加载失败" description="请稍后重试，或检查当前账号的图鉴配置" icon="i-carbon-warning-alt">
+      <NButton secondary @click="refresh">重试</NButton>
+    </EmptyState>
     <template v-else-if="book">
       <BookToolbar v-model:filter="filter" v-model:query="query" :filters="filters" :label="`${bookName}筛选`" placeholder="输入名称搜索">
         <template #overview>
@@ -275,6 +322,9 @@ watch([currentAccountId, isConnected], () => {
               </NButton>
               <NButton v-if="book.claimable" type="primary" :loading="claiming" :disabled="loading" @click="claimRewards">
                 领取奖励
+              </NButton>
+              <NButton v-if="freshItems.length" secondary :loading="clearing" :disabled="loading" @click="clearAllNew">
+                全部已读
               </NButton>
             </template>
             <template v-if="isMutant">
@@ -351,7 +401,7 @@ watch([currentAccountId, isConnected], () => {
             </div>
             <label class="seed-purchase__row">
               <span>购买批次</span>
-              <NInputNumber v-model:value="purchaseCount" :min="1" :max="purchaseMax" :precision="0" class="w-36" :disabled="purchasingSeedId !== null" />
+              <NInputNumber v-model:value="purchaseCount" :min="1" :max="purchaseMax || 1" :precision="0" class="w-36" :disabled="purchasingSeedId !== null || purchaseMax < 1" />
             </label>
             <div class="seed-purchase__row seed-purchase__total">
               <span>合计</span>
@@ -374,7 +424,7 @@ watch([currentAccountId, isConnected], () => {
       <NModal v-model:show="detailsOpen" @after-enter="scrollToNextReward">
         <NCard :title="isMutant ? '超变图鉴属性加成' : '作物图鉴收藏奖励'" closable class="book-rewards-modal max-w-2xl w-[calc(100vw-24px)]" @close="detailsOpen = false">
           <template v-if="isMutant">
-            <div v-if="illustratedBuffs.length" class="buff-grid custom-scrollbar">
+            <div v-if="illustratedBuffs.length" class="buff-grid dialog-scroll custom-scrollbar">
               <div v-for="bonus in illustratedBuffs" :key="`all-buff-${bonus.id}`" class="buff-card" :class="{ 'is-reached': bonus.level <= (book.level || 0) }">
                 <div class="buff-card__head">
                   <b>Lv.{{ bonus.level }}</b>
@@ -385,7 +435,7 @@ watch([currentAccountId, isConnected], () => {
             </div>
             <EmptyState v-else bare title="暂无属性加成" icon="i-carbon-gem" />
           </template>
-          <div v-else ref="rewardList" class="reward-list custom-scrollbar" role="region" aria-label="收藏奖励" tabindex="0">
+          <div v-else ref="rewardList" class="reward-list dialog-scroll custom-scrollbar" role="region" aria-label="收藏奖励" tabindex="0">
             <div
               v-for="level in book.levels"
               :key="level.level"
@@ -434,7 +484,7 @@ watch([currentAccountId, isConnected], () => {
   min-height: 240px;
   place-items: center;
   color: var(--ui-primary);
-  font-size: 28px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 /* 固定最小列宽自动排列：同一行卡片等宽等高，与藏品页的条目网格一致。 */
@@ -454,7 +504,7 @@ watch([currentAccountId, isConnected], () => {
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-surface);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 18px;
   cursor: default;
 }
@@ -479,13 +529,13 @@ watch([currentAccountId, isConnected], () => {
 }
 
 .seed-purchase__item strong {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
 .seed-purchase__item small {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .seed-purchase__well {
@@ -495,7 +545,6 @@ watch([currentAccountId, isConnected], () => {
   flex: none;
   place-items: center;
   border-radius: 12px;
-  background: var(--ui-surface-soft);
 }
 
 .seed-purchase__well img {
@@ -509,7 +558,7 @@ watch([currentAccountId, isConnected], () => {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .seed-purchase__total {
@@ -518,7 +567,7 @@ watch([currentAccountId, isConnected], () => {
 }
 
 .seed-purchase__total strong {
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-variant-numeric: tabular-nums;
 }
 
@@ -526,7 +575,7 @@ watch([currentAccountId, isConnected], () => {
   max-height: calc(100dvh - 32px);
 }
 
-.book-rewards-modal :deep(.n-card__content) {
+.book-rewards-modal :deep(.n-card-content) {
   display: flex;
   min-height: 0;
   flex-direction: column;
@@ -567,13 +616,13 @@ watch([currentAccountId, isConnected], () => {
 }
 
 .reward-row__level b {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-variant-numeric: tabular-nums;
 }
 
 .reward-row__level small {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -589,7 +638,7 @@ watch([currentAccountId, isConnected], () => {
   align-items: center;
   gap: 3px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   font-variant-numeric: tabular-nums;
 }
@@ -602,7 +651,7 @@ watch([currentAccountId, isConnected], () => {
 
 .reward-row__state {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-align: right;
   white-space: nowrap;
 }
@@ -639,12 +688,12 @@ watch([currentAccountId, isConnected], () => {
   display: flex;
   justify-content: space-between;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .buff-card__head span {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .buff-card.is-reached .buff-card__head span {
@@ -654,7 +703,7 @@ watch([currentAccountId, isConnected], () => {
 .buff-card p {
   margin: 6px 0 0;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.5;
 }
 </style>

@@ -387,7 +387,7 @@ function markMutantIconFailed(effect: any) {
 
     <!-- Cartoon progress bar -->
     <div v-if="land.matureInSec > 0 && land.totalGrowTime > 0" class="w-full px-2">
-      <div class="farm-progress">
+      <div class="farm-progress ui-progress-track">
         <div
           class="farm-progress-fill"
           :style="{ width: `${growProgress}%` }"
@@ -590,7 +590,7 @@ function markMutantIconFailed(effect: any) {
   box-shadow: 0 2px 7px rgba(40, 62, 53, 0.14);
 }
 .selection-cue__mark > span {
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .selection-cue--selected .selection-cue__mark {
   color: #fff;
@@ -608,7 +608,7 @@ function markMutantIconFailed(effect: any) {
   border-radius: 999px;
   color: #245f4b;
   background: rgba(244, 252, 247, 0.96);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   white-space: nowrap;
   box-shadow: 0 2px 7px rgba(40, 62, 53, 0.1);
@@ -1015,7 +1015,7 @@ function markMutantIconFailed(effect: any) {
   padding: 1px 0 1px 2px;
   border-radius: 4px;
   color: var(--ui-muted);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.2;
 }
 
@@ -1045,7 +1045,7 @@ function markMutantIconFailed(effect: any) {
   border-radius: 8px;
   color: #245f4b;
   background: #eaf8ed;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   cursor: pointer;
 }
@@ -1070,7 +1070,7 @@ function markMutantIconFailed(effect: any) {
   padding: 0 3px;
   border: 1px solid transparent;
   border-radius: 8px;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   line-height: 1;
   white-space: nowrap;

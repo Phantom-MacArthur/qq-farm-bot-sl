@@ -28,7 +28,7 @@ const RARITY_LABELS: Record<number, string> = {
 };
 const PET_OBTAIN_CONDITIONS: Record<number, string> = {
     90001: '参与分享任务可获得',
-    90002: '商店购买：100 点券',
+    90002: '商店购买：500,000 金币',
     90003: '商店购买：1,000,000 金币',
     90011: '商店购买：4,800 金豆',
     90021: '限时活动获得',

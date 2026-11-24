@@ -76,7 +76,7 @@ function handleKeydown(event: KeyboardEvent) {
   height: 14px;
   place-items: center;
   border-radius: 4px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   cursor: pointer;
 }
 

@@ -2,8 +2,6 @@ export {};
 
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toNum } = require('../utils/utils');
-
 const DEFAULT_RECHARGE_SOURCE: string = 'MallUI';
 
 async function getRechargeInfo(source: string = DEFAULT_RECHARGE_SOURCE): Promise<any> {
@@ -23,7 +21,15 @@ async function getRechargeInfo(source: string = DEFAULT_RECHARGE_SOURCE): Promis
 async function getDiamondBalance(): Promise<number> {
     const reply: any = await getRechargeInfo();
     const infos: any[] = Array.isArray(reply?.recharge_infos) ? reply.recharge_infos : [];
-    return Math.max(0, toNum(infos[0]?.balance));
+    if (!infos[0] || infos[0].balance === null || infos[0].balance === undefined) {
+        throw new Error('钻石余额未能确认');
+    }
+    const rawBalance = infos[0].balance;
+    const balance = Number(rawBalance);
+    if ((typeof rawBalance !== 'number' && typeof rawBalance !== 'string' && typeof rawBalance !== 'object')
+        || (typeof rawBalance === 'string' && !/^\d+$/.test(rawBalance))
+        || !Number.isSafeInteger(balance) || balance < 0) throw new Error('钻石余额未能确认');
+    return balance;
 }
 
 module.exports = {

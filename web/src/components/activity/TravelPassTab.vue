@@ -33,7 +33,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
         <div class="score">
           <span>{{ pass?.progress ?? '--' }}</span><i>/</i><span>{{ pass?.progressMax ?? '--' }}</span>
         </div>
-        <div class="progress">
+        <div class="progress ui-progress-track">
           <i :style="{ width: `${percentage}%` }" />
         </div>
       </div>
@@ -126,11 +126,11 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   height: 84px;
 }
 .travel-progress__badge b {
-  font-size: 37px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1;
 }
 .travel-progress__badge small {
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .travel-progress__main {
   min-width: 0;
@@ -139,14 +139,14 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   display: block;
   overflow: hidden;
   color: #e8f7ff;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .score {
   margin-top: 6px;
   color: #fff;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
 }
 .score i {
@@ -180,7 +180,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   border-radius: 12px;
   color: #cbeaff;
   background: rgba(46, 139, 201, 0.3);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .travel-tip span {
   flex: 1;
@@ -189,13 +189,13 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
 .travel-tip button {
   flex: none;
   width: 21px;
-  height: 21px;
+  height: var(--ui-content-item-control-height-30);
   padding: 0;
   border: 1px solid rgba(226, 247, 255, 0.85);
   border-radius: 50%;
   color: #effbff;
   background: rgba(7, 65, 119, 0.62);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-700);
   line-height: 19px;
   cursor: pointer;
@@ -209,7 +209,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   justify-content: space-between;
   padding: 9px 34px 5px;
   color: #c9e9fa;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .travel-list {
   display: grid;
@@ -252,11 +252,11 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   margin-left: 5px;
 }
 .level-medal b {
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1;
 }
 .level-medal small {
-  font-size: 9px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .reward-group {
   display: flex;
@@ -273,7 +273,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   border-radius: 8px;
   color: #d0e5f0;
   background: rgba(0, 30, 68, 0.55);
-  font-size: 9px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .travel-empty {
   min-height: 220px;
@@ -284,7 +284,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   color: #b9dced;
 }
 .empty-star {
-  font-size: 58px;
+  font-size: var(--ui-font-size-large-15);
   color: rgba(167, 226, 251, 0.45);
 }
 .travel-empty p {
@@ -314,7 +314,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   box-shadow:
     0 0 16px rgba(255, 207, 93, 0.55),
     inset 0 1px rgba(255, 255, 255, 0.5);
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   cursor: pointer;
 }
@@ -362,11 +362,11 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   height: 76px;
 }
 .travel-progress__badge b {
-  font-size: 30px;
+  font-size: var(--ui-font-size-large-15);
 }
 .travel-progress__main strong {
   color: #263d36;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .score {
   color: #1c6249;
@@ -436,7 +436,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   background: #eef5f2;
 }
 .level-medal b {
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
 }
 .state {
   color: #52655d;
@@ -467,7 +467,7 @@ const canClaim = computed(() => Boolean(props.enabled && hasClaimableNode.value 
   color: white;
   background: #2d8b66;
   box-shadow: 0 8px 18px rgba(35, 113, 83, 0.2);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .claim-action button:disabled {
   border-color: #cbd5d1;

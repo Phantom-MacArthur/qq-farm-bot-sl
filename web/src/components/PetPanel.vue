@@ -142,6 +142,7 @@ const currencyIcons: Record<number, string> = {
   1005: '/game-config/resource-icons/gold-bean.png',
 }
 const knownPetPrices: Record<number, { id: number, count: number, name: string, icon: string }> = {
+  90002: { id: 1001, count: 500000, name: '金币', icon: '/game-config/resource-icons/gold.png' },
   90003: { id: 1001, count: 1000000, name: '金币', icon: '/game-config/resource-icons/gold.png' },
   90011: { id: 1005, count: 4800, name: '金豆', icon: '/game-config/resource-icons/gold-bean.png' },
 }
@@ -162,16 +163,14 @@ function hasPurchaseEntry(pet: PetInfo) {
 }
 
 function petDisplayPrice(pet: PetInfo) {
-  if (pet.owned || pet.activatable)
-    return null
-  const offerPrice = purchasableOffer(pet)?.goods.price
+  const offerPrice = petOffers.value.find(offer =>
+    offer.goods.rewards.some(reward => reward.id === pet.id),
+  )?.goods.price
   if (offerPrice)
     return { ...offerPrice, image: currencyIcons[offerPrice.id] || offerPrice.image }
   const known = knownPetPrices[pet.id]
   if (known)
     return { name: known.name, count: known.count, image: known.icon }
-  if (pet.id === 90002)
-    return { name: '点券', count: 100, image: '/game-config/resource-icons/coupon.png' }
   return null
 }
 
@@ -186,7 +185,7 @@ function operationTitle(pet: PetInfo) {
 function dogActionLabel(pet: PetInfo) {
   if (pet.owned)
     return pet.active ? '收回' : '上场'
-  return pet.activatable ? '激活' : hasPurchaseEntry(pet) ? '购买' : '未获得'
+  return pet.activatable ? '激活' : hasPurchaseEntry(pet) ? '购买' : '限定'
 }
 
 function dogActionType(pet: PetInfo): 'default' | 'info' | 'success' | 'warning' {
@@ -420,9 +419,9 @@ watch([currentAccountId, presence], ([id, next]) => {
 
 <template>
   <div
-    class="personal-panel pet-page pet-panel-card page-card-surface rounded-2xl panel-scroll-layout"
+    class="pet-page pet-panel-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"
     :class="{ 'pet-page--protect-logs': activePetTab === 'protectLogs' }"
-  >
+  ><span class="margin-content">
     <PageTabs v-model:value="activePetTab">
       <NTab name="details">
         <span class="inline-flex items-center gap-2"><span class="i-carbon-dog-walker" />宠物管理</span>
@@ -432,7 +431,7 @@ watch([currentAccountId, presence], ([id, next]) => {
       </NTab>
     </PageTabs>
 
-    <div class="pet-toolbar panel-titlebar shrink-0">
+    <div class="pet-toolbar panel-titlebar shrink-0 margin-shell"><span class="margin-content">
       <h3 v-if="activePetTab === 'details'" id="pet-roster-title" class="pet-roster__title">
         全部宠物<small>({{ rosterCount }})</small>
       </h3>
@@ -460,7 +459,7 @@ watch([currentAccountId, presence], ([id, next]) => {
           @click="refreshPetInfo"
         />
       </div>
-    </div>
+    </span></div>
 
     <div class="panel-scroll-body panel-scroll-body--bleed">
       <template v-if="activePetTab === 'details'">
@@ -480,9 +479,9 @@ watch([currentAccountId, presence], ([id, next]) => {
           <EmptyState v-if="!dogs.length" bare title="暂无宠物" icon="i-carbon-dog-walker" />
           <ul v-else class="pet-list panel-list list-divider">
             <li
-              v-for="pet in orderedDogs" :key="pet.id" class="pet-row"
+              v-for="pet in orderedDogs" :key="pet.id" class="pet-row margin-shell"
               :class="{ 'is-active': pet.active, 'is-locked': isPetLocked(pet) }"
-            >
+            ><span class="margin-content">
               <div class="pet-row__identity">
                 <div class="pet-row__avatar">
                   <img :src="pet.image" :alt="pet.name" loading="lazy">
@@ -507,12 +506,12 @@ watch([currentAccountId, presence], ([id, next]) => {
                 <small>获得条件</small>
                 <p v-if="petDisplayPrice(pet)" class="pet-row__price" :title="`${petDisplayPrice(pet)!.name} ${formatNumber(petDisplayPrice(pet)!.count)}`">
                   <img :src="petDisplayPrice(pet)!.image" :alt="petDisplayPrice(pet)!.name" loading="lazy">
-                  <span>{{ formatCompactAmount(petDisplayPrice(pet)!.count) }}</span>
+                  <span class="resource-amount">{{ formatCompactAmount(petDisplayPrice(pet)!.count) }}</span>
                 </p>
                 <p v-else>{{ pet.obtainCondition || '—' }}</p>
               </div>
               <NButton
-                class="pet-row__action" size="small"
+                class="pet-row__action control-fit-content" size="small"
                 :type="dogActionType(pet)"
                 secondary
                 :loading="operatingDogId === pet.id || buyingPetId === pet.id" :disabled="!!isPetLocked(pet) || !!operatingDogId || buyingPetId !== null"
@@ -520,28 +519,8 @@ watch([currentAccountId, presence], ([id, next]) => {
               >
                 {{ dogActionLabel(pet) }}
               </NButton>
-            </li>
+            </span></li>
           </ul>
-        </section>
-
-        <!-- 看家状态：谁在看家 + 狗粮与喂食 -->
-        <section v-if="!activeDog" class="pet-home is-idle" aria-label="看家状态">
-          <div class="pet-idle">
-            <span class="pet-idle__avatar" aria-hidden="true"><span class="i-carbon-dog-walker" /></span>
-            <div class="pet-idle__copy">
-              <h3>还没有宠物看家</h3>
-              <p>{{ ownedCount ? '在「宠物管理」中选一只上场，好友来偷菜时它会帮你看护。' : '还没有可上场的宠物，可在「宠物管理」中查看各宠物的获得条件。' }}</p>
-            </div>
-            <div class="pet-idle__stock">
-              <small>狗盆库存</small>
-              <ul v-if="foods.length" aria-label="狗盆库存">
-                <li v-for="food in foods" :key="food.id" :class="{ 'is-empty': food.count <= 0 }" :title="`${food.name}，每份 +${formatFoodDuration(food.duration)}`">
-                  <img :src="food.image" alt="" loading="lazy">{{ food.name }}<b>×{{ food.count }}</b>
-                </li>
-              </ul>
-              <span v-else>暂无狗粮</span>
-            </div>
-          </div>
         </section>
 
         <div v-if="pendingGiftCount > 0 || giftError" class="pet-gift" :role="giftError ? 'alert' : undefined">
@@ -576,7 +555,7 @@ watch([currentAccountId, presence], ([id, next]) => {
       <EmptyState v-else-if="!protectLogs.length" bare title="暂无守护记录" :description="`共 ${protectLogsTotal} 条记录`" icon="i-carbon-security" />
       <template v-else>
         <ul class="protect-log-list panel-list list-divider">
-          <li v-for="logItem in protectLogs" :key="logItem.id" class="protect-log-row">
+          <li v-for="logItem in protectLogs" :key="logItem.id" class="protect-log-row margin-shell"><span class="margin-content">
             <img v-if="logItem.friendAvatar" :src="logItem.friendAvatar" :alt="logItem.friendName" class="protect-log-avatar">
             <span v-else class="protect-log-avatar protect-log-avatar--empty"><span class="i-carbon-user" aria-hidden="true" /></span>
             <div class="protect-log-copy">
@@ -584,7 +563,7 @@ watch([currentAccountId, presence], ([id, next]) => {
               <span>拦截果实 {{ logItem.stolenCount }} · 守护金币 {{ logItem.protectedGold }}</span>
             </div>
             <time>{{ formatProtectTime(logItem.timestamp) }}</time>
-          </li>
+          </span></li>
         </ul>
       </template>
     </section>
@@ -615,7 +594,7 @@ watch([currentAccountId, presence], ([id, next]) => {
             <strong :class="{ 'is-low': durationLow }">{{ formatDuration(protectDuration) }}</strong>
           </div>
           <div
-            class="pet-bowl__track" :class="{ 'is-low': durationLow }" role="progressbar" aria-label="狗粮剩余时间"
+            class="pet-bowl__track ui-progress-track" :class="{ 'is-low': durationLow }" role="progressbar" aria-label="狗粮剩余时间"
             aria-valuemin="0" aria-valuemax="100" :aria-valuenow="durationPercent"
           >
             <span :style="{ width: `${durationPercent}%` }" />
@@ -648,7 +627,7 @@ watch([currentAccountId, presence], ([id, next]) => {
         </p>
       </div>
     </NModal>
-  </div>
+  </span></div>
 </template>
 
 <style scoped>
@@ -661,7 +640,7 @@ watch([currentAccountId, presence], ([id, next]) => {
   --panel-pad: 16px;
   display: flex;
   flex-direction: column;
-  padding: var(--panel-pad);
+  --inset-top: var(--panel-pad); --inset-right: var(--panel-pad); --inset-bottom: var(--panel-pad); --inset-left: var(--panel-pad);
 }
 
 .protect-log-panel {
@@ -700,7 +679,7 @@ p {
   align-items: center;
   padding: 0 7px;
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 18px;
   white-space: nowrap;
@@ -755,14 +734,14 @@ p {
 
 .pet-skills strong {
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-650);
 }
 
 .pet-skills p {
   margin-top: 2px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
 }
 
@@ -773,7 +752,7 @@ p {
   border-radius: 999px;
   color: var(--ui-warning);
   background: var(--ui-warning-soft);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 18px;
   font-variant-numeric: tabular-nums;
@@ -791,102 +770,6 @@ p {
   box-shadow:
     inset 0 1px 0 var(--glass-highlight),
     var(--ui-shadow-sm);
-}
-
-/* 空闲态：一行排开，卡片随内容变矮 */
-.pet-home.is-idle {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.pet-idle {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 14px 20px;
-  padding: 18px 24px;
-}
-
-.pet-idle__avatar {
-  display: grid;
-  width: 52px;
-  height: 52px;
-  flex: none;
-  place-items: center;
-  font-size: 24px;
-  border: 1.5px dashed var(--ui-border-strong);
-  border-radius: 16px;
-  color: var(--ui-subtle);
-}
-
-.pet-idle__copy {
-  display: flex;
-  min-width: 220px;
-  flex: 1;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.pet-idle__copy h3 {
-  font-size: 16px;
-  font-weight: var(--fw-650);
-}
-
-.pet-idle__copy p {
-  color: var(--ui-muted);
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.pet-idle__stock {
-  display: flex;
-  min-width: 0;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px 10px;
-  color: var(--ui-muted);
-  font-size: 13px;
-}
-
-.pet-idle__stock small {
-  color: var(--ui-subtle);
-  font-size: 12px;
-}
-
-.pet-idle__stock ul {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.pet-idle__stock li {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 10px 2px 3px;
-  border-radius: 999px;
-  color: var(--ui-ink);
-  background: var(--ui-surface-soft);
-  font-size: 12px;
-}
-
-.pet-idle__stock li.is-empty {
-  color: var(--ui-subtle);
-}
-
-.pet-idle__stock img {
-  width: 22px;
-  height: 22px;
-  object-fit: contain;
-}
-
-.pet-idle__stock b {
-  margin-left: 2px;
-  font-weight: var(--fw-650);
-  font-variant-numeric: tabular-nums;
 }
 
 .pet-home .pet-skills {
@@ -920,12 +803,12 @@ p {
   justify-content: space-between;
   gap: 12px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-bowl__label strong {
   color: var(--ui-primary);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   font-variant-numeric: tabular-nums;
 }
@@ -955,7 +838,7 @@ p {
 
 .pet-bowl__meter small {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -996,7 +879,7 @@ p {
 
 .pet-food__copy strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1004,7 +887,7 @@ p {
 
 .pet-food__copy span {
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1017,7 +900,7 @@ p {
   padding-top: 12px;
   border-top: 1px solid var(--ui-border);
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .pet-gift {
@@ -1033,7 +916,7 @@ p {
 .pet-gift__icon {
   flex: none;
   color: var(--ui-warning);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .pet-gift p {
@@ -1046,13 +929,13 @@ p {
 }
 
 .pet-gift strong {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
 .pet-gift p span {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 /* —— 全部宠物 —— */
@@ -1066,7 +949,7 @@ p {
 
 .pet-offer-error {
   color: var(--error-color, #c24135);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-roster__title {
@@ -1075,14 +958,14 @@ p {
   gap: 6px;
   min-width: 0;
   margin: 0;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
   white-space: nowrap;
 }
 
 .pet-roster__title small {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-400);
 }
 
@@ -1109,11 +992,11 @@ p {
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px 14px;
-  padding: 16px 18px;
+  --inset-top: 16px; --inset-right: 18px; --inset-bottom: 16px; --inset-left: 18px;
 }
 
 .pet-row:first-child {
-  padding-block-start: 12px;
+  --inset-top: 12px;
 }
 
 /* 已上场的宠物不做背景区分，与其它行保持一致 */
@@ -1174,7 +1057,7 @@ p {
   overflow: hidden;
   grid-area: name;
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   text-align: center;
   text-overflow: ellipsis;
@@ -1194,7 +1077,7 @@ p {
   align-items: center;
   gap: 6px;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-row__status.is-owned {
@@ -1220,12 +1103,12 @@ p {
 
 .pet-row__obtain small {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-row__obtain p {
   color: var(--ui-ink);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
 }
 
@@ -1243,7 +1126,7 @@ p {
 }
 
 .pet-row__action {
-  min-width: 72px;
+  justify-self: end;
   grid-area: action;
 }
 
@@ -1260,9 +1143,9 @@ p {
     grid-template-areas: 'identity skills obtain action';
     /* 名称并入头像列、稀有度与状态另占一窄列：
        左侧占地从「52 + 被虚算撑宽的名称列」收缩为确定值，多出的宽度让给技能（1fr）。 */
-    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(200px, 280px) 80px;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr) minmax(200px, 280px) max-content;
     gap: 20px;
-    padding-inline: 22px;
+    --inset-left: 22px; --inset-right: 22px;
   }
 
   .pet-row__skills,
@@ -1274,7 +1157,7 @@ p {
 /* —— 守护记录 —— */
 .protect-log-summary {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 /* 标题栏里的版本：同样式，左对齐即可。 */
@@ -1282,11 +1165,17 @@ p {
   margin: 0;
 }
 
+.protect-log-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
 .protect-log-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 12px var(--panel-pad);
+  --inset-top: 12px; --inset-right: var(--panel-pad); --inset-bottom: 12px; --inset-left: var(--panel-pad);
 }
 
 .protect-log-avatar {
@@ -1310,7 +1199,7 @@ p {
   flex: 1;
   flex-direction: column;
   gap: 2px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   overflow-wrap: anywhere;
 }
 
@@ -1321,7 +1210,7 @@ p {
 .protect-log-copy span,
 .protect-log-row time {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 

@@ -31,6 +31,8 @@ const levelConfig = computed(() => state?.levels.find((v: any) => v.level === Nu
 const freeSlot = computed(() => Array.from({ length: Number(levelConfig.value?.employee_slot_count || 0) }, (_, index) => index)
   .find(index => !(state?.shop?.slots || []).some((slot: any) => Number(slot.slot_index || 0) === index && Number(slot.end_at) > now.value)))
 const canWork = computed(() => state?.active && !state?.settling)
+const canCraft = computed(() => state?.actionAvailability?.craft === true)
+const canExchange = computed(() => state?.actionAvailability?.exchange === true)
 const opened = computed(() => Number(state?.summary.shop_open_at) > 0)
 // 店铺、兑换、工作三个页签是主页面，其余页面都在弹窗里显示，弹窗自带标题
 const inDialog = computed(() => !['shop', 'exchange', 'work'].includes(page))
@@ -133,7 +135,7 @@ function changeRankPage(step: number) {
   request()
 }
 function craft(all = false) {
-  if (busy || !canWork.value)
+  if (busy || !canCraft.value)
     return
   const fruits = craftableFruits.value.filter(v => all || selectedFruitUids.value.includes(v.uid))
   if (!fruits.length)
@@ -330,7 +332,7 @@ onMounted(() => {
           </ul>
           <span v-if="goods.remaining !== null" class="tea-goods-card__meta">{{ limitLabel(goods.limitPeriod) }} {{ goods.remaining }}/{{ goods.purchaseLimit }}</span>
           <span v-for="condition in goods.conditions.filter((value: any) => !value.satisfied)" :key="condition.type" class="tea-goods-card__meta is-warning">需店铺等级 {{ condition.target }}（当前 {{ condition.current }}）</span>
-          <NButton class="tea-goods-card__buy" :type="goods.available ? 'primary' : 'default'" :secondary="!goods.available" block :disabled="busy || !state.active || !goods.available" @click="select('exchange', goods.name || goods.rewards[0]?.name, { goodsId: goods.id }, goods.costs, goods.rewards, exchangeMax(goods))">
+          <NButton class="tea-goods-card__buy" :type="goods.available ? 'primary' : 'default'" :secondary="!goods.available" block :disabled="busy || !canExchange || !goods.available" @click="select('exchange', goods.name || goods.rewards[0]?.name, { goodsId: goods.id }, goods.costs, goods.rewards, exchangeMax(goods))">
             <template v-if="goods.remaining === 0">
               已售罄
             </template>
@@ -385,7 +387,7 @@ onMounted(() => {
           <div class="tea-meter__text">
             <span>营业额</span><b>{{ revenueText }}</b>
           </div>
-          <div class="tea-meter__track" role="progressbar" aria-label="升级所需营业额" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.round(revenuePercent)" :aria-valuetext="revenueText">
+          <div class="tea-meter__track ui-progress-track" role="progressbar" aria-label="升级所需营业额" aria-valuemin="0" aria-valuemax="100" :aria-valuenow="Math.round(revenuePercent)" :aria-valuetext="revenueText">
             <span :style="{ width: `${revenuePercent}%` }" />
           </div>
         </div>
@@ -427,10 +429,10 @@ onMounted(() => {
         <p class="tea-note tea-panel__hint">
           勾选果实后确认制作，会消耗所选的整组果实。
         </p>
-        <NButton secondary :disabled="busy || !canWork || !craftableFruits.length" @click="craft(true)">
+        <NButton secondary :disabled="busy || !canCraft || !craftableFruits.length" @click="craft(true)">
           全部制作
         </NButton>
-        <NButton type="primary" :disabled="busy || !canWork || !selectedFruitUids.length" @click="craft(false)">
+        <NButton type="primary" :disabled="busy || !canCraft || !selectedFruitUids.length" @click="craft(false)">
           {{ selectedFruitUids.length ? `制作所选（${selectedFruitUids.length}）` : '制作所选' }}
         </NButton>
       </div>
@@ -448,7 +450,7 @@ onMounted(() => {
           </div>
           <ul v-if="fruitsOf(recipe).length" class="tea-fruits">
             <li v-for="fruit in fruitsOf(recipe)" :key="fruit.uid" class="tea-fruit" :class="{ 'is-checked': selectedFruitUids.includes(fruit.uid) }">
-              <NCheckbox :checked="selectedFruitUids.includes(fruit.uid)" :disabled="busy || fruit.locked || !canWork" @update:checked="toggleFruit(fruit.uid, $event)">
+              <NCheckbox :checked="selectedFruitUids.includes(fruit.uid)" :disabled="busy || fruit.locked || !canCraft" @update:checked="toggleFruit(fruit.uid, $event)">
                 <span class="tea-fruit__label">
                   <CommerceItemImage :src="fruit.image" :alt="fruit.name" size="sm" />
                   <span>{{ fruit.name }} <b>×{{ fruit.count }}</b></span>
@@ -657,14 +659,14 @@ p {
   gap: 6px;
   margin: 0;
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
 .tea-section__title small,
 .tea-list-title small {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-400);
   font-variant-numeric: tabular-nums;
 }
@@ -676,7 +678,7 @@ p {
   border: 0;
   background: transparent;
   font: inherit;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
   cursor: pointer;
 }
@@ -696,14 +698,14 @@ p {
 
 .tea-note {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
 }
 
 .tea-empty {
   padding: 16px 0;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-align: center;
 }
 
@@ -715,7 +717,7 @@ p {
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 20px;
   white-space: nowrap;
@@ -781,7 +783,7 @@ p {
   border-radius: 999px;
   color: #fff;
   background: rgba(24, 32, 27, 0.62);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 16px;
   font-variant-numeric: tabular-nums;
@@ -792,7 +794,7 @@ p {
   max-width: 100%;
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -820,7 +822,7 @@ p {
   border-radius: 999px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tea-pick {
@@ -831,7 +833,7 @@ p {
   color: var(--ui-muted);
   background: var(--ui-surface-solid);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   cursor: pointer;
   transition:
     color 0.15s ease,
@@ -885,14 +887,14 @@ p {
 }
 
 .tea-open__intro h3 {
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
 }
 
 .tea-open__intro p {
   margin-top: 4px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -905,7 +907,7 @@ p {
   border-radius: 12px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .tea-open__form {
@@ -958,7 +960,7 @@ p {
 }
 
 .tea-more :deep(.n-button__icon) {
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .tea-shelf {
@@ -1009,7 +1011,7 @@ p {
   min-width: 0;
   overflow: hidden;
   grid-area: name;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1022,7 +1024,7 @@ p {
   gap: 0 10px;
   grid-area: price;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1048,7 +1050,7 @@ p {
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 18px;
   white-space: nowrap;
@@ -1087,20 +1089,20 @@ p {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
 }
 
 .tea-card__head h3 small {
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-400);
   font-variant-numeric: tabular-nums;
 }
 
 .tea-card__head > span {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1145,7 +1147,7 @@ p {
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
@@ -1163,7 +1165,7 @@ p {
 
 .tea-staff__who strong {
   overflow: hidden;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1172,7 +1174,7 @@ p {
 .tea-staff__who small {
   overflow: hidden;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -1184,7 +1186,7 @@ p {
 .tea-staff__time {
   flex: none;
   color: var(--ui-ink);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   font-variant-numeric: tabular-nums;
 }
@@ -1200,7 +1202,7 @@ p {
   justify-content: space-between;
   gap: 12px;
   padding: 8px 0;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tea-cashier__cups li + li {
@@ -1222,7 +1224,7 @@ p {
 
 .tea-cashier__total h4 {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
 }
 
@@ -1252,7 +1254,7 @@ p {
 
 .tea-cashier__amount {
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -1265,7 +1267,7 @@ p {
 }
 
 .tea-make :deep(.n-button__icon) {
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 /* —— 兑换商店 —— */
@@ -1291,7 +1293,7 @@ p {
 .tea-goods-card__name {
   max-width: 100%;
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1299,7 +1301,7 @@ p {
 
 .tea-goods-card__meta {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1354,7 +1356,7 @@ p {
 .tea-rules p {
   margin: 0 0 6px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.8;
   white-space: pre-line;
 }
@@ -1436,7 +1438,7 @@ p {
   align-items: baseline;
   gap: 6px;
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-650);
 }
 
@@ -1465,7 +1467,7 @@ p {
 }
 
 .tea-switch-row strong {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-600);
 }
 
@@ -1474,7 +1476,7 @@ p {
   align-items: center;
   gap: 8px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tea-inline-field__select {
@@ -1489,7 +1491,7 @@ p {
   color: var(--ui-ink);
   background: var(--ui-surface-solid);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   color-scheme: light dark;
 }
 
@@ -1499,7 +1501,7 @@ p {
   gap: 4px;
   margin-left: auto;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tea-cost img {
@@ -1528,12 +1530,12 @@ p {
   justify-content: space-between;
   gap: 12px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tea-meter__text b {
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   font-variant-numeric: tabular-nums;
 }
@@ -1582,14 +1584,14 @@ p {
 }
 
 .tea-row__head strong {
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   font-variant-numeric: tabular-nums;
 }
 
 .tea-row__head > span:not(.tea-tag) {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1605,7 +1607,7 @@ p {
   flex-wrap: wrap;
   gap: 4px 20px;
   margin: 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tea-metrics div {
@@ -1638,7 +1640,7 @@ p {
 }
 
 .tea-recipe__text strong {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
@@ -1673,7 +1675,7 @@ p {
   flex-wrap: wrap;
   align-items: center;
   gap: 4px 10px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tea-fruit__label b {
@@ -1692,7 +1694,7 @@ p {
   align-items: center;
   gap: 10px 12px;
   padding: 10px 2px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tea-line + .tea-line {
@@ -1716,7 +1718,7 @@ p {
 
 .tea-line__main strong {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-600);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1746,7 +1748,7 @@ p {
 
 .tea-time time {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tea-stats {
@@ -1765,13 +1767,13 @@ p {
 
 .tea-stats dt {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tea-stats dd {
   margin: 2px 0 0;
   overflow-wrap: anywhere;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   font-variant-numeric: tabular-nums;
 }
@@ -1785,7 +1787,7 @@ p {
   border-radius: 999px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
 }
 

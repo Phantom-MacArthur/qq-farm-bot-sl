@@ -16,12 +16,14 @@ import ActivityDirectoryPage from './activity-center/ActivityDirectoryPage.vue'
 import AutumnActivityPage from './activity-center/AutumnActivityPage.vue'
 import CharityActivityPage from './activity-center/CharityActivityPage.vue'
 import MilkTeaPage from './activity-center/MilkTeaPage.vue'
+import MugePage from './activity-center/MugePage.vue'
 import PetDiaryPage from './activity-center/PetDiaryPage.vue'
 import QingMeiActivityPage from './activity-center/QingMeiActivityPage.vue'
 import QixiActivityPage from './activity-center/QixiActivityPage.vue'
 import StellarActivityPage from './activity-center/StellarActivityPage.vue'
 import WeatherActivityPage from './activity-center/WeatherActivityPage.vue'
 
+const props = withDefaults(defineProps<{ space?: 'farm' | 'ranch' }>(), { space: 'farm' })
 const router = useRouter()
 const notification = useNotification()
 const accountStore = useAccountStore()
@@ -57,7 +59,7 @@ async function openActivity(activity: ActivityDirectoryItemDto) {
 async function loadSelectedActivity() {
   const activity = selectedActivity.value
   const id = accountId()
-  if (!activity || !id || isOffline.value || ['pet', 'wish', 'happy', 'milk'].includes(activity))
+  if (!activity || !id || isOffline.value || ['pet', 'wish', 'happy', 'milk', 'muge'].includes(activity))
     return
   const detailsLoaded = await activityStore.loadDetails(id, activity)
   if (!detailsLoaded || isOffline.value || id !== accountId() || activity !== selectedActivity.value)
@@ -78,7 +80,8 @@ function goBack() {
 
 watch(currentAccountId, () => {
   selectedActivity.value = null
-  activityStore.refresh(accountId())
+  if (props.space === 'farm')
+    activityStore.refresh(accountId())
 }, { flush: 'post' })
 
 watch([notice, actionError], ([successMessage, failureMessage]) => {
@@ -111,7 +114,8 @@ watch([notice, actionError], ([successMessage, failureMessage]) => {
 useReconnectRefresh(() => selectedActivity.value ? loadSelectedActivity() : activityStore.refresh(accountId()))
 
 onMounted(() => {
-  activityStore.refresh(accountId())
+  if (props.space === 'farm')
+    activityStore.refresh(accountId())
 })
 onUnmounted(() => {
   appStore.activityDetailOpen = false
@@ -122,9 +126,11 @@ onUnmounted(() => {
   <ActivityDirectoryPage
     v-if="!selectedActivity || isOffline"
     :offline="isOffline"
+    :space="space"
     @back="goBack"
     @open="openActivity"
   />
+  <MugePage v-else-if="selectedActivity === 'muge'" @back="goBack" />
   <MilkTeaPage v-else-if="selectedActivity === 'milk'" @back="goBack" />
   <ShareRewardActivity v-else-if="selectedActivity === 'happy'" :activity-id="selectedInstanceId" @back="goBack" />
   <AutumnActivityPage
@@ -203,7 +209,7 @@ onUnmounted(() => {
   border-radius: 10px;
   color: #9a4048;
   background: rgba(250, 233, 234, 0.94);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .activity-message.success {
@@ -236,13 +242,13 @@ onUnmounted(() => {
 
 .activity-state strong {
   margin-top: 12px;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .activity-state span {
   margin-top: 4px;
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .activity-spinner {

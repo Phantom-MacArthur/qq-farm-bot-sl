@@ -281,7 +281,7 @@ watch(pet, (value) => {
                     <span>成长进度</span>
                     <b>{{ pet.nurture.adult ? '已达成' : `${pet.nurture.growth} / ${pet.nurture.adultGrowth}` }}</b>
                   </div>
-                  <progress :value="pet.nurture.growth" :max="pet.nurture.adultGrowth" :aria-label="`成长进度 ${growthPercent.toFixed(0)}%`" />
+                  <progress class="ui-progress-track" :value="pet.nurture.growth" :max="pet.nurture.adultGrowth" :aria-label="`成长进度 ${growthPercent.toFixed(0)}%`" />
                 </div>
                 <div class="pet-care">
                   <button v-if="!pet.nurture.initialized" type="button" class="pet-button pet-button--primary" :disabled="busy" @click="diary.operate('initialize')">
@@ -460,7 +460,7 @@ watch(pet, (value) => {
               </div>
               <span class="pet-chip pet-chip--gold">已解锁 {{ unlocked }} / {{ pet.stories.length }}</span>
             </section>
-            <div class="pet-album__bar" role="presentation">
+            <div class="pet-album__bar ui-progress-track" role="presentation">
               <i :style="{ width: `${albumPercent}%` }" />
             </div>
             <div class="pet-album__grid">
@@ -666,7 +666,7 @@ watch(pet, (value) => {
   color: var(--pet-ink);
   background: linear-gradient(180deg, #fffdf8 0%, #fbf6ec 46%, #fbf6ec 100%);
   font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -715,7 +715,7 @@ watch(pet, (value) => {
   border-radius: 10px;
   background: #fff;
   color: var(--ui-primary);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   cursor: pointer;
 }
@@ -738,7 +738,7 @@ watch(pet, (value) => {
 }
 
 .pet-title small {
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   letter-spacing: 0.04em;
   color: var(--pet-muted);
@@ -747,7 +747,7 @@ watch(pet, (value) => {
 .pet-title h1 {
   margin: 0;
   overflow: hidden;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -765,7 +765,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: #fff;
   color: var(--pet-ink-2);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
@@ -796,7 +796,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: #fff;
   color: var(--pet-accent-deep);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
   cursor: pointer;
@@ -872,12 +872,12 @@ watch(pet, (value) => {
   justify-content: space-between;
   gap: 8px;
   min-width: 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
 .pet-wallet__row strong {
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
   color: var(--pet-ink);
 }
@@ -886,7 +886,7 @@ watch(pet, (value) => {
   margin: 0;
   padding-top: 8px;
   border-top: 1px dashed var(--pet-line-soft);
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -894,7 +894,7 @@ watch(pet, (value) => {
   display: grid;
   flex: none;
   width: 34px;
-  height: 34px;
+  height: var(--ui-content-titlebar-control-height-34);
   place-items: center;
   border: 1px solid var(--pet-line);
   border-radius: 10px;
@@ -936,7 +936,7 @@ watch(pet, (value) => {
   border: 1px solid var(--pet-line);
   border-radius: 10px;
   background: #fff;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   color: var(--pet-ink-2);
 }
@@ -948,13 +948,13 @@ watch(pet, (value) => {
 
 .pet-message button {
   flex: none;
-  height: 28px;
+  height: var(--ui-content-item-control-height-30);
   padding: 0 10px;
   border: 1px solid currentcolor;
   border-radius: 8px;
   background: transparent;
   color: inherit;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
   cursor: pointer;
 }
@@ -1015,13 +1015,13 @@ watch(pet, (value) => {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 42px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 0 18px;
   border: 1px solid var(--pet-line);
   border-radius: 11px;
   background: #fff;
   color: var(--pet-ink);
-  font-size: 13.5px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
   line-height: 1.2;
   text-align: center;
@@ -1041,10 +1041,10 @@ watch(pet, (value) => {
 }
 
 .pet-button--small {
-  min-height: 34px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 0 13px;
   border-radius: 9px;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-button--primary {
@@ -1072,7 +1072,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: #fff;
   color: var(--pet-ink-2);
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   white-space: nowrap;
 }
@@ -1091,7 +1091,7 @@ watch(pet, (value) => {
 
 .pet-note {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -1110,7 +1110,7 @@ watch(pet, (value) => {
   border: 1px dashed var(--pet-line-strong);
   border-radius: 12px;
   color: var(--pet-muted);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-align: center;
 }
 
@@ -1124,7 +1124,7 @@ watch(pet, (value) => {
   flex-direction: column;
   min-height: 240px;
   border-color: transparent;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .pet-empty--tall strong {
@@ -1158,7 +1158,7 @@ watch(pet, (value) => {
   align-items: center;
   gap: 8px;
   margin: 0;
-  font-size: 14.5px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: 800;
   line-height: 1.35;
 }
@@ -1181,7 +1181,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: var(--pet-paper-2);
   color: var(--pet-muted);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   white-space: nowrap;
 }
@@ -1214,7 +1214,7 @@ watch(pet, (value) => {
 
 .pet-card__text {
   margin: 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.75;
   color: var(--pet-ink-2);
 }
@@ -1253,7 +1253,7 @@ watch(pet, (value) => {
 }
 
 .pet-reward strong {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   color: var(--pet-ink);
 }
@@ -1261,7 +1261,7 @@ watch(pet, (value) => {
 .pet-reward small {
   overflow: hidden;
   width: 100%;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.35;
   color: var(--pet-muted);
   text-overflow: ellipsis;
@@ -1324,7 +1324,7 @@ watch(pet, (value) => {
 
 .pet-hero__head h2 {
   margin: 0;
-  font-size: 21px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
   line-height: 1.25;
 }
@@ -1335,7 +1335,7 @@ watch(pet, (value) => {
   border: 1px solid var(--pet-line-soft);
   border-radius: 12px 12px 12px 4px;
   background: #fff;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   color: var(--pet-ink-2);
 }
 
@@ -1345,7 +1345,7 @@ watch(pet, (value) => {
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 6px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   color: var(--pet-muted);
 }
@@ -1393,7 +1393,7 @@ watch(pet, (value) => {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   color: var(--pet-ink-2);
   font-variant-numeric: tabular-nums;
@@ -1426,7 +1426,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: var(--ui-primary-soft);
   color: var(--ui-primary);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   cursor: pointer;
 }
@@ -1448,7 +1448,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: #fff;
   color: var(--pet-accent-deep);
-  font-size: 10.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-style: normal;
   font-weight: 800;
 }
@@ -1485,7 +1485,7 @@ watch(pet, (value) => {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
   line-height: 1.4;
 }
@@ -1495,20 +1495,20 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: var(--ui-primary-soft, #e4f1e7);
   color: var(--ui-primary, #438d63);
-  font-size: 10.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   line-height: 1.7;
 }
 
 .pet-charm p {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
   color: var(--pet-ink-2);
 }
 
 .pet-charm > div > span {
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -1523,13 +1523,13 @@ watch(pet, (value) => {
 .pet-steal select {
   flex: 1 1 180px;
   min-width: 0;
-  height: 38px;
+  height: var(--ui-content-item-control-height-30);
   padding: 0 10px;
   border: 1px solid var(--pet-line);
   border-radius: 10px;
   background: #fff;
   color: var(--pet-ink);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-steal__list {
@@ -1555,13 +1555,13 @@ watch(pet, (value) => {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
 .pet-steal__treasure > header strong {
   color: var(--pet-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .pet-steal__preview {
@@ -1572,7 +1572,7 @@ watch(pet, (value) => {
   padding: 8px 10px;
   border-radius: 10px;
   background: var(--pet-paper-2);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
@@ -1590,13 +1590,13 @@ watch(pet, (value) => {
 
 .pet-album__head h2 {
   margin: 0;
-  font-size: 19px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
 }
 
 .pet-album__head p {
   margin: 2px 0 0;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
 }
 
@@ -1671,7 +1671,7 @@ watch(pet, (value) => {
 }
 
 .pet-photo__empty small {
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
 }
 
@@ -1684,7 +1684,7 @@ watch(pet, (value) => {
 }
 
 .pet-photo__body strong {
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: 800;
 }
 
@@ -1715,7 +1715,7 @@ watch(pet, (value) => {
   border-radius: 12px;
   background: var(--pet-accent-soft);
   color: #8a6520;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 700;
 }
 
@@ -1771,7 +1771,7 @@ watch(pet, (value) => {
 }
 
 .pet-goods__item strong {
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   line-height: 1.4;
   text-align: center;
@@ -1782,7 +1782,7 @@ watch(pet, (value) => {
   flex-wrap: wrap;
   justify-content: center;
   gap: 4px 10px;
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   color: var(--pet-accent-deep);
   font-variant-numeric: tabular-nums;
@@ -1808,7 +1808,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: #f1eee8;
   color: var(--pet-muted);
-  font-size: 10.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
 }
 
@@ -1828,13 +1828,13 @@ watch(pet, (value) => {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 34px;
+  height: var(--ui-content-item-control-height-30);
   padding: 0 15px;
   border: 1px solid var(--pet-line);
   border-radius: 999px;
   background: #fff;
   color: var(--pet-ink-2);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   cursor: pointer;
 }
@@ -1877,7 +1877,7 @@ watch(pet, (value) => {
 
 .pet-solar__info h2 {
   margin: 0;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
 }
 
@@ -1915,7 +1915,7 @@ watch(pet, (value) => {
   border-radius: 11px;
   background: transparent;
   color: var(--pet-muted);
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   line-height: 1.2;
   white-space: nowrap;
@@ -1959,7 +1959,7 @@ watch(pet, (value) => {
   background: #fff;
   color: var(--pet-ink);
   font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   line-height: 1.6;
 }
 
@@ -1989,7 +1989,7 @@ watch(pet, (value) => {
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  font-size: 15.5px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: 800;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2052,18 +2052,18 @@ watch(pet, (value) => {
 
 .pet-dialog__product h3 {
   margin: 0;
-  font-size: 14.5px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: 800;
 }
 
 .pet-dialog__product p {
   margin: 2px 0 0;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-ink-2);
 }
 
 .pet-field {
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   color: var(--pet-ink-2);
 }
@@ -2083,7 +2083,7 @@ watch(pet, (value) => {
   border-radius: 10px;
   background: #fff;
   color: var(--pet-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: 800;
   cursor: pointer;
 }
@@ -2097,13 +2097,13 @@ watch(pet, (value) => {
   flex: 1 1 auto;
   width: 100%;
   min-width: 0;
-  height: 38px;
+  height: var(--ui-content-item-control-height-30);
   padding: 0 10px;
   border: 1px solid var(--pet-line);
   border-radius: 10px;
   background: #fff;
   color: var(--pet-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: 800;
   text-align: center;
   font-variant-numeric: tabular-nums;
@@ -2125,7 +2125,7 @@ watch(pet, (value) => {
   border-radius: 999px;
   background: var(--pet-accent-soft);
   color: #8a6520;
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: 800;
   font-variant-numeric: tabular-nums;
 }
@@ -2150,11 +2150,11 @@ watch(pet, (value) => {
   border: 1px solid var(--pet-line-soft);
   border-radius: 10px;
   background: var(--pet-paper);
-  font-size: 12.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .pet-log time {
-  font-size: 11.5px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   color: var(--pet-muted);
   font-variant-numeric: tabular-nums;
 }

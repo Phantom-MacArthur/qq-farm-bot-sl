@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { formatCountdown as formatTime } from '@/utils/format-countdown'
 
 /**
  * 一块地的卡片。结构固定为：标题栏（编号、土地类型、状态图标）/ 作物 / 名称 / 时间或主状态 / 进度。
@@ -28,18 +29,19 @@ const emit = defineEmits<{
   select: [land: any]
   open: [land: any]
   farm: [land: any]
+  fertilize: [land: any]
 }>()
 
 const land = computed(() => props.land || {})
 
 const SOILS: Record<number, { short: string, name: string }> = {
-  0: { short: '普通', name: '普通土地' },
-  1: { short: '普通', name: '普通土地' },
-  2: { short: '红土', name: '红土地' },
-  3: { short: '黑土', name: '黑土地' },
-  4: { short: '金土', name: '金土地' },
-  5: { short: '紫金', name: '紫金土地' },
-  6: { short: '蓝晶', name: '蓝晶土地' },
+  0: { short: '普', name: '普通土地' },
+  1: { short: '普', name: '普通土地' },
+  2: { short: '红', name: '红土地' },
+  3: { short: '黑', name: '黑土地' },
+  4: { short: '金', name: '金土地' },
+  5: { short: '紫', name: '紫金土地' },
+  6: { short: '蓝', name: '蓝晶土地' },
 }
 const level = computed(() => {
   const lv = Number(land.value.level) || 0
@@ -76,14 +78,6 @@ const stateTag = computed(() => {
   return null
 })
 
-function formatTime(sec: number) {
-  const value = Math.max(0, Math.floor(Number(sec) || 0))
-  const h = Math.floor(value / 3600)
-  const m = Math.floor((value % 3600) / 60)
-  const s = value % 60
-  return `${h > 0 ? `${h}:` : ''}${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-}
-
 /** 已生长的比例：越接近成熟越满。 */
 const growPercent = computed(() => {
   const total = Number(land.value.totalGrowTime) || 0
@@ -96,6 +90,16 @@ const growPercent = computed(() => {
 function safeImage(url: string) {
   return url && url.startsWith('http://') ? url.replace('http://', 'https://') : url
 }
+
+const seasonProgress = computed(() => {
+  if (!hasCrop.value || isFollower.value) return [0]
+  const total = Number(land.value.totalSeason) === 2 ? 2 : 1
+  const current = total === 2 && Number(land.value.currentSeason) === 2 ? 2 : 1
+  return Array.from({ length: total }, (_, index) => {
+    const season = index + 1
+    return season < current ? 100 : season === current ? growPercent.value : 0
+  })
+})
 
 // ---- 状态图标：需处理（实心）与加成/效果（描边）分两组 ----
 const needs = computed(() => {
@@ -171,9 +175,16 @@ const traits = computed(() => {
     seen.add(itemId)
     list.push({ key: `i${itemId}`, kind: 'effect', icon: 'i-carbon-checkmark-outline', title: `${effect.itemName || `道具${itemId}`}：已生效` })
   }
-  const left = land.value.leftInorcFertTimes
-  if (left != null && !Number.isNaN(Number(left)) && status.value === 'growing')
-    list.push({ key: 'organic', kind: Number(left) > 0 ? 'organic' : 'organic-off', icon: 'i-carbon-chemistry', title: Number(left) > 0 ? `还可施有机肥 ${left} 次` : '已无法再施有机肥' })
+  const remaining = Number(land.value.leftInorcFertTimes)
+  if (land.value.unlocked && !land.value.occupiedByMaster && status.value === 'growing'
+    && Number(land.value.matureInSec) > 0 && Number.isFinite(remaining) && remaining > 0) {
+    list.push({
+      key: 'normal-fertilizer',
+      kind: 'normal-fertilizer',
+      icon: 'i-carbon-chemistry',
+      title: `还可施普通肥 ${remaining} 次`,
+    })
+  }
   return list
 })
 
@@ -353,7 +364,7 @@ const ariaLabel = computed(() => {
 
 <template>
   <article
-    class="plot"
+    class="plot selection-card margin-shell"
     :class="[
       `plot--lv${level}`,
       stateTag ? `plot--${stateTag.kind}` : '',
@@ -362,6 +373,7 @@ const ariaLabel = computed(() => {
         'plot--follower': isFollower,
         'plot--interactive': interactive,
         'plot--selectable': selectable,
+        'selection-card--selected': selectable && selected,
         'plot--selected': selectable && selected,
         'plot--disabled': selectable && selectionDisabled,
       },
@@ -375,20 +387,20 @@ const ariaLabel = computed(() => {
     @click="activate"
     @keydown.enter.prevent="activate"
     @keydown.space.prevent="activate"
-  >
+  ><span class="margin-content">
     <header class="plot__top">
       <span class="plot__no">#{{ land.id }}</span>
       <button
         v-if="openable && !selectable"
         type="button"
-        class="plot__soil plot__soil-button"
+        class="plot__soil ui-area-badge"
         :title="`查看${soil.name}详情`"
         :aria-label="`查看第 ${land.id} 块地的${soil.name}详情`"
         @click.stop="emit('open', land)"
       >
         {{ soil.short }}
       </button>
-      <span v-else class="plot__soil" :title="soil.name">{{ soil.short }}</span>
+      <span v-else class="plot__soil ui-area-badge" :title="soil.name">{{ soil.short }}</span>
       <div v-if="allTags.length" class="plot__tags">
         <template v-for="item in allTags" :key="item.key">
           <button
@@ -420,6 +432,18 @@ const ariaLabel = computed(() => {
               <strong>变异</strong>&nbsp;&nbsp;<span>{{ item.title }}</span>
             </span>
           </span>
+          <button
+            v-else-if="item.kind === 'normal-fertilizer' && !selectable && openable"
+            type="button"
+            class="plot__trait is-normal-fertilizer plot__fertilize-button"
+            :title="`${item.title}，点击施肥`"
+            :aria-label="`为第 ${land.id} 块地施普通肥`"
+            :disabled="farmDisabled"
+            @click.stop="emit('fertilize', land)"
+            @keydown.stop
+          >
+            <span :class="item.icon" aria-hidden="true" />
+          </button>
           <span v-else class="plot__trait" :class="`is-${item.kind}`" :title="item.title">
             <img v-if="item.image" :src="item.image" alt="" @error="markMutantFailed(item.key)">
             <span v-else :class="item.icon" />
@@ -465,21 +489,23 @@ const ariaLabel = computed(() => {
       <span v-if="hasCrop && !isFollower" class="plot__growth-percent">{{ Math.round(growPercent) }}%</span>
     </div>
 
-    <div class="plot__bar" aria-hidden="true">
-      <i :style="{ width: `${isFollower || isEmpty || isLocked ? 0 : growPercent}%` }" />
+    <div class="plot__bars" aria-hidden="true">
+      <div v-for="(percent, index) in seasonProgress" :key="index" class="plot__bar ui-progress-track">
+        <i :style="{ width: `${percent}%` }" />
+      </div>
     </div>
-  </article>
+  </span></article>
   <Teleport to="body">
     <section
       v-if="cropDetailsOpen"
       ref="cropDetailsElement"
-      class="crop-detail-popover"
+      class="crop-detail-popover margin-shell"
       :class="{ 'crop-detail-popover--below': cropDetailsBelow }"
       :style="cropDetailsStyle"
       role="dialog"
       :aria-label="`${land.plantName}作物详情`"
       @click.stop
-    >
+    ><span class="margin-content">
       <div class="crop-detail-popover__content">
         <header class="crop-detail-popover__header">
           <strong>
@@ -488,47 +514,47 @@ const ariaLabel = computed(() => {
             <span class="crop-detail-popover__season">(生长季数 {{ Number(land.totalSeason) > 0 ? `${land.currentSeason}/${land.totalSeason}` : '—' }})</span>
           </strong>
         </header>
-        <div v-if="maturityProgress" class="crop-detail-popover__progress">
+        <div v-if="maturityProgress" class="crop-detail-popover__progress margin-shell"><span class="margin-content">
           <div class="crop-detail-popover__progress-head">
             <strong>成熟倒计时</strong>
             <b>{{ maturityProgress.percent }}%</b>
           </div>
-          <div class="crop-detail-popover__progress-track">
+          <div class="crop-detail-popover__progress-track ui-progress-track">
             <span :style="{ width: `${maturityProgress.percent}%` }" />
           </div>
           <div class="crop-detail-popover__progress-time">
             <span>已生长 {{ formatTime(maturityProgress.elapsed) }}</span>
             <span>总时长 {{ formatTime(maturityProgress.duration) }}</span>
           </div>
-        </div>
-        <div v-if="phaseProgress" class="crop-detail-popover__progress">
+        </span></div>
+        <div v-if="phaseProgress" class="crop-detail-popover__progress margin-shell"><span class="margin-content">
           <div class="crop-detail-popover__progress-head">
             <strong>阶段倒计时</strong>
             <b>{{ phaseProgress.percent }}%</b>
           </div>
-          <div class="crop-detail-popover__progress-track">
+          <div class="crop-detail-popover__progress-track ui-progress-track">
             <span :style="{ width: `${phaseProgress.percent}%` }" />
           </div>
           <div class="crop-detail-popover__progress-time">
             <span>当前阶段 {{ cropStage || '—' }}</span>
             <span>阶段时长 {{ formatTime(phaseProgress.duration) }}</span>
           </div>
-        </div>
-        <div v-if="cropMutationDetails.length" class="crop-detail-popover__mutations">
+        </span></div>
+        <div v-if="cropMutationDetails.length" class="crop-detail-popover__mutations margin-shell"><span class="margin-content">
           <strong>变异</strong>
           <ul>
             <li v-for="(effect, index) in cropMutationDetails" :key="`${index}-${effect}`">
               {{ effect }}
             </li>
           </ul>
-        </div>
+        </span></div>
         <div v-if="land.needWater || land.needWeed || land.needBug" class="crop-detail-popover__needs">
-          <span v-if="land.needWater">需要浇水</span>
-          <span v-if="land.needWeed">需要除草</span>
-          <span v-if="land.needBug">需要除虫</span>
+          <span v-if="land.needWater" class="ui-area-badge"><span>需要浇水</span></span>
+          <span v-if="land.needWeed" class="ui-area-badge"><span>需要除草</span></span>
+          <span v-if="land.needBug" class="ui-area-badge"><span>需要除虫</span></span>
         </div>
       </div>
-    </section>
+    </span></section>
   </Teleport>
 </template>
 
@@ -545,7 +571,7 @@ const ariaLabel = computed(() => {
   min-width: 180px;
   flex-direction: column;
   align-items: center;
-  padding: 8px 10px 9px;
+  --inset-top: 8px; --inset-right: 10px; --inset-bottom: 9px; --inset-left: 10px;
   border: 1px solid var(--soil-line);
   border-radius: 14px;
   color: var(--ui-ink);
@@ -611,13 +637,6 @@ const ariaLabel = computed(() => {
 .plot--follower .plot__name {
   opacity: 0.45;
 }
-.plot--selected,
-.plot--selected:hover {
-  border-color: var(--ui-primary);
-  box-shadow:
-    0 0 0 2px color-mix(in srgb, var(--ui-primary) 22%, transparent),
-    inset 0 0 0 1px var(--ui-primary);
-}
 .plot--disabled {
   cursor: not-allowed;
   opacity: 0.42;
@@ -638,36 +657,20 @@ const ariaLabel = computed(() => {
   grid-column: 1;
   grid-row: 1;
   color: var(--ui-subtle);
-  font-size: 12px;
-  font-weight: var(--fw-600);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
 }
 .plot__soil {
+  --ui-area-badge-tint: var(--soil-tint, var(--soil-ink));
   grid-column: 2;
   grid-row: 1;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 7px;
-  border: 1px solid transparent;
-  border-radius: 999px;
-  color: var(--soil-ink);
-  background: var(--soil-chip);
-  font-size: 12px;
-  font-weight: var(--fw-700);
-  line-height: 18px;
+  font-size: var(--ui-font-size-tiny-12);
+  font-weight: var(--fw-400) !important;
   white-space: nowrap;
 }
-.plot__soil-button {
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    border-color 0.15s ease,
-    box-shadow 0.15s ease;
-}
-.plot__soil-button:hover,
-.plot__soil-button:focus-visible {
-  border-color: color-mix(in srgb, var(--soil-ink) 55%, var(--soil-line));
-  box-shadow: 0 0 0 2px color-mix(in srgb, var(--soil-ink) 18%, transparent);
-  outline: none;
+.plot__soil:hover,
+.plot__soil:focus-visible {
+  outline: 1px solid var(--ui-area-badge-tint);
 }
 /* 状态图标组：在标题栏内（编号/土质标签之后、合种标记之前的剩余空间）整组居中，
    正对下方居中的作物图标；图标多时自动换行 */
@@ -705,7 +708,7 @@ const ariaLabel = computed(() => {
   display: grid;
   flex: none;
   place-items: center;
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 .plot__mutation-tooltip {
   position: absolute;
@@ -721,8 +724,8 @@ const ariaLabel = computed(() => {
   color: var(--ui-ink);
   background: var(--ui-surface-strong);
   box-shadow: 0 8px 22px rgb(15 23 42 / 20%);
-  font-size: 11px;
-  font-weight: var(--fw-500);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
   line-height: 1.5;
   text-align: left;
   overflow-x: auto;
@@ -738,7 +741,7 @@ const ariaLabel = computed(() => {
 }
 .plot__mutation-tooltip > strong {
   color: var(--ui-primary);
-  font-weight: var(--fw-700);
+  font-weight: var(--fw-400);
 }
 .plot__mutation-tooltip > span {
   font-weight: var(--fw-400);
@@ -756,8 +759,8 @@ const ariaLabel = computed(() => {
   justify-self: end;
   gap: 2px;
   color: var(--soil-ink);
-  font-size: 10px;
-  font-weight: var(--fw-700);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
 }
 /* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
 .plot__check {
@@ -772,7 +775,7 @@ const ariaLabel = computed(() => {
   border-radius: 50%;
   color: #fff;
   background: color-mix(in srgb, var(--ui-surface-strong) 65%, transparent);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .plot--selected .plot__check {
   border-color: var(--ui-primary-fill);
@@ -816,12 +819,12 @@ const ariaLabel = computed(() => {
 }
 .plot__crop-button:hover,
 .plot__crop-button:focus-visible {
-  background: color-mix(in srgb, var(--ui-primary) 9%, transparent);
-  outline: 2px solid color-mix(in srgb, var(--ui-primary) 36%, transparent);
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ui-primary);
 }
 .plot__placeholder {
   color: color-mix(in srgb, var(--soil-ink) 40%, transparent);
-  font-size: 24px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .plot__name {
@@ -833,8 +836,8 @@ const ariaLabel = computed(() => {
   gap: 2px;
   margin-top: 4px;
   overflow: hidden;
-  font-size: 12px;
-  font-weight: var(--fw-650);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
   line-height: 16px;
   text-align: center;
   text-overflow: ellipsis;
@@ -848,8 +851,8 @@ const ariaLabel = computed(() => {
 .plot__name-stage {
   flex: none;
   color: var(--ui-subtle);
-  font-size: 10px;
-  font-weight: var(--fw-500);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
 }
 
 .crop-detail-popover {
@@ -862,23 +865,26 @@ const ariaLabel = computed(() => {
   min-height: 0;
   box-sizing: border-box;
   overflow: visible;
-  padding: 12px;
+  --inset-top: 12px; --inset-right: 12px; --inset-bottom: 12px; --inset-left: 12px;
   border: 1px solid var(--ui-border-strong);
-  border-radius: 14px;
+  border-radius: var(--ui-radius-card);
   color: var(--ui-ink);
   background: var(--ui-surface-strong);
-  box-shadow: 0 12px 32px rgb(15 23 42 / 22%);
-  font-size: 12px;
+  box-shadow: var(--ui-shadow-md);
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .crop-detail-popover__content {
   display: flex;
   min-width: 0;
   max-height: calc(100dvh - 44px);
   flex-direction: column;
-  gap: 8px;
+  gap: var(--ui-content-vertical-gap);
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: none;
+}
+.crop-detail-popover__content :is(strong, b) {
+  font-weight: var(--fw-400);
 }
 .crop-detail-popover__content::-webkit-scrollbar {
   display: none;
@@ -912,8 +918,8 @@ const ariaLabel = computed(() => {
   min-width: 0;
   align-items: baseline;
   gap: 4px;
-  font-size: 13px;
-  font-weight: var(--fw-600);
+  font-size: var(--ui-font-size-small-13);
+  font-weight: var(--fw-400);
   white-space: nowrap;
 }
 .crop-detail-popover__plant-name {
@@ -923,18 +929,18 @@ const ariaLabel = computed(() => {
 }
 .crop-detail-popover__season {
   flex: none;
-  font-size: 10px;
-  font-weight: var(--fw-500);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
 }
 .crop-detail-popover__progress {
   margin: 0;
-  padding: 8px;
+  --inset-top: 8px; --inset-right: 8px; --inset-bottom: 8px; --inset-left: 8px;
   border-radius: 9px;
-  background: #ecfdf5;
+  background: var(--ui-surface-soft);
 }
 .crop-detail-popover__mutations {
   margin: 0;
-  padding: 8px;
+  --inset-top: 8px; --inset-right: 8px; --inset-bottom: 8px; --inset-left: 8px;
   border-radius: 9px;
   background: color-mix(in srgb, var(--ui-primary) 8%, transparent);
 }
@@ -948,33 +954,33 @@ const ariaLabel = computed(() => {
 .crop-detail-popover__progress-head strong {
   min-width: 0;
   flex: 1;
-  color: #047857;
+  color: var(--ui-ink);
   overflow-wrap: anywhere;
 }
 .crop-detail-popover__progress-head b {
   flex: none;
-  color: #059669;
+  color: var(--ui-primary);
   font-family: inherit;
   font-variant-numeric: tabular-nums;
 }
 .crop-detail-popover__progress-track {
+  --ui-progress-track-bg: color-mix(in srgb, var(--ui-ink) 24%, var(--ui-surface-soft));
   height: 6px;
-  margin-top: 6px;
+  margin-top: var(--ui-content-vertical-gap);
   overflow: hidden;
   border-radius: 999px;
-  background: #d1fae5;
 }
 .crop-detail-popover__progress-track span {
   display: block;
   height: 100%;
   border-radius: inherit;
-  background: #10b981;
+  background: var(--ui-primary);
   transition: width 0.3s ease;
 }
 .crop-detail-popover__progress-time {
-  margin-top: 5px;
-  color: var(--ui-subtle);
-  font-size: 10px;
+  margin-top: var(--ui-content-vertical-gap);
+  color: var(--ui-muted);
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-family: inherit;
   font-variant-numeric: tabular-nums;
 }
@@ -984,7 +990,7 @@ const ariaLabel = computed(() => {
   gap: 4px;
   line-height: 1.5;
 }
-.crop-detail-popover__mutations > strong {
+.crop-detail-popover__mutations > .margin-content > strong {
   color: var(--ui-primary);
 }
 .crop-detail-popover__mutations ul {
@@ -993,38 +999,32 @@ const ariaLabel = computed(() => {
   list-style: none;
 }
 .crop-detail-popover__mutations li {
-  position: relative;
-  padding-left: 9px;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
   font-weight: var(--fw-400);
 }
 .crop-detail-popover__mutations li::before {
-  position: absolute;
-  top: 2px;
-  left: 0;
+  flex: none;
   color: var(--ui-subtle);
   content: '•';
-  font-size: 8px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
-.crop-detail-popover__needs span {
-  padding: 2px 7px;
-  border-radius: 999px;
-  color: var(--ui-ink);
-  background: color-mix(in srgb, var(--ui-warning) 14%, transparent);
-  font-size: 10px;
+.crop-detail-popover__needs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
-:global(.dark) .crop-detail-popover__progress {
-  background: rgb(6 78 59 / 0.35);
+.crop-detail-popover__needs .ui-area-badge {
+  --ui-area-badge-tint: var(--ui-warning);
+  --ui-area-badge-strength: 14%;
+  padding: 0;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
-:global(.dark) .crop-detail-popover__progress-head strong {
-  color: #6ee7b7;
+.crop-detail-popover__needs .ui-area-badge > span {
+  display: block;
+  margin: 2px 7px;
 }
-:global(.dark) .crop-detail-popover__progress-head b {
-  color: #34d399;
-}
-:global(.dark) .crop-detail-popover__progress-track {
-  background: #064e3b;
-}
-
 .plot__time {
   display: flex;
   width: 100%;
@@ -1040,16 +1040,16 @@ const ariaLabel = computed(() => {
   min-width: 0;
   overflow: hidden;
   color: var(--ui-warning);
-  font-size: 10px;
-  font-weight: var(--fw-700);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .plot__growth-percent {
   flex: none;
   color: var(--ui-subtle);
-  font-size: 10px;
-  font-weight: var(--fw-600);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
 }
 .plot__state {
   min-width: 0;
@@ -1062,8 +1062,8 @@ const ariaLabel = computed(() => {
   overflow: hidden;
   padding: 0 7px;
   border-radius: 999px;
-  font-size: 10px;
-  font-weight: var(--fw-700);
+  font-size: var(--ui-content-item-font-height-tiny-12);
+  font-weight: var(--fw-400);
   line-height: 18px;
   white-space: nowrap;
 }
@@ -1082,13 +1082,19 @@ const ariaLabel = computed(() => {
 .plot__state.is-muted {
   color: var(--ui-subtle);
   padding: 0;
-  font-weight: var(--fw-500);
+  font-weight: var(--fw-400);
 }
 
-.plot__bar {
+.plot__bars {
+  display: flex;
   width: 100%;
-  height: 4px;
+  gap: 3px;
   margin-top: 5px;
+}
+.plot__bar {
+  flex: 1;
+  min-width: 0;
+  height: 4px;
   overflow: hidden;
   border-radius: 999px;
   background: color-mix(in srgb, var(--soil-ink) 12%, transparent);
@@ -1109,8 +1115,7 @@ const ariaLabel = computed(() => {
   flex: none;
   place-items: center;
   border-radius: 999px;
-  font-size: 11px;
-  cursor: help;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 /* 图标块级、固定尺寸，去掉行内元素的行高与基线留白，圆内上下居中 */
 .plot__need,
@@ -1147,10 +1152,19 @@ const ariaLabel = computed(() => {
   cursor: not-allowed;
   opacity: 0.55;
 }
-.plot__need:not(:disabled):hover,
-.plot__need:not(:disabled):focus-visible {
-  outline: 2px solid color-mix(in srgb, currentColor 45%, transparent);
-  outline-offset: 1px;
+button.plot__need {
+  width: 20px;
+  height: 20px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ui-ink) 40%, transparent);
+}
+button.plot__need > span {
+  width: 16px;
+  height: 16px;
+}
+button.plot__need:not(:disabled):hover,
+button.plot__need:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--ui-ink);
 }
 .plot__need.is-water {
   background: #4b9fd5;
@@ -1172,12 +1186,28 @@ const ariaLabel = computed(() => {
 .plot__trait.is-effect {
   color: var(--ui-blue);
 }
-.plot__trait.is-organic {
+.plot__trait.is-normal-fertilizer {
   color: #5f8f1d;
 }
-.plot__trait.is-organic-off {
-  color: var(--ui-subtle);
-  opacity: 0.7;
+.plot__trait.is-normal-fertilizer {
+  width: 20px;
+  height: 20px;
+  border: 0;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, currentColor 60%, transparent);
+}
+.plot__trait.is-normal-fertilizer > span {
+  width: 16px;
+  height: 16px;
+}
+.plot__trait.is-normal-fertilizer:hover {
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+.plot__fertilize-button {
+  cursor: pointer;
+}
+.plot__fertilize-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 /* 深色：深灰卡面，类型色只在顶部渐变、描边和类型标签上 */
 .dark .plot {
@@ -1202,16 +1232,12 @@ const ariaLabel = computed(() => {
 .dark .plot--lv5 {
   --soil-tint: #b892f0;
 }
-.dark .plot__soil,
 .dark .plot__joint {
   color: var(--soil-tint);
   background: color-mix(in srgb, var(--soil-tint) 15%, transparent);
 }
 .dark .plot__joint {
   background: transparent;
-}
-.dark .plot--selected {
-  border-color: var(--ui-primary);
 }
 .dark .plot__trait {
   background: transparent;

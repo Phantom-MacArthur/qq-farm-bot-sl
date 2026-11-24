@@ -39,7 +39,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
       </div>
       <template v-if="percent !== null">
         <div
-          class="book-overview__track"
+          class="book-overview__track ui-progress-track"
           role="progressbar"
           :aria-label="`${title}进度`"
           aria-valuemin="0"
@@ -106,7 +106,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 }
 
 .book-overview__badge b {
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   line-height: 1.1;
   font-variant-numeric: tabular-nums;
@@ -114,7 +114,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 
 .book-overview__badge small {
   margin-top: 2px;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   opacity: 0.8;
 }
 
@@ -142,7 +142,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   gap: 6px;
   margin: 0;
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   line-height: 1.3;
   white-space: nowrap;
@@ -150,7 +150,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
 
 .book-overview__heading h3 > span {
   color: var(--ui-primary);
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .book-overview__caption {
@@ -159,15 +159,15 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
 .book-overview__track {
+  --ui-progress-track-bg: color-mix(in srgb, var(--ui-ink) 24%, var(--ui-surface-soft));
   height: 6px;
   overflow: hidden;
   border-radius: 999px;
-  background: var(--ui-surface-soft);
 }
 
 .book-overview__track > span {
@@ -184,7 +184,7 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   justify-content: space-between;
   gap: 12px;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 /* 说明文字先省略，右侧数值（如 860 / 1000）始终完整 */
@@ -232,14 +232,14 @@ const width = computed(() => `${Math.max(0, Math.min(100, props.percent ?? 0))}%
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 18px;
 }
 
 :slotted(.book-chip-label) {
   margin-right: 2px;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 24px;
 }
 </style>

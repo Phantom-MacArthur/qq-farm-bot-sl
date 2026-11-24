@@ -56,18 +56,18 @@ const emit = defineEmits<{ close: [] }>()
 }
 .guide-step strong {
   margin-top: 5px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
 }
 .guide-step small {
   margin-top: 2px;
   color: #996327;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: nowrap;
 }
 .guide-arrow {
   color: #c47d30;
-  font-size: 19px;
+  font-size: var(--ui-font-size-large-15);
   text-align: center;
 }
 .guide-icon {
@@ -80,7 +80,7 @@ const emit = defineEmits<{ close: [] }>()
   color: white;
   background: radial-gradient(circle at 40% 32%, #ffe8a1, #d98832 66%, #985121);
   box-shadow: 0 3px 6px rgba(107, 60, 19, 0.35);
-  font-size: 30px;
+  font-size: var(--ui-font-size-large-15);
   text-shadow: 0 2px 2px #85501c;
 }
 .guide-icon--fruit {
@@ -97,7 +97,7 @@ const emit = defineEmits<{ close: [] }>()
 .guide-note {
   margin: 9px 2px 17px;
   color: #a26325;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-align: center;
 }
 </style>

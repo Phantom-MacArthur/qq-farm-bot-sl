@@ -76,7 +76,7 @@ function handleLandTypesChange(value: (string | number)[]) {
       <span class="text-xs text-gray-500 tabular-nums">等级: {{ seed.requiredLevel }}</span>
       <button
         type="button"
-        class="grid h-7 w-7 shrink-0 cursor-pointer place-items-center rounded text-[var(--theme-primary)] disabled:cursor-default hover:bg-gray-200 disabled:text-gray-400 disabled:opacity-40 dark:hover:bg-gray-700"
+        class="grid h-[var(--ui-content-item-control-height-30)] w-7 shrink-0 cursor-pointer place-items-center rounded text-[var(--theme-primary)] disabled:cursor-default hover:bg-gray-200 disabled:text-gray-400 disabled:opacity-40 dark:hover:bg-gray-700"
         :disabled="index === 0"
         :aria-label="`置顶${seed.name}`"
         :title="index === 0 ? '已置顶' : '置顶'"

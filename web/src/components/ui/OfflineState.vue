@@ -19,8 +19,8 @@ const accountStore = useAccountStore()
       <RefreshButton
         label="重新加载账号信息"
         :loading="accountStore.bulkKind === 'start'"
-        :disabled="accountStore.bulkRunning"
-        @click="accountStore.startAllAccounts()"
+        :disabled="accountStore.bulkRunning || !accountStore.currentAccountId"
+        @click="accountStore.reloadCurrentAccount()"
       />
     </slot>
   </div>

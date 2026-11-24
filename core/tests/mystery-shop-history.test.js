@@ -70,8 +70,16 @@ function mockMysteryPurchase(t, getReply, sendBuy) {
   t.mock.method(warehouse, 'getBagItems', items => items);
   t.mock.method(require('../dist/services/pay'), 'getDiamondBalance', async () => 0);
   t.mock.method(mysteryShop, 'getActiveNPC', async () => getReply());
-  const buy = t.mock.method(mysteryShop, 'buy', sendBuy);
+  const buy = t.mock.method(mysteryShop, 'buy', async (_npcId, onSent) => {
+    onSent();
+    await sendBuy();
+  });
   return { buy, purchase: require('../dist/services/commerce').purchaseMysteryOffer };
+}
+
+function notifyItems(...changes) {
+  const { networkEvents } = require('../dist/utils/network');
+  networkEvents.emit('itemChanges', changes.map(([id, delta]) => ({ item: { id }, delta })));
 }
 
 function reply(activeTime, count = 3) {
@@ -87,7 +95,10 @@ function reply(activeTime, count = 3) {
 test('concurrent purchases send only once and a new visit can be purchased', async (t) => {
   let visit = Math.floor(Date.now() / 1000) - 10;
   let count = 3;
-  const { buy, purchase } = mockMysteryPurchase(t, () => reply(visit, count), async () => { count = 1; });
+  const { buy, purchase } = mockMysteryPurchase(t, () => reply(visit, count), async () => {
+    notifyItems([9001, count], [1001, -count * 500]);
+    count = 1;
+  });
   const results = await Promise.allSettled([purchase(42), purchase(42)]);
   assert.deepEqual(results.map(result => result.status), ['fulfilled', 'rejected']);
   assert.equal(buy.mock.callCount(), 1);
@@ -100,10 +111,14 @@ test('concurrent purchases send only once and a new visit can be purchased', asy
   assert.equal(mysteryShop.getMysteryShopHistory(ACCOUNT_ID).length, 2);
 });
 
-test('disappearance after submit is not success, and reloading does not submit again', async (t) => {
+test('disappearance and debit without delivery do not record a purchase or allow a duplicate', async (t) => {
   const visit = Math.floor(Date.now() / 1000) - 10;
   let visible = true;
-  const { buy, purchase } = mockMysteryPurchase(t, () => visible ? reply(visit) : {}, async () => { visible = false; });
+  const { buy, purchase } = mockMysteryPurchase(t, () => visible ? reply(visit) : {}, async () => {
+    visible = false;
+    notifyItems([1001, -1500]);
+    require('../dist/utils/network').networkEvents.emit('disconnected');
+  });
   await assert.rejects(purchase(42));
   assert.deepEqual(mysteryShop.getMysteryShopHistory(ACCOUNT_ID), []);
   assert.equal(buy.mock.callCount(), 1);
@@ -125,4 +140,17 @@ test('disappearance after submit is not success, and reloading does not submit a
     require.cache[serviceId] = originalService;
     require.cache[shopId] = originalShop;
   }
+});
+
+test('matching delivery and debit confirm a purchase even when the merchant disappears', async (t) => {
+  const visit = Math.floor(Date.now() / 1000) - 10;
+  let visible = true;
+  const { purchase } = mockMysteryPurchase(t, () => visible ? reply(visit) : {}, async () => {
+    visible = false;
+    notifyItems([1001, -1500]);
+    notifyItems([9001, 3]);
+  });
+  const result = await purchase(42);
+  assert.equal(result.shop.active, false);
+  assert.equal(mysteryShop.getMysteryShopHistory(ACCOUNT_ID).length, 1);
 });

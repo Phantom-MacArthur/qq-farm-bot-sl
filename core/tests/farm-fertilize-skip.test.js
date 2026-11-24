@@ -38,7 +38,9 @@ require.cache[utilsPath] = {
     },
 };
 
-const { fertilize, isSkippableFertilizeLandError } = require('../dist/services/farm/api');
+const { fertilize, fertilizeOrganicLoop, isSkippableFertilizeLandError } = require('../dist/services/farm/api');
+
+test.beforeEach(() => { outcomes.length = 0; });
 
 test('isSkippableFertilizeLandError recognizes per-land fertilize rejects', () => {
     assert.equal(isSkippableFertilizeLandError({ code: 1001024 }), true);
@@ -72,3 +74,23 @@ test('fertilize skips 1001025 lands and continues, then stops on other errors', 
     assert.equal(count, 2);
     assert.equal(outcomes.length, 1);
 });
+
+for (const organic of [false, true]) {
+    test(`${organic ? 'organic loop' : 'normal fertilizer'} preserves partial success on stock shortage in strict mode`, async () => {
+        outcomes.push(() => ({}), () => {
+            throw Object.assign(new Error('肥料不足'), { code: 1000019 });
+        }, () => ({}));
+        const count = organic
+            ? await fertilizeOrganicLoop([1, 2, 3], true)
+            : await fertilize([1, 2, 3], 1011, true);
+        assert.equal(count, 1);
+        assert.equal(outcomes.length, 1, 'must not retry after fertilizer is exhausted');
+    });
+
+    test(`${organic ? 'organic loop' : 'normal fertilizer'} still propagates network failures`, async () => {
+        outcomes.push(() => { throw new Error('network down'); });
+        await assert.rejects(organic
+            ? fertilizeOrganicLoop([1], true)
+            : fertilize([1], 1011, true), /network down/);
+    });
+}

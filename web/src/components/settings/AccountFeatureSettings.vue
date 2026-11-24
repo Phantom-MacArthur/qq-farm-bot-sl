@@ -230,7 +230,7 @@ function finish() {
                     v-for="option in fertilizerLandTypeOptions"
                     :key="option.value"
                     type="button"
-                    class="min-h-11 flex items-center justify-between gap-3 border rounded-lg px-3 py-2 text-left text-sm transition"
+                    class="min-h-[var(--ui-content-item-control-height-30)] flex items-center justify-between gap-3 border rounded-lg px-3 py-2 text-left text-sm transition"
                     :class="isLandSelected(option.value)
                       ? 'text-gray-900 font-medium dark:text-gray-100'
                       : 'border-gray-200 bg-white text-gray-600 hover:border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-gray-600 dark:hover:bg-gray-700/60'"

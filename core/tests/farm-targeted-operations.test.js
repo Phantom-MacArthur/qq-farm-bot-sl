@@ -105,22 +105,20 @@ test('harvest operation is restricted to the selected land', async () => {
     assert.deepEqual(calls, [['harvest', [2]]]);
 });
 
-test('plant operation only removes and replants the selected land', async () => {
+test('standalone planting is rejected without changing any land', async () => {
     calls.length = 0;
     status = makeStatus({ empty: [1, 2], dead: [3] });
-
-    await runFarmOperation('plant', 2, true);
-
-    assert.deepEqual(calls, [['plant', [], [2], [2]]]);
+    await assert.rejects(runFarmOperation('plant', 2, true));
+    await assert.rejects(runFarmOperation('plant', 3, true));
+    assert.deepEqual(calls, []);
 });
 
-test('planting a selected dead land keeps its cleanup and replanting target scoped', async () => {
+test('backpack planting passes only empty lands to the planting strategy', async () => {
     calls.length = 0;
-    status = makeStatus({ empty: [1, 2], dead: [3] });
-
-    await runFarmOperation('plant', 3, true);
-
-    assert.deepEqual(calls, [['plant', [3], [], [3]]]);
+    status = makeStatus({ empty: [2], dead: [3], harvestable: [1] });
+    const result = await runFarmOperation('plant_empty', null, true);
+    assert.deepEqual(calls, [['plant', [], [2], undefined]]);
+    assert.equal(result.counts.plant, 1);
 });
 
 test('upgrade operation is restricted to the selected upgradable land', async () => {

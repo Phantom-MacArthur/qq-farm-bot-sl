@@ -43,6 +43,8 @@ export function pickAccountBatchTargets(
     .filter((account) => {
       if (allowed && !allowed.has(String(account.id)))
         return false
+      if (kind === 'start')
+        return isStopped(account) || account.online === false
       return kind === 'stop' ? !isStopped(account) : isStopped(account)
     })
     .map(account => String(account.id))

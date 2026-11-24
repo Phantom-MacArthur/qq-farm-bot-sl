@@ -1,5 +1,10 @@
 <script setup lang="ts">
+import { useRoute } from 'vue-router'
+import GameSpaceSwitch from '@/components/GameSpaceSwitch.vue'
 import TopAccountMenu from '@/components/TopAccountMenu.vue'
+import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
+
+const route = useRoute()
 </script>
 
 <template>
@@ -14,8 +19,10 @@ import TopAccountMenu from '@/components/TopAccountMenu.vue'
       </h1>
     </div>
 
-    <!-- 右侧：账号切换 -->
-    <div class="flex shrink-0 items-center">
+    <!-- 右侧：主题、空间和账号 -->
+    <div class="flex shrink-0 items-center gap-2">
+      <ThemeSwitcher />
+      <GameSpaceSwitch v-if="route.name !== 'dashboard'" />
       <TopAccountMenu />
     </div>
   </header>
@@ -49,7 +56,7 @@ import TopAccountMenu from '@/components/TopAccountMenu.vue'
   overflow: hidden;
   margin: 0;
   color: var(--ui-ink);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   /* 28px 行盒在 48px 标题栏内居中后，文字上缘恰好落在侧栏「收起边栏」按钮的上沿（12px） */
   line-height: 1.4;

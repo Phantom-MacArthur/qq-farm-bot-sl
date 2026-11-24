@@ -50,11 +50,11 @@ test('bulk fertilizer applies authoritative partial results and blocks duplicate
 
 test('fertilizer replies cannot overwrite another account or clear its pending request', async (t) => {
   const requests = []
-  const { store } = harness(t, 'farm', {
+  const { store, account } = harness(t, 'farm', {
     post: () => new Promise(resolve => requests.push(resolve)),
   })
   const old = store.fertilizeAll('a', 'normal')
-  store.resetLandState()
+  account.currentAccountId = 'b'
   store.lands = [{ id: 1, status: 'growing', matureInSec: 800 }]
   const current = store.fertilizeAll('b', 'organic')
   requests[0]({ data: { ok: true, data: { updatedLands: [{ id: 1, status: 'harvestable', matureInSec: 0 }] } } })

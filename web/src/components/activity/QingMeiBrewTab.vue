@@ -209,20 +209,20 @@ function itemCount(uid: string) {
 .qingmei-kicker {
   display: block;
   color: #5c7b6c;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .qingmei-hero h1 {
   margin: 2px 0 5px;
   color: #2b493f;
-  font-size: 30px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1.1;
   letter-spacing: 0;
 }
 .qingmei-hero p {
   margin: 0;
   color: #647a70;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .qingmei-panel {
   margin-bottom: 12px;
@@ -256,15 +256,15 @@ function itemCount(uid: string) {
 .ingredient span,
 .section-heading span {
   color: #718276;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .ingredient strong {
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
 }
 .seed-button,
 .start-controls button,
 .brew-actions button {
-  min-height: 38px;
+  min-height: var(--ui-content-item-control-height-30);
   padding: 0 13px;
   border: 0;
   border-radius: 10px;
@@ -288,7 +288,7 @@ function itemCount(uid: string) {
 }
 .section-heading strong {
   margin-top: 2px;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 .base-price {
   padding: 4px 7px;
@@ -311,13 +311,13 @@ function itemCount(uid: string) {
 .setup-label,
 .start-controls > span {
   color: #64766b;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .setup-heading button {
   border: 0;
   color: #2e8a66;
   background: transparent;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
   cursor: pointer;
 }
@@ -372,14 +372,14 @@ function itemCount(uid: string) {
 }
 .ingredient-toggle strong {
   overflow: hidden;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .ingredient-toggle small {
   margin-top: 3px;
   color: #708277;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 /* 多选勾选框全站统一：16px 圆形（对齐「作物图鉴」图标右上角的 .book-tile__check）。 */
 .selection-mark {
@@ -392,7 +392,7 @@ function itemCount(uid: string) {
   border-radius: 50%;
   color: white;
   background: white;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .ingredient-choice.selected .selection-mark {
   border-color: #2e8a66;
@@ -408,7 +408,7 @@ function itemCount(uid: string) {
 }
 .count-control button,
 .count-control input {
-  height: 38px;
+  height: var(--ui-content-item-control-height-30);
   border: 1px solid #9eb5a7;
   border-radius: 8px;
 }
@@ -424,7 +424,7 @@ function itemCount(uid: string) {
   opacity: 0.45;
 }
 .count-control .maximum-button {
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .count-control input {
@@ -433,7 +433,7 @@ function itemCount(uid: string) {
   padding: 0 6px;
   color: #203a32;
   background: rgba(255, 255, 255, 0.82);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   text-align: center;
 }
 .quote-grid {
@@ -455,13 +455,13 @@ function itemCount(uid: string) {
 }
 .quote span,
 .quote small {
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .quote strong {
   max-width: 100%;
   overflow: hidden;
   color: #8d633f;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   text-overflow: ellipsis;
 }
 .quote.pending {
@@ -469,7 +469,7 @@ function itemCount(uid: string) {
 }
 .quote.pending strong {
   color: #728079;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .brew-actions {
   display: grid;
@@ -490,7 +490,7 @@ function itemCount(uid: string) {
 .first-quote-hint {
   margin: 9px 0 0;
   color: #667b6f;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   text-align: center;
 }
 .qingmei-rules {
@@ -500,13 +500,13 @@ function itemCount(uid: string) {
   border-radius: 14px;
   color: #647a70;
   background: rgba(255, 255, 255, 0.42);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.65;
 }
 .qingmei-rules h2 {
   margin: 0 0 7px;
   color: #2b493f;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .qingmei-rules p {
   margin: 4px 0;

@@ -91,7 +91,7 @@ function confirm() {
             <strong>{{ remaining ? `剩余 ${duration(remaining)}` : '已结束' }}</strong>
             <time>{{ date(shift.end_at) }} 下班</time>
           </div>
-          <div class="work-clock__track" role="progressbar" aria-label="班次进度" :aria-valuenow="Math.round(progress)" aria-valuemin="0" aria-valuemax="100">
+          <div class="work-clock__track ui-progress-track" role="progressbar" aria-label="班次进度" :aria-valuenow="Math.round(progress)" aria-valuemin="0" aria-valuemax="100">
             <span :style="{ width: `${progress}%` }" />
           </div>
         </div>
@@ -183,7 +183,7 @@ dd {
 small {
   display: block;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.6;
 }
 
@@ -198,7 +198,7 @@ small {
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
   line-height: 20px;
   white-space: nowrap;
@@ -212,7 +212,7 @@ small {
 .work-empty {
   padding: 16px 0;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-align: center;
 }
 
@@ -222,7 +222,7 @@ small {
   justify-content: flex-end;
   gap: 4px;
   color: var(--ui-primary);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   font-variant-numeric: tabular-nums;
 }
@@ -270,7 +270,7 @@ small {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
 }
 
@@ -303,7 +303,7 @@ small {
 
 .work-employer strong {
   display: block;
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
 }
 
@@ -340,13 +340,13 @@ small {
 }
 
 .work-clock__text strong {
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
 }
 
 .work-clock__text time {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .work-clock__track {
@@ -369,7 +369,7 @@ small {
   justify-content: space-between;
   gap: 16px;
   padding: 10px 0;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 
 .work-details > div + div {
@@ -417,7 +417,7 @@ small {
 }
 
 .work-record__main strong {
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-600);
 }
 
@@ -518,7 +518,7 @@ small {
 .work-choice__text strong {
   display: block;
   margin-bottom: 2px;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
@@ -530,7 +530,7 @@ small {
   justify-content: space-between;
   gap: 12px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .work-options__foot b {

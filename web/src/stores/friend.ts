@@ -467,12 +467,12 @@ export const useFriendStore = defineStore('friend', () => {
         const lands = applyFriendLandOverlay(key, res.data.data.lands || [])
         const summary = res.data.data.summary || null
         friendLands.value[key] = lands
-        friendCareer.value = { ...friendCareer.value, [key]: res.data.data.career || null }
+        if (res.data.data.career)
+          friendCareer.value = { ...friendCareer.value, [key]: res.data.data.career }
         syncFriendPlantSummary(key, lands, summary)
         return true
       }
       friendLands.value[key] = []
-      friendCareer.value = { ...friendCareer.value, [key]: null }
       friendLandsError.value[key] = true
       return false
     }
@@ -480,7 +480,6 @@ export const useFriendStore = defineStore('friend', () => {
       if (sequence !== friendLandRequestSequence)
         return false
       friendLands.value[key] = []
-      friendCareer.value = { ...friendCareer.value, [key]: null }
       friendLandsError.value[key] = true
       return false
     }

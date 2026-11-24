@@ -171,8 +171,8 @@ onUnmounted(() => {
 
 <template>
   <div class="mall-catalog panel-fill">
-    <section class="mall-card page-card-surface rounded-2xl panel-scroll-layout">
-      <div class="mall-head panel-titlebar shrink-0">
+    <section class="mall-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <div class="mall-head panel-titlebar shrink-0 margin-shell"><span class="margin-content">
         <CommerceShopBar
           class="mall-shopbar"
           :currencies="currencies"
@@ -191,7 +191,7 @@ onUnmounted(() => {
             />
           </template>
         </CommerceShopBar>
-      </div>
+      </span></div>
 
       <div class="mall-body panel-scroll-body">
         <div v-if="!isOffline && ((error && mall) || notice)" class="shop-message" :class="{ 'is-success': !!notice && !error }" role="status">
@@ -271,9 +271,10 @@ onUnmounted(() => {
           </article>
         </section>
       </div>
-    </section>
+    </span></section>
 
     <PurchaseDialog
+      mall-typography
       :open="!isOffline && !!selected"
       :goods="selected"
       :limit-label="selected ? limitLabel(selected) : undefined"
@@ -314,207 +315,11 @@ onUnmounted(() => {
   min-height: 240px;
   place-items: center;
   color: var(--ui-primary);
-  font-size: 28px;
-}
-
-/* 横向紧凑卡：图 | 名称与内容 | 价格与按钮。内容压成一行，所有卡片等高。 */
-.goods-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-  gap: 12px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .goods-card {
-  display: grid;
-  min-width: 0;
-  min-height: 104px;
-  grid-template-columns: 64px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 14px;
   padding: 14px 16px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-card);
-  background: var(--ui-surface);
-  box-shadow:
-    inset 0 1px 0 var(--glass-highlight),
-    var(--ui-shadow-sm);
-  transition:
-    border-color 0.15s ease,
-    opacity 0.15s ease;
-}
-
-.goods-card:hover {
-  border-color: color-mix(in srgb, var(--ui-primary) 30%, var(--ui-border));
-}
-
-.goods-card.is-unavailable {
-  opacity: 0.62;
-}
-
-.goods-card__visual {
-  position: relative;
-}
-
-.goods-card__visual :deep(.item-image) {
-  width: 64px;
-  height: 64px;
-  border: 0;
-  border-radius: 16px;
-  background: var(--ui-surface-soft);
-}
-
-.goods-card__title {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-}
-
-/* 折扣标签放在名称后面，不再压在商品图上。 */
-.goods-tag {
-  flex: none;
-  padding: 0 6px;
-  border-radius: 5px;
-  color: var(--ui-danger);
-  background: var(--ui-danger-soft);
-  font-size: 11px;
-  font-weight: var(--fw-700);
-  line-height: 18px;
-  white-space: nowrap;
-}
-
-.goods-card__main {
-  display: flex;
-  min-width: 0;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.goods-card__name {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: var(--ui-ink);
-  font-size: 14px;
-  font-weight: var(--fw-650);
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.goods-card__single {
-  overflow: hidden;
-  color: var(--ui-muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.goods-card__single b {
-  color: var(--ui-ink);
-  font-weight: var(--fw-600);
-  font-variant-numeric: tabular-nums;
-}
-
-.goods-card__rewards {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 6px;
-  cursor: help;
-}
-
-.reward-total {
-  flex: none;
-  color: var(--ui-muted);
-  font-size: 11px;
-  font-weight: var(--fw-600);
-}
-
-/* 一行放不下的物品在右侧淡出，不会被截成半个。 */
-.goods-card__reward-track {
-  display: flex;
-  min-width: 0;
-  flex: 1;
-  gap: 4px;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
-  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
-}
-
-.reward-chip {
-  height: 26px;
-  display: inline-flex;
-  flex: none;
-  align-items: center;
-  gap: 3px;
-  padding: 0 7px 0 3px;
-  border-radius: 8px;
-  color: var(--ui-ink);
-  background: var(--ui-surface-soft);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.reward-chip :deep(.item-image) {
-  width: 20px;
-  height: 20px;
-  border: 0;
-  background: transparent;
-}
-
-.reward-chip b {
-  font-weight: var(--fw-600);
-}
-
-.goods-card__meta {
-  display: flex;
-  gap: 10px;
-  color: var(--ui-subtle);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-.goods-card__meta .is-warn {
-  color: var(--ui-warning);
-}
-
-.goods-card__buy {
-  display: flex;
-  min-width: 84px;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-}
-
-.goods-card__buy :deep(.n-button) {
-  min-width: 72px;
-}
-
-.goods-price {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--ui-warning);
-  font-size: 14px;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.goods-price :deep(.item-image) {
-  width: 20px;
-  height: 20px;
-  border: 0;
-  background: transparent;
-}
-
-.goods-price del {
-  color: var(--ui-subtle);
-  font-size: 11px;
-}
-
-.goods-price__free {
-  color: var(--ui-primary);
 }
 
 .shop-message {
@@ -526,7 +331,7 @@ onUnmounted(() => {
   border-radius: var(--ui-radius-control);
   color: var(--ui-danger);
   background: var(--ui-danger-soft);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .shop-message.is-success {
@@ -540,3 +345,5 @@ onUnmounted(() => {
   color: inherit;
 }
 </style>
+
+<style scoped src="./mall-goods.css"></style>

@@ -168,7 +168,7 @@ b {
   right: 4px;
   bottom: 2px;
   color: white;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1;
   text-shadow: 0 1px 3px #102d55;
 }

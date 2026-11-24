@@ -310,7 +310,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   gap: 11px;
 }
 .resource-band__title > span {
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
   color: #2e8a66;
 }
 .resource-band__title div,
@@ -320,12 +320,12 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 }
 .resource-band__title strong {
   color: #2b493f;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 .resource-band__title span,
 .resource-item span {
   color: #6b8177;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .resource-list {
   min-width: 0;
@@ -355,11 +355,11 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   display: grid;
   place-items: center;
   color: #2e8a66;
-  font-size: 26px;
+  font-size: var(--ui-font-size-large-15);
 }
 .resource-item strong {
   margin-top: 2px;
-  font-size: 19px;
+  font-size: var(--ui-font-size-large-15);
 }
 .qixi-section {
   margin-bottom: 12px;
@@ -380,11 +380,11 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   border-radius: 12px;
   color: #557367;
   background: rgba(239, 247, 243, 0.78);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .dew-hint > span {
   flex: 0 0 auto;
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 .section-heading {
   display: flex;
@@ -398,13 +398,13 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 }
 .section-heading small {
   color: #6c887a;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 .section-heading h2 {
   margin: 2px 0 0;
   color: #2b493f;
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
   letter-spacing: 0;
 }
 .primary-command,
@@ -437,7 +437,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 }
 .bridge-track span {
   border-radius: 4px;
-  background: #dde3e0;
+  background: var(--ui-progress-track-bg);
 }
 .bridge-track span.complete {
   background: #75b694;
@@ -478,19 +478,19 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   margin-bottom: 12px;
 }
 .stage-card header span {
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-700);
 }
 .stage-card header strong {
   color: #6c887a;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .stage-cost {
   gap: 7px;
   padding-bottom: 10px;
   border-bottom: 1px solid #dde2df;
   color: #657275;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .stage-cost img,
 .reward-item img {
@@ -511,7 +511,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 .reward-item {
   min-width: 0;
   gap: 7px;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .reward-item span {
   min-width: 0;
@@ -602,7 +602,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   place-items: center;
   color: #7c8e8d;
   background: #e7ecea;
-  font-size: 22px;
+  font-size: var(--ui-font-size-large-15);
 }
 .friend-option__name {
   min-width: 0;
@@ -616,12 +616,12 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   white-space: nowrap;
 }
 .friend-option__name strong {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .friend-option__name small {
   margin-top: 3px;
   color: #80908f;
-  font-size: 9px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .friend-option__mark {
   color: #2e8a66;
@@ -631,7 +631,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   display: grid;
   place-items: center;
   color: #7b8989;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .gift-composer {
   min-width: 0;
@@ -653,7 +653,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 .selected-friend span,
 .selected-friend small {
   color: #7b8989;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .selected-friend strong {
   margin: 3px 0;
@@ -685,11 +685,11 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 }
 .gift-item span {
   color: #7b8989;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .gift-item strong {
   margin-top: 3px;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 .gift-protocol-note {
   display: flex;
@@ -703,7 +703,7 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
 }
 .gift-protocol-note > span {
   flex: 0 0 auto;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 .gift-protocol-note div {
   min-width: 0;
@@ -711,12 +711,12 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   flex-direction: column;
 }
 .gift-protocol-note strong {
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .gift-protocol-note small {
   margin-top: 2px;
   color: #72817f;
-  font-size: 9px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 .gift-command {
   width: 100%;
@@ -730,12 +730,12 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   border-radius: 14px;
   color: #657275;
   background: rgba(255, 255, 255, 0.42);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1.7;
 }
 .rules-section summary {
   color: #2b493f;
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-700);
   cursor: pointer;
 }
@@ -751,6 +751,6 @@ function stageState(stage: QixiActivityDto['bridge']['stages'][number]) {
   color: #748483;
 }
 .qixi-empty > span {
-  font-size: 34px;
+  font-size: var(--ui-font-size-large-15);
 }
 </style>

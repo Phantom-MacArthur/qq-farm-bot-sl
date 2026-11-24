@@ -386,7 +386,7 @@ onUnmounted(() => sequence++)
   margin: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-700);
   line-height: 1.3;
   text-overflow: ellipsis;
@@ -399,7 +399,7 @@ onUnmounted(() => sequence++)
   gap: 6px;
   margin: 3px 0 0;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -408,7 +408,7 @@ onUnmounted(() => sequence++)
   border-radius: 999px;
   color: var(--ui-warning);
   background: var(--ui-warning-soft);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 18px;
   white-space: nowrap;
 }
@@ -435,7 +435,7 @@ onUnmounted(() => sequence++)
   border: 1px solid var(--ui-border);
   border-radius: 999px;
   background: var(--ui-surface);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
 }
 
@@ -456,7 +456,7 @@ onUnmounted(() => sequence++)
 
 .tea-wallet--compact li {
   padding-right: 10px;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .tea-wallet--compact img {
@@ -495,20 +495,43 @@ onUnmounted(() => sequence++)
   overflow: hidden;
 }
 
+/* 确认弹窗：卡片限高在视口内，标题与底部按钮常驻，中间清单单独滚动（与 .tea-modal 同一套做法）。 */
 .tea-confirm {
+  display: flex;
   width: min(440px, calc(100vw - 32px));
+  max-height: min(88vh, 960px);
+  max-height: min(88dvh, 960px);
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tea-confirm :deep(.n-card-header),
+.tea-confirm :deep(.n-card__footer) {
+  flex: none;
+}
+
+.tea-confirm :deep(.n-card-content) {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .tea-confirm__body {
   display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
   gap: 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .tea-confirm__lead {
   margin: 0;
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   line-height: 1.6;
 }
 
@@ -518,7 +541,7 @@ onUnmounted(() => sequence++)
   align-items: center;
   gap: 10px;
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .tea-confirm__estimate {
@@ -529,14 +552,14 @@ onUnmounted(() => sequence++)
   border-radius: 12px;
   color: var(--ui-muted);
   background: var(--ui-primary-soft);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-variant-numeric: tabular-nums;
 }
 
 .tea-confirm__estimate strong {
   flex-basis: 100%;
   color: var(--ui-primary);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-650);
 }
 
@@ -544,7 +567,7 @@ onUnmounted(() => sequence++)
 .tea-ledger h4 {
   margin: 0 0 6px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-600);
 }
 
@@ -561,7 +584,7 @@ onUnmounted(() => sequence++)
   align-items: center;
   gap: 10px;
   min-height: 44px;
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
 }
 
 .tea-ledger li + li {
@@ -587,7 +610,7 @@ onUnmounted(() => sequence++)
 .tea-ledger small {
   flex: none;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -611,7 +634,7 @@ onUnmounted(() => sequence++)
   gap: 6px;
   margin: 0;
   color: var(--ui-danger);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-600);
 }
 

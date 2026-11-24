@@ -13,7 +13,7 @@ import { computed, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import CareerHarvestSteal from '@/components/CareerHarvestSteal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
-import LandCard from '@/components/LandCard.vue'
+import LandCard from '@/components/FarmLandCard.vue'
 import PageTabs from '@/components/PageTabs.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
@@ -46,7 +46,6 @@ const {
   interactLoading,
   interactError,
   interactionItems,
-  interactionItemsLoading,
   interactionItemsError,
   interactionUsePending,
   interactionUseError,
@@ -185,6 +184,7 @@ async function onConfirm() {
 }
 
 const expandedFriends = ref<Set<string>>(new Set())
+const friendsRefreshing = ref(false)
 const selectedInteractionItemId = ref('')
 const selectedInteractionLandIds = ref<Record<string, string[]>>({})
 const lastInteractionResults = ref<Record<string, FriendInteractionResultDto[]>>({})
@@ -279,6 +279,38 @@ const visibleInteractRecords = computed(() => filteredInteractRecords.value.slic
 function friendKey(friendId: unknown) {
   return String(friendId || '')
 }
+
+watch(
+  [currentAccountId, currentAccountRunning, activeTab, () => paginatedFriends.value.map(friend => friendKey(friend.gid)).join(',')],
+  async ([accountId, running, tab, gids], _previous, onCleanup) => {
+    if (!accountId || !running || tab !== 'friends' || !gids)
+      return
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+
+    // One career request at a time so opening the list does not flood the game gateway.
+    for (const gid of gids.split(',')) {
+      if (controller.signal.aborted)
+        break
+      if (!gid || friendCareer.value[gid])
+        continue
+      try {
+        const { data } = await api.get('/api/career', {
+          headers: { 'x-account-id': accountId },
+          params: { gid },
+          signal: controller.signal,
+          skipErrorToast: true,
+        } as any)
+        if (!controller.signal.aborted && data.ok && data.data && !friendCareer.value[gid])
+          friendCareer.value = { ...friendCareer.value, [gid]: data.data }
+      }
+      catch {
+        // Leave unreported statistics blank and let the next page visit retry.
+      }
+    }
+  },
+  { immediate: true },
+)
 
 function interactionSelectionKey(friendId: unknown, itemId: unknown = selectedInteractionItemId.value) {
   return `${String(itemId || '')}:${friendKey(friendId)}`
@@ -512,6 +544,29 @@ async function refreshFriendLands(friendId: unknown) {
   if (!accountId || !currentAccountRunning.value || !key || friendLandsLoading.value[key])
     return
   await friendStore.fetchFriendLands(accountId, key)
+}
+
+async function refreshFriendsAndExpandedLands() {
+  const accountId = currentAccountId.value
+  if (!accountId || !currentAccountRunning.value || friendsRefreshing.value)
+    return
+
+  friendsRefreshing.value = true
+  try {
+    await handleRefreshFriends()
+    if (accountId === currentAccountId.value && currentAccountRunning.value) {
+      for (const gid of expandedFriends.value)
+        await refreshFriendLands(gid)
+    }
+  }
+  finally {
+    friendsRefreshing.value = false
+  }
+}
+
+function onFriendRowClick(event: MouseEvent, friendId: string) {
+  if (event.target instanceof Element && !event.target.closest('button'))
+    toggleFriend(friendId)
 }
 
 function toggleFriend(friendId: string) {
@@ -935,8 +990,8 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
       </NTab>
     </PageTabs>
 
-    <section class="friends-card page-card-surface rounded-2xl panel-scroll-layout">
-      <header class="friends-head panel-titlebar shrink-0" aria-label="好友页面操作栏">
+    <section class="friends-card page-card-surface rounded-2xl panel-scroll-layout margin-shell"><span class="margin-content">
+      <header class="friends-head panel-titlebar shrink-0 margin-shell" aria-label="好友页面操作栏"><span class="margin-content">
         <span class="friends-head__summary text-sm text-gray-500">
           <template v-if="activeTab === 'friends'">共 {{ filteredFriends.length }}/{{ friends.length }} 名好友</template>
           <template v-else-if="activeTab === 'blacklist'">共 {{ blacklist.length }} 人</template>
@@ -951,9 +1006,9 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
           />
           <RefreshButton
             title="刷新好友列表"
-            :loading="loading"
-            :disabled="!currentAccountId || !currentAccountRunning || loading"
-            @click="handleRefreshFriends"
+            :loading="loading || friendsRefreshing"
+            :disabled="!currentAccountId || !currentAccountRunning || loading || friendsRefreshing"
+            @click="refreshFriendsAndExpandedLands"
           />
         </div>
         <div v-else-if="activeTab === 'visitors'" class="page-toolbar__actions friends-toolbar">
@@ -978,7 +1033,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             @click="refreshBlacklist"
           />
         </div>
-      </header>
+      </span></header>
 
       <div class="panel-scroll-body panel-scroll-body--bleed">
       <EmptyState v-if="!currentAccountId" class="friends-empty" title="请先选择账号" description="添加并选择账号后查看好友" icon="i-carbon-user-avatar" />
@@ -997,7 +1052,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
       <template v-else>
         <div v-if="activeTab === 'friends'" class="friends-tab space-y-4">
-          <div v-if="currentAccountId && isQqAccount" class="mb-4 border page-card-surface border-amber-200 rounded-2xl bg-white p-4 shadow-md dark:border-amber-700/50 dark:bg-gray-800">
+          <div v-if="currentAccountId && isQqAccount" class="mb-4 border page-card-surface border-amber-200 rounded-2xl bg-white shadow-md dark:border-amber-700/50 dark:bg-gray-800 margin-shell"><span class="margin-content !m-4">
             <div class="flex flex-row items-start justify-between gap-3">
               <div>
                 <div class="flex items-center gap-2">
@@ -1059,29 +1114,23 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                 :min="10"
               />
             </div>
-          </div>
+          </span></div>
 
-          <div v-if="friends.length === 0" class="page-card-surface rounded-2xl bg-white p-8 text-center text-gray-500 shadow-md dark:bg-gray-800">
+          <div v-if="friends.length === 0" class="page-card-surface rounded-2xl bg-white text-center text-gray-500 shadow-md dark:bg-gray-800 margin-shell"><span class="margin-content !m-8">
             暂无好友或数据加载失败
-          </div>
+          </span></div>
 
           <template v-else>
             <ul class="friend-list panel-list list-divider">
               <li
                 v-for="friend in paginatedFriends"
                 :key="friend.gid"
-                class="friend-item"
+                class="friend-item margin-shell"
                 :class="{ 'is-expanded': expandedFriends.has(String(friend.gid)), 'is-blocked': blacklistGidSet.has(Number(friend.gid)) }"
-              >
+              ><span class="margin-content">
                 <div
                   class="friend-row"
-                  role="button"
-                  tabindex="0"
-                  :aria-expanded="expandedFriends.has(String(friend.gid))"
-                  :aria-label="`${friend.name}，点击查看土地`"
-                  @click="toggleFriend(friend.gid)"
-                  @keydown.enter.self.prevent="toggleFriend(friend.gid)"
-                  @keydown.space.self.prevent="toggleFriend(friend.gid)"
+                  @click="onFriendRowClick($event, friend.gid)"
                 >
                   <div class="friend-avatar">
                     <img
@@ -1097,6 +1146,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                   <div class="friend-main">
                     <div class="friend-name-row">
                       <strong class="friend-name" :title="friend.name">{{ friend.name }}</strong>
+                      <CareerHarvestSteal v-if="friendCareer[friend.gid]" :career="friendCareer[friend.gid]" />
                       <span v-if="blacklistGidSet.has(Number(friend.gid))" class="f-tag f-tag--blocked">已屏蔽</span>
                     </div>
                     <div class="friend-tags">
@@ -1120,7 +1170,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     </div>
                   </div>
 
-                  <div class="friend-actions" @click.stop @keydown.stop>
+                  <div class="friend-actions">
                     <NButton size="small" :type="friendCanSteal(friend) ? 'primary' : 'default'" secondary @click="handleOp(friend.gid, 'steal', $event)">
                       <template #icon>
                         <span class="i-carbon-shopping-bag" />
@@ -1146,25 +1196,13 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                         </template>
                       </NButton>
                     </NDropdown>
+                    <NButton class="friend-expand" size="small" quaternary circle :aria-expanded="expandedFriends.has(String(friend.gid))" :aria-label="`${expandedFriends.has(String(friend.gid)) ? '收起' : '展开'}${friend.name}的土地`" @click="toggleFriend(friend.gid)">
+                      <template #icon><span class="friend-chevron i-carbon-chevron-down" /></template>
+                    </NButton>
                   </div>
-
-                  <span class="friend-chevron i-carbon-chevron-down" aria-hidden="true" />
                 </div>
 
                 <div v-if="expandedFriends.has(String(friend.gid))" class="friend-lands">
-                  <div class="mb-3 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-2 text-sm text-gray-700 font-semibold dark:text-gray-200">
-                      <span class="i-carbon-sprout" />
-                      土地详情
-                    </div>
-                    <RefreshButton
-                      size="small"
-                      label="刷新土地"
-                      :loading="!!friendLandsLoading[friend.gid]"
-                      :disabled="!currentAccountId || !!friendLandsLoading[friend.gid] || !!friendLandsError[friend.gid]"
-                      @click="refreshFriendLands(friend.gid)"
-                    />
-                  </div>
                   <div v-if="friendLandsLoading[friend.gid]" class="flex justify-center py-6">
                     <div class="i-svg-spinners-90-ring-with-bg text-2xl text-green-600" />
                   </div>
@@ -1175,18 +1213,8 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     </NButton>
                   </EmptyState>
                   <template v-else>
-                    <div
-                      v-if="friendCareer[friend.gid]"
-                      class="mb-3 flex flex-wrap gap-x-5 gap-y-2 text-sm"
-                    >
-                      <CareerHarvestSteal :career="friendCareer[friend.gid]" />
-                    </div>
-                    <div class="mb-3 border border-amber-200 rounded-xl bg-amber-50/80 p-3 dark:border-amber-800 dark:bg-amber-950/25">
-                      <div v-if="interactionItemsLoading" class="flex items-center justify-center gap-2 py-2 text-sm text-amber-700 dark:text-amber-300">
-                        <span class="i-svg-spinners-90-ring-with-bg" />
-                        正在读取特殊互动道具
-                      </div>
-                      <div v-else-if="interactionItemsError" class="flex flex-wrap items-center justify-between gap-2 text-sm text-red-600 dark:text-red-300">
+                    <div v-if="interactionItemsError || interactionItems.length" class="mb-3 border border-amber-200 rounded-xl bg-amber-50/80 margin-shell dark:border-amber-800 dark:bg-amber-950/25"><span class="margin-content !m-3">
+                      <div v-if="interactionItemsError" class="flex flex-wrap items-center justify-between gap-2 text-sm text-red-600 dark:text-red-300">
                         <span>{{ interactionItemsError }}</span>
                         <NButton size="small" secondary type="error" @click="currentAccountId && friendStore.fetchInteractionItems(currentAccountId)">
                           重新读取
@@ -1253,11 +1281,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                           </div>
                         </div>
                       </template>
-                      <div v-else class="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                        <span class="i-carbon-information" />
-                        背包中暂无可用于好友土地的特殊互动道具。
-                      </div>
-                    </div>
+                    </span></div>
 
                     <div v-if="selectedInteractionItem?.targetKind === 'farm'" class="py-4 text-center text-gray-500">
                       当前道具作用于好友农场整体，无需选择地块
@@ -1265,7 +1289,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     <div v-else-if="!friendLands[friend.gid] || friendLands[friend.gid]?.length === 0" class="py-4 text-center text-gray-500">
                       该好友当前没有可展示的土地
                     </div>
-                    <div v-else class="grid grid-cols-8 gap-2">
+                    <div v-else class="grid grid-cols-4 gap-2">
                       <LandCard
                         v-for="land in friendLands[friend.gid]"
                         :key="land.id"
@@ -1279,7 +1303,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                     </div>
                   </template>
                 </div>
-              </li>
+              </span></li>
             </ul>
 
             <!-- 分页控件 -->
@@ -1337,19 +1361,19 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             {{ interactError }}
           </div>
 
-          <div v-else-if="visibleInteractRecords.length === 0" class="page-card-surface rounded-2xl bg-white p-8 text-center text-gray-500 shadow-md dark:bg-gray-800">
+          <div v-else-if="visibleInteractRecords.length === 0" class="page-card-surface rounded-2xl bg-white text-center text-gray-500 shadow-md dark:bg-gray-800 margin-shell"><span class="margin-content !m-8">
             <div class="mx-auto mb-3 text-4xl text-gray-300">
               👀
             </div>
             暂无访客记录
-          </div>
+          </span></div>
 
           <ul v-else class="visitor-list panel-list list-divider">
             <li
               v-for="record in visibleInteractRecords"
               :key="record.key"
-              class="visitor-row"
-            >
+              class="visitor-row margin-shell"
+            ><span class="margin-content">
               <div class="friend-avatar visitor-row__avatar">
                 <img
                   v-if="canShowInteractAvatar(record)"
@@ -1382,7 +1406,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
                 </div>
               </div>
               <time class="visitor-row__time">{{ formatInteractTime(record.serverTimeMs) }}</time>
-            </li>
+            </span></li>
           </ul>
 
           <div v-if="filteredInteractRecords.length > visibleInteractRecords.length" class="text-center text-xs text-gray-400">
@@ -1391,7 +1415,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
         </div>
       </template>
       </div>
-    </section>
+    </span></section>
 
     <ConfirmModal
       :show="showConfirm"
@@ -1446,7 +1470,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
             删除未同步（{{ unsyncedGidCount }}）
           </BaseButton>
         </div>
-        <div class="gid-list-scroll">
+        <div class="gid-list-scroll dialog-scroll">
           <div v-if="filteredKnownFriendGids.length === 0" class="py-8 text-center text-gray-500 dark:text-gray-400">
             暂无数据
           </div>
@@ -1492,7 +1516,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   --panel-pad: 16px;
   display: flex;
   flex-direction: column;
-  padding: var(--panel-pad);
+  --inset-top: var(--panel-pad); --inset-right: var(--panel-pad); --inset-bottom: var(--panel-pad); --inset-left: var(--panel-pad);
   overflow: clip;
 }
 
@@ -1512,7 +1536,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 }
 
 .friends-card:has(.blacklist-empty) {
-  padding-block-end: 0;
+  --inset-bottom: 0;
 }
 
 .blacklist-tab:has(> .blacklist-empty) {
@@ -1536,7 +1560,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 .friends-head__summary {
   display: flex;
   flex: none;
-  min-height: var(--ui-toolbar-control-height);
+  min-height: var(--ui-content-titlebar-control-height-34);
   align-items: center;
   white-space: nowrap;
 }
@@ -1556,26 +1580,12 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
 .friend-row {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr) auto 20px;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
   gap: 14px;
-  padding: 14px var(--panel-pad);
   cursor: pointer;
-  transition: background-color 0.15s ease;
 }
 
-.friend-item:first-child > .friend-row {
-  padding-block-start: 12px;
-}
-
-.friend-row:hover {
-  background: color-mix(in srgb, var(--ui-surface-soft) 60%, transparent);
-}
-
-.friend-row:focus-visible {
-  outline: 2px solid color-mix(in srgb, var(--ui-primary) 55%, transparent);
-  outline-offset: -2px;
-}
 
 .friend-avatar {
   width: 44px;
@@ -1586,7 +1596,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   border-radius: 14px;
   color: var(--ui-subtle);
   background: var(--ui-surface-soft);
-  font-size: 20px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .friend-avatar img {
@@ -1610,7 +1620,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   min-width: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1633,7 +1643,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   border-radius: 7px;
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 1;
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -1646,7 +1656,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 }
 
 .f-tag > span {
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .f-tag--level {
@@ -1703,16 +1713,10 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   color: #e2c36d;
 }
 
-.friend-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .friend-chevron {
   justify-self: end;
   color: var(--ui-subtle);
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
   transition: transform 0.2s ease;
 }
 
@@ -1722,7 +1726,7 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 
 @container friend-list (max-width: 440px) {
   .friend-row {
-    grid-template-columns: 44px minmax(0, 1fr) 20px;
+    grid-template-columns: 44px minmax(0, 1fr);
   }
 
   .friend-actions {
@@ -1732,16 +1736,14 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
 }
 
 .friend-lands {
-  padding: 16px;
-  border-top: 1px solid var(--ui-border);
-  background: color-mix(in srgb, var(--ui-surface-soft) 55%, transparent);
+  margin-block-start: 12px;
 }
 
 .visitor-row {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 12px var(--panel-pad);
+  --inset-top: 12px; --inset-right: var(--panel-pad); --inset-bottom: 12px; --inset-left: var(--panel-pad);
   overflow-wrap: anywhere;
 }
 
@@ -1750,13 +1752,13 @@ watch([currentAccountId, presence], ([id, next], [previousId]) => {
   width: 40px;
   height: 40px;
   border-radius: 999px;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .visitor-row__time {
   flex: none;
   color: var(--ui-subtle);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
   text-align: right;
 }

@@ -55,6 +55,37 @@ const operations: OperationsMap = {
 
 let currentDateKey: string | null = null;
 
+const assetKeys = ['ranchCoupon', 'pinecone', 'grass', 'dung', 'diamond', 'fertilizerNormal', 'fertilizerOrganic', 'canNormal', 'canOrganic'] as const;
+type AssetKey = typeof assetKeys[number];
+const assetBaseline: Partial<Record<AssetKey, number>> = {};
+const assetBalances: Partial<Record<AssetKey, number>> = {};
+
+function readAssetBalances(values: any): void {
+    for (const key of assetKeys) {
+        const value = values?.[key];
+        if (typeof value !== 'number' && (typeof value !== 'string' || !/^\d+$/.test(value))) continue;
+        const amount = Number(value);
+        if (!Number.isSafeInteger(amount) || amount < 0) continue;
+        if (assetBaseline[key] === undefined) {
+            assetBaseline[key] = amount;
+            scheduleSave();
+        }
+        assetBalances[key] = amount;
+    }
+}
+
+function recordAssetBalances(values: Partial<Record<AssetKey, number | string | null>>): Record<AssetKey, number | null> {
+    checkAndResetDailyStats();
+    if (currentAccountId) readAssetBalances(values);
+    return getAssetTodayGains();
+}
+
+function getAssetTodayGains(): Record<AssetKey, number | null> {
+    checkAndResetDailyStats();
+    return Object.fromEntries(assetKeys.map(key => [key, assetBalances[key] === undefined || assetBaseline[key] === undefined
+        ? null : assetBalances[key] - assetBaseline[key]])) as Record<AssetKey, number | null>;
+}
+
 interface LastState {
     gold: number;
     exp: number;
@@ -198,6 +229,10 @@ function checkAndResetDailyStats(current?: CurrentValues): void {
         Object.keys(operations).forEach((key: string) => {
             operations[key] = 0;
         });
+        for (const key of assetKeys) {
+            delete assetBaseline[key];
+            delete assetBalances[key];
+        }
         const base: CurrentValues = current || {
             gold: lastState.gold,
             exp: lastState.exp,
@@ -205,6 +240,7 @@ function checkAndResetDailyStats(current?: CurrentValues): void {
             goldBean: lastState.goldBean,
         };
         establishTodayBaseline(base);
+        currentDateKey = todayKey;
         scheduleSave();
     }
     currentDateKey = todayKey;
@@ -249,12 +285,14 @@ function scheduleSave(): void {
 
 function doSave(): void {
     if (!currentAccountId) return;
+    checkAndResetDailyStats();
     const todayKey: string = getTodayKey();
     const data: any = {
         date: todayKey,
         operations: { ...operations },
         todayBaseline: { ...todayBaseline },
         baselineReady: { ...baselineReady },
+        assetBaseline: { ...assetBaseline },
         savedAt: Date.now(),
     };
     savePersistedStats(currentAccountId, data);
@@ -318,6 +356,12 @@ function initStatsWithPersistence(
     goldBean: number = 0,
     confirmed: Partial<BalanceConfirmed> = {},
 ): void {
+    if (currentAccountId !== accountId) {
+        for (const key of assetKeys) {
+            delete assetBaseline[key];
+            delete assetBalances[key];
+        }
+    }
     currentAccountId = accountId;
     const todayKey: string = getTodayKey();
     currentDateKey = todayKey;
@@ -326,6 +370,14 @@ function initStatsWithPersistence(
     initStats(gold, exp, coupon, goldBean, confirmed);
 
     if (saved && saved.date === todayKey) {
+        for (const key of assetKeys) delete assetBalances[key];
+        const savedAssets: any = saved.assetBaseline;
+        for (const key of assetKeys) {
+            const amount = readBaseNumber(savedAssets?.[key]);
+            if (amount !== null && Number.isSafeInteger(amount) && amount >= 0) assetBaseline[key] = amount;
+            else delete assetBaseline[key];
+        }
+
         Object.keys(saved.operations || {}).forEach((key: string) => {
             if (operations[key] !== undefined) {
                 operations[key] = Number(saved.operations[key]) || 0;
@@ -389,6 +441,10 @@ function initStatsWithPersistence(
     }
 
     // 跨天或首次运行：以启动时的余额作为当日 0 点基线，并按节流写盘
+    for (const key of assetKeys) {
+        delete assetBaseline[key];
+        delete assetBalances[key];
+    }
     Object.keys(operations).forEach((key: string) => {
         operations[key] = 0;
     });
@@ -508,6 +564,8 @@ function getStats(statusData: any, userState: any, connected: boolean, limits: a
     const currentExp: number = Number.isFinite(Number(rawExp)) ? Number(rawExp) : 0;
     const currentCoupon: number = Number.isFinite(Number(rawCoupon)) ? Number(rawCoupon) : 0;
     const currentGoldBean: number = Number.isFinite(Number(rawGoldBean)) ? Number(rawGoldBean) : 0;
+    const hasBalance = (value: any): boolean => value !== null && value !== undefined && value !== ''
+        && Number.isSafeInteger(Number(value)) && Number(value) >= 0;
 
     checkAndResetDailyStats({ gold: currentGold, exp: currentExp, coupon: currentCoupon, goldBean: currentGoldBean });
 
@@ -536,6 +594,12 @@ function getStats(statusData: any, userState: any, connected: boolean, limits: a
         sessionGoldGained: session.goldGained,
         sessionCouponGained: session.couponGained,
         sessionGoldBeanGained: session.goldBeanGained,
+        todayAssetGains: {
+            gold: connected && hasBalance(rawGold) && baselineReady.gold && isTrustedBalance('gold', currentGold) ? session.goldGained : null,
+            coupon: connected && hasBalance(rawCoupon) && baselineReady.coupon && isTrustedBalance('coupon', currentCoupon) ? session.couponGained : null,
+            goldBean: connected && hasBalance(rawGoldBean) && baselineReady.goldBean && isTrustedBalance('goldBean', currentGoldBean) ? session.goldBeanGained : null,
+            ...Object.fromEntries(Object.entries(getAssetTodayGains()).map(([key, value]) => [key, connected ? value : null])),
+        },
         lastExpGain: session.lastExpGain,
         lastGoldGain: session.lastGoldGain,
         limits,
@@ -558,4 +622,6 @@ module.exports = {
     getTodayKey,
     loadPersistedStats,
     checkAndResetDailyStats,
+    recordAssetBalances,
+    getAssetTodayGains,
 };

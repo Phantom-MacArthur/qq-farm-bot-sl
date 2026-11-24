@@ -2,20 +2,21 @@
 import type { ActivityDirectoryItemDto } from '@/stores/activity-center'
 import { NTab } from 'naive-ui/es/tabs'
 import { storeToRefs } from 'pinia'
-import { computed } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import api from '@/api'
 import { activityHasGameplay } from '@/components/activity/gameplays'
 import PageTabs from '@/components/PageTabs.vue'
 import OfflineState from '@/components/ui/OfflineState.vue'
 import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
-import { useActivityCenterStore } from '@/stores/activity-center'
+import { normalizeActivityDirectory, useActivityCenterStore } from '@/stores/activity-center'
 import PetMascot from './PetMascot.vue'
 import { useActivityClock } from './useActivityClock'
 
 type ActivityViewTab = 'active' | 'past'
-defineProps<{ offline: boolean }>()
+const props = withDefaults(defineProps<{ offline: boolean, space?: 'farm' | 'ranch' }>(), { space: 'farm' })
 const emit = defineEmits<{
   back: []
   open: [activity: ActivityDirectoryItemDto]
@@ -34,8 +35,19 @@ const currentTab = computed<ActivityViewTab>({
 const accountStore = useAccountStore()
 const activityStore = useActivityCenterStore()
 const { currentAccountId } = storeToRefs(accountStore)
-const { activities, season, shop, solarTerms, constellation, qixi, qingMei, charity, weather, loading, error, loadedAccountId } = storeToRefs(activityStore)
-const { serverNow } = useActivityClock()
+const { activities: farmActivities, season, shop, solarTerms, constellation, qixi, qingMei, charity, weather, loading: farmLoading, error: farmError, loadedAccountId: farmLoadedAccountId, serverClockOffset: farmClockOffset } = storeToRefs(activityStore)
+const { serverNow: farmNow } = useActivityClock()
+const ranchDirectory = ref<ActivityDirectoryItemDto[]>([])
+const ranchLoading = ref(false)
+const ranchError = ref('')
+const ranchLoadedAccountId = ref('')
+const ranchClockOffset = ref(0)
+let directorySequence = 0
+const activities = computed(() => props.space === 'ranch' ? ranchDirectory.value : farmActivities.value)
+const loading = computed(() => props.space === 'ranch' ? ranchLoading.value : farmLoading.value)
+const error = computed(() => props.space === 'ranch' ? ranchError.value : farmError.value)
+const loadedAccountId = computed(() => props.space === 'ranch' ? ranchLoadedAccountId.value : farmLoadedAccountId.value)
+const serverNow = computed(() => props.space === 'ranch' ? farmNow.value - farmClockOffset.value + ranchClockOffset.value : farmNow.value)
 
 type ActivityStatus = 'active' | 'upcoming' | 'ended'
 
@@ -50,7 +62,7 @@ const stellarDetailsAvailable = computed(() => !!(season.value || shop.value || 
 const displayActivities = computed<ActivityDirectoryItemDto[]>(() => {
   const entries: ActivityDirectoryItemDto[] = activities.value.length > 0
     ? [...activities.value]
-    : stellarDetailsAvailable.value
+    : props.space === 'farm' && stellarDetailsAvailable.value
       ? [{
         id: season.value?.pass?.activityId || season.value?.id || 'stellar',
         activityIds: [season.value?.pass?.activityId || season.value?.id || 'stellar'],
@@ -64,7 +76,7 @@ const displayActivities = computed<ActivityDirectoryItemDto[]>(() => {
       : []
 
   const appendDetailEntry = (entry: ActivityDirectoryItemDto) => {
-    if (!entries.some(item => item.activityIds.some(id => entry.activityIds.includes(id))))
+    if (props.space === 'farm' && !entries.some(item => item.activityIds.some(id => entry.activityIds.includes(id))))
       entries.push(entry)
   }
   if (qixi.value) {
@@ -132,9 +144,53 @@ const hasActivities = computed(() => displayActivities.value.length > 0)
 function accountId() {
   return String(currentAccountId.value || '')
 }
-function load(force = false) {
+async function load(force = false) {
+  if (props.space === 'ranch') {
+    if (props.offline) {
+      directorySequence++
+      ranchLoading.value = false
+      return false
+    }
+    const id = accountId()
+    const version = ++directorySequence
+    if (ranchLoadedAccountId.value !== id)
+      ranchDirectory.value = []
+    ranchError.value = ''
+    ranchLoading.value = !!id
+    if (!id) {
+      ranchLoadedAccountId.value = ''
+      ranchLoading.value = false
+      return false
+    }
+    try {
+      const response = await api.get('/api/activity-center/ranch-activities', { headers: { 'x-account-id': id }, skipErrorToast: true } as any)
+      if (version !== directorySequence || id !== accountId())
+        return false
+      if (!response.data?.ok)
+        throw new Error(response.data?.error || '读取牧场活动失败')
+      ranchDirectory.value = normalizeActivityDirectory(response.data.data.activities)
+      ranchClockOffset.value = response.data.data.serverTime * 1000 - Date.now()
+      ranchLoadedAccountId.value = id
+      return true
+    }
+    catch (cause: any) {
+      if (version === directorySequence && id === accountId())
+        ranchError.value = cause?.message || '读取牧场活动失败'
+      return false
+    }
+    finally {
+      if (version === directorySequence && id === accountId())
+        ranchLoading.value = false
+    }
+  }
   return force ? activityStore.refresh(accountId()) : activityStore.lazyLoad(accountId())
 }
+
+watch([currentAccountId, () => props.space, () => props.offline], () => {
+  if (props.space === 'ranch')
+    void load(true)
+}, { immediate: true })
+onUnmounted(() => directorySequence++)
 function validActivityTime(value: unknown): number | null {
   const timestamp = Number(value)
   return Number.isFinite(timestamp) && Number.isFinite(new Date(timestamp).getTime()) ? timestamp : null
@@ -214,6 +270,10 @@ function activityDisplayName(activity: ActivityDirectoryItemDto) {
   return activity.gameplayKey === 'pet' ? '萌宠日记' : activity.name
 }
 function activityIconSrc(activity: ActivityDirectoryItemDto) {
+  if (activity.gameplayKey === 'muge')
+    return '/activity-assets/muge/icon.png'
+  if (activity.activityIds.some(id => ['2026111800', '2026111801'].includes(id)))
+    return '/activity-assets/friend-recall/icon.png'
   if (activity.gameplayKey === 'pet')
     return '/activity-assets/pet-diary/S3Open_dog_1.png'
   if (activity.gameplayKey === 'milk')
@@ -267,7 +327,7 @@ useReconnectRefresh(() => load(true))
     <!-- 标题栏与列表同在一个卡片内，外壳对齐「个人 → 农场」的 page-card-surface；
          卡片本身不设内边距，由各行自己带水平边距，分割线才能铺满整张卡。 -->
     <div class="activity-card panel-scroll-layout">
-      <div class="activity-toolbar panel-titlebar panel-titlebar--flush">
+      <div class="activity-toolbar panel-titlebar panel-titlebar--flush margin-shell"><span class="margin-content">
         <span class="activity-toolbar__summary">{{ activitySummary }}</span>
         <RefreshButton
           title="刷新活动"
@@ -275,7 +335,7 @@ useReconnectRefresh(() => load(true))
           :disabled="!currentAccountId || offline"
           @click="load(true)"
         />
-      </div>
+      </span></div>
       <div class="panel-scroll-body">
         <OfflineState v-if="offline" />
         <div v-else-if="!currentAccountId" class="picker-state">
@@ -426,7 +486,7 @@ useReconnectRefresh(() => load(true))
   border: 1px dashed var(--ui-border-strong);
   border-radius: var(--ui-radius-card);
   color: var(--ui-muted);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   text-align: center;
 }
 
@@ -441,7 +501,7 @@ useReconnectRefresh(() => load(true))
   min-width: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 15px;
+  font-size: var(--ui-font-size-large-15);
   font-weight: var(--fw-650);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -487,7 +547,7 @@ useReconnectRefresh(() => load(true))
   border-radius: 12px;
   color: var(--ui-subtle);
   background: var(--ui-surface-soft);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .past-row__avatar img {
@@ -501,7 +561,7 @@ useReconnectRefresh(() => load(true))
   min-width: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
   font-weight: var(--fw-650);
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -516,7 +576,7 @@ useReconnectRefresh(() => load(true))
 
 .past-row__status {
   color: var(--ui-subtle);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .past-row__edition {
@@ -525,7 +585,7 @@ useReconnectRefresh(() => load(true))
   border-radius: 5px;
   color: var(--ui-blue);
   background: var(--ui-blue-soft);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   line-height: 16px;
 }
 
@@ -539,12 +599,12 @@ useReconnectRefresh(() => load(true))
 
 .past-row__period small {
   color: var(--ui-subtle);
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .past-row__period p {
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-variant-numeric: tabular-nums;
 }
 
@@ -574,22 +634,22 @@ useReconnectRefresh(() => load(true))
 }
 
 .picker-state > div {
-  font-size: 38px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .picker-state strong {
   color: var(--ui-ink);
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .picker-state span {
   max-width: 420px;
   color: var(--ui-muted);
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .picker-state button {
-  min-height: 36px;
+  min-height: var(--ui-content-item-control-height-30);
   margin-top: 8px;
   padding: 0 15px;
   border: 1px solid var(--ui-border);
@@ -701,7 +761,7 @@ useReconnectRefresh(() => load(true))
 }
 
 .activity-entry__icon > span {
-  font-size: 16px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 /* 图标图片限制在图标框内，避免溢出后贴到右侧活动名。 */
@@ -718,7 +778,7 @@ useReconnectRefresh(() => load(true))
   border-radius: 999px;
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 
@@ -738,7 +798,7 @@ useReconnectRefresh(() => load(true))
   min-width: 0;
   overflow: hidden;
   color: var(--ui-ink);
-  font-size: 17px;
+  font-size: var(--ui-font-size-large-15);
   line-height: 1.35;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -753,7 +813,7 @@ useReconnectRefresh(() => load(true))
   gap: 8px;
   margin-top: 4px;
   color: var(--ui-muted);
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .activity-entry__period-text {
@@ -775,7 +835,7 @@ useReconnectRefresh(() => load(true))
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 10px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: var(--fw-700);
 }
 
@@ -785,7 +845,7 @@ useReconnectRefresh(() => load(true))
 
 .activity-entry__hint .i-carbon-arrow-right,
 .activity-entry__hint .i-carbon-locked {
-  font-size: 13px;
+  font-size: var(--ui-font-size-small-13);
 }
 
 .activity-entry__icon .activity-entry__pet {

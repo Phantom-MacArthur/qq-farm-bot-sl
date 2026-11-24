@@ -174,14 +174,14 @@ function claim() {
 .solar-reward h3 {
   margin: 0;
   color: #2b5b4a;
-  font-size: 18px;
+  font-size: var(--ui-font-size-large-15);
 }
 
 .solar-reward p {
   min-height: 1em;
   margin: 6px 0 18px;
   color: #73847d;
-  font-size: 11px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
   white-space: pre-line;
 }
 
@@ -195,7 +195,7 @@ function claim() {
 .solar-reward__empty {
   padding: 16px;
   color: #719b95;
-  font-size: 12px;
+  font-size: var(--ui-content-item-font-height-tiny-12);
 }
 
 .solar-reward button {
@@ -208,7 +208,7 @@ function claim() {
   color: white;
   background: #2f8d69;
   box-shadow: 0 8px 18px rgba(35, 113, 83, 0.18);
-  font-size: 14px;
+  font-size: var(--ui-font-size-medium-14);
   font-weight: var(--fw-700);
   cursor: pointer;
 }
