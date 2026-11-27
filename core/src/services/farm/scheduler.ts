@@ -1,4 +1,6 @@
-import { getFertilizerStrategyGroups, usesNormalFertilizer, usesRipeningFertilizer } from '../../config/fertilizer-strategy';
+import { getFertilizerStrategyGroups, usesImmediateOrganicFertilizer, usesNormalFertilizer, usesRipeningFertilizer } from '../../config/fertilizer-strategy';
+import { getYishuActivityEnd, YISHU_SEED_ID } from '../../config/yishuhuanfu';
+import { appendYishuHistory } from '../yishuhuanfu-history';
 /**
  * 农场循环调度 - 循环管理、可变状态
  */
@@ -7,14 +9,18 @@ const { CONFIG, PlantPhase } = require('../../config/config');
 const { getPlantById, getItemById } = require('../../config/gameConfig');
 const { isAutomationOn, getAutomation, getFertilizerBuyOrganicCount, getFertilizerBuyOrganicThresholdHours, getFertilizerBuyNormalCount, getFertilizerBuyNormalThresholdHours, getFertilizerBuyCheckIntervalMinutes, getFertilizerBuyNormalCheckIntervalMinutes } = require('../../models/store');
 const { getUserState, networkEvents } = require('../../utils/network');
-const { toNum, toTimeSec, serverTimeToLocalMs, log, logWarn, randomDelay } = require('../../utils/utils');
+const { toNum, toTimeSec, getServerTimeSec, serverTimeToLocalMs, log, logWarn, randomDelay } = require('../../utils/utils');
 const { runWithRequestClass } = require('../../utils/request-context');
 const { createScheduler } = require('../scheduler');
 const { runExclusiveAutomationTask } = require('../automation-lock');
 const { recordOperation } = require('../stats');
-const { getAllLands, harvest, farming, unlockLand, upgradeLand, removePlant } = require('./api');
+const {
+    getAllLands, harvest, farming, unlockLand, upgradeLand, removePlant,
+    isFertilizerContainerEmpty, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID,
+} = require('./api');
 const {
     analyzeLands,
+    buildLandDetail,
     getCurrentPhase,
     isExplicitMaturePhase,
     getCleanableFarmSocialEventItemIds,
@@ -24,7 +30,7 @@ const {
     filterLandIdsByTypes,
     ALL_FERTILIZER_LAND_TYPES,
 } = require('./land-analysis');
-const { autoPlantEmptyLands, getRemainingPlantDelayMs, runFertilizerByConfig } = require('./planting');
+const { autoPlantEmptyLands, getRemainingPlantDelayMs, runFertilizerByConfig, plantYishuLands } = require('./planting');
 const { runRipeningFertilizer } = require('./ripening');
 const { checkAndBuyFertilizerBoth } = require('../mall');
 // 延迟加载以打破循环依赖: visit-strategy → farm/index → scheduler → visit-strategy
@@ -188,7 +194,11 @@ async function runMultiSeasonFertilizer(
 ): Promise<number> {
     if (!isAutomationOn('fertilizer_multi_season')) return 0;
     const groups = getFertilizerStrategyGroups(getAutomation());
-    if (![...groups.keys()].some(mode => usesNormalFertilizer(mode) || mode === 'organic')) return 0;
+    const normalAvailable = !isFertilizerContainerEmpty(NORMAL_FERTILIZER_ID);
+    const organicAvailable = !isFertilizerContainerEmpty(ORGANIC_FERTILIZER_ID);
+    if (![...groups.keys()].some(mode =>
+        (normalAvailable && usesNormalFertilizer(mode))
+        || (organicAvailable && usesImmediateOrganicFertilizer(mode)))) return 0;
     const multiSeasonTargets: number[] = [...new Set(
         (Array.isArray(growingLandIds) ? growingLandIds : []).map((v: any) => toNum(v)).filter(Boolean),
     )];
@@ -217,12 +227,81 @@ async function runMultiSeasonFertilizer(
     }
 }
 
+// 收获日志带作物名：QQ 机器人推送要靠它查物品图（事件名后面的小图标）
+function firstCropName(lands: any[], ids: number[]): string {
+    for (const land of lands) {
+        if (!ids.includes(toNum(land.id))) continue;
+        const plantId = toNum(land.plant?.id);
+        if (!plantId) continue;
+        const name = String(getPlantById(plantId)?.name || land.plant?.name || '').trim();
+        if (name) return name;
+    }
+    return '';
+}
+
 function autoHarvestLandIds(status: any): number[] {
-    if (getAutomation().farm_harvest_tiangong !== false) return status.harvestable;
-    const tiangongLandIds = new Set(status.harvestableInfo
-        .filter((info: any) => isTiangongCrop(info.plantId))
+    const automation = getAutomation();
+    const excluded = new Set((status.harvestableInfo || [])
+        .filter((info: any) => (automation.farm_harvest_tiangong === false && isTiangongCrop(info.plantId))
+            || (automation.yishu_harvest === false && toNum(getPlantById(info.plantId)?.seed_id) === YISHU_SEED_ID))
         .map((info: any) => info.landId));
-    return status.harvestable.filter((id: number) => !tiangongLandIds.has(id));
+    return status.harvestable.filter((id: number) => !excluded.has(id));
+}
+
+function isYishuCrop(land: any): boolean {
+    return toNum(getPlantById(toNum(land.plant?.id))?.seed_id) === YISHU_SEED_ID;
+}
+
+function recordYishuHarvest(lands: any[], harvestedIds: number[]): void {
+    const count = lands.filter(land => harvestedIds.includes(toNum(land.id)) && isYishuCrop(land)).length;
+    if (!count) return;
+    try {
+        appendYishuHistory(process.env.FARM_ACCOUNT_ID || '', getServerTimeSec(), { type: 'harvest', count });
+    } catch (error: any) {
+        logWarn('收获', `写入以薯换福活动日志失败：${error.message}`);
+    }
+}
+
+async function harvestYishuMatureLands(): Promise<number> {
+    if (getAutomation().yishu_harvest !== true) return 0;
+    return runExclusiveAutomationTask('yishuhuanfu-harvest', async () => {
+        if (!getYishuActivityEnd(getServerTimeSec()) || getAutomation().yishu_harvest !== true) return 0;
+        const { lands } = await getAllLands();
+        const ripe: number[] = analyzeLands(lands, false, getUserState().gid).harvestable;
+        const ids = lands.filter((land: any) => isYishuCrop(land) && ripe.includes(toNum(land.id))).map((land: any) => toNum(land.id));
+        if (!ids.length) return 0;
+        const reply = await harvest(ids, false);
+        const confirmed = ids.filter(id => reply.land?.some((land: any) => toNum(land.id) === id));
+        if (confirmed.length) {
+            recordYishuHarvest(lands, confirmed);
+            recordOperation('harvest', confirmed.length);
+            networkEvents.emit('farmHarvested', { count: confirmed.length, landIds: confirmed, opType: 'yishuhuanfu' });
+        }
+        return confirmed.length;
+    });
+}
+
+async function getYishuFarmStatus() {
+    const { lands } = await getAllLands();
+    const seconds = getServerTimeSec();
+    const { harvestable } = analyzeLands(lands, false, getUserState().gid);
+    return {
+        crops: lands.filter(isYishuCrop).map((land: any) => {
+            const detail = buildLandDetail(land, { nowSec: seconds });
+            return {
+                landId: toNum(land.id),
+                ready: harvestable.includes(toNum(land.id)),
+                matureAt: detail.matureInSec > 0 ? seconds + detail.matureInSec : null,
+            };
+        }),
+    };
+}
+
+async function plantYishuWhenFarmPaused() {
+    if (isAutomationOn('farm') || getAutomation().yishu_plant !== true || !getYishuActivityEnd(getServerTimeSec())) return 0;
+    const { lands } = await getAllLands();
+    const empty = analyzeLands(lands, false, getUserState().gid).empty;
+    return (await plantYishuLands(lands, empty, { lastPlantAt: null }))?.planted || 0;
 }
 
 /**
@@ -252,6 +331,7 @@ async function harvestMatureOwnLandsOnce(
 
     try {
         const harvestReply = await harvest(harvestable);
+        recordYishuHarvest(lands, harvestable);
         actions.push(`施肥后收获${harvestable.length}`);
         recordOperation('harvest', harvestable.length);
         networkEvents.emit('farmHarvested', {
@@ -265,6 +345,7 @@ async function harvestMatureOwnLandsOnce(
             result: 'ok',
             count: harvestable.length,
             landIds: [...harvestable],
+            itemName: firstCropName(lands, harvestable),
         });
         const classified = await resolveRemovableHarvestedLands(harvestable, harvestReply);
         if (counts) counts.harvest += harvestable.length;
@@ -319,10 +400,18 @@ async function runFarmOperation(
             const updated = reply.land || [];
             const completed = isAll ? ids : ids.filter(id => updated.some((land: any) => toNum(land.id) === id));
             if (!completed.length) return;
+            recordYishuHarvest(source, completed);
             harvestedLandIds.push(...completed);
             harvestReply.land.push(...updated);
             const count = completed.length;
-            log('收获', `收获完成 ${count} 块土地`, { module: 'farm', event: '收获作物', result: 'ok', count, landIds: completed });
+            log('收获', `收获完成 ${count} 块土地`, {
+                module: 'farm',
+                event: '收获作物',
+                result: 'ok',
+                count,
+                landIds: completed,
+                itemName: firstCropName(source, completed),
+            });
             actions.push(`收获${count}`);
             recordOperation('harvest', count);
             counts.harvest += count;
@@ -598,14 +687,18 @@ async function runFarmOperation(
         if (automatic && !canContinueFarm(automatic.generation)) return { hadWork: actions.length > 0, actions, counts };
         const automation = getAutomation();
         const groups = [...getFertilizerStrategyGroups(automation)];
-        const normalLandTypes = groups.filter(([mode]) => usesNormalFertilizer(mode)).flatMap(([, types]) => types);
-        if (isAutomationOn('fertilizer_multi_season') && normalLandTypes.length) {
+        const normalAvailable = !isFertilizerContainerEmpty(NORMAL_FERTILIZER_ID);
+        const organicAvailable = !isFertilizerContainerEmpty(ORGANIC_FERTILIZER_ID);
+        const catchUpLandTypes = groups
+            .filter(([mode]) => (normalAvailable && usesNormalFertilizer(mode)) || (organicAvailable && mode === 'both'))
+            .flatMap(([, types]) => types);
+        if (isAutomationOn('fertilizer_multi_season') && catchUpLandTypes.length) {
             try {
                 const latest = fertilizerSnapshot ?? (await getAllLands())?.lands;
                 const latestLands = Array.isArray(latest) ? latest : [];
                 fertilizerSnapshot = latestLands;
                 let targets = getNormalFertilizerTargetsFromLands(latestLands);
-                if (normalLandTypes.length < ALL_FERTILIZER_LAND_TYPES.length) {
+                if (catchUpLandTypes.length < ALL_FERTILIZER_LAND_TYPES.length) {
                     const landTypeById = new Map<number, string>();
                     for (const land of latestLands) {
                         if (!land) continue;
@@ -614,21 +707,23 @@ async function runFarmOperation(
                         landTypeById.set(landId, getLandTypeByLevel(land.level));
                     }
                     targets = landTypeById.size > 0
-                        ? filterLandIdsByTypes(targets, landTypeById, normalLandTypes)
+                        ? filterLandIdsByTypes(targets, landTypeById, catchUpLandTypes)
                         : [];
                 }
                 if (targets.length > 0) {
-                    log('施肥', `巡田补肥：检测到 ${targets.length} 块地仍可施普通化肥`, {
+                    log('施肥', `巡田补肥：检测到 ${targets.length} 块地可补肥`, {
                         module: 'farm',
                         event: '多季节施肥',
                         result: 'trigger',
                         count: targets.length,
                         landIds: targets,
                     });
+                    // 补肥复用本次地块，后续催熟重新读取施肥后的状态。
                     fertilizerSnapshot = undefined;
-                    const result = await runFertilizerByConfig(targets, { reason: 'multi_season', propagateErrors });
-                    if (result.normal > 0) actions.push(`补肥${result.normal}`);
-                    counts.fertilize += toNum(result.normal);
+                    const result = await runFertilizerByConfig(targets, { reason: 'multi_season', propagateErrors, lands: latestLands });
+                    const applied = toNum(result.normal) + toNum(result.organic);
+                    if (applied > 0) actions.push(`补肥${applied}`);
+                    counts.fertilize += applied;
                 }
             } catch (e: any) {
                 logWarn('施肥', `巡田补肥失败: ${e.message}`, {
@@ -824,6 +919,9 @@ async function checkFertilizerBuyOnce(type?: FertilizerBuyType): Promise<void> {
 }
 
 module.exports = {
+    getYishuFarmStatus,
+    plantYishuWhenFarmPaused,
+    harvestYishuMatureLands,
     checkFarm,
     runFarmOperation,
     scheduleNextFarmCheck,

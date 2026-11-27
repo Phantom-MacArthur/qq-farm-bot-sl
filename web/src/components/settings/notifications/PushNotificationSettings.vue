@@ -11,6 +11,7 @@ import { useSettingStore } from '@/stores/setting'
 import { useToastStore } from '@/stores/toast'
 import NotificationFields from './NotificationFields.vue'
 import OfflineReminderCard from './OfflineReminderCard.vue'
+import QqBotPushSettings from './QqBotPushSettings.vue'
 
 const { currentAccountId } = storeToRefs(useAccountStore())
 const settingStore = useSettingStore()
@@ -127,6 +128,7 @@ function applyDefault() {
       <p v-else-if="!currentAccountId" class="text-sm text-gray-500" role="status">请先选择账号</p>
       <p v-else-if="loading" class="text-sm text-gray-500" role="status">读取中…</p>
       <BaseButton v-else variant="secondary" size="sm" @click="settingStore.fetchSettings(currentAccountId)">重新读取</BaseButton>
+      <QqBotPushSettings />
     </template>
   </SettingsPanel>
 

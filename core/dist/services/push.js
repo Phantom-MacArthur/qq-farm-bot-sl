@@ -1,0 +1,218 @@
+"use strict";
+/**
+ * 推送接口封装（基于 pushoo）
+ */
+Object.defineProperty(exports, "__esModule", { value: true });
+const crypto = require('node:crypto');
+const axios = require('axios').default;
+const pushoo = require('pushoo').default;
+const DINGTALK_WEBHOOK_PREFIX = 'https://oapi.dingtalk.com/robot/send?access_token=';
+const MEOW_DEFAULT_BASE_URL = 'https://api.chuckfang.com';
+function assertRequiredText(name, value) {
+    const text = String(value || '').trim();
+    if (!text) {
+        throw new Error(`${name} 不能为空`);
+    }
+    return text;
+}
+function createDingTalkSign(secretInput, timestampInput) {
+    const secret = assertRequiredText('钉钉加签密钥', secretInput);
+    const timestamp = Math.trunc(Number(timestampInput));
+    if (!Number.isFinite(timestamp) || timestamp <= 0) {
+        throw new Error('钉钉加签时间戳无效');
+    }
+    return crypto
+        .createHmac('sha256', secret)
+        .update(`${timestamp}\n${secret}`, 'utf8')
+        .digest('base64');
+}
+function buildDingTalkWebhook(endpointInput, tokenInput, secretInput = '', timestampInput = Date.now()) {
+    const endpoint = String(endpointInput || '').trim();
+    const token = String(tokenInput || '').trim();
+    const credential = assertRequiredText('钉钉 Webhook 地址', endpoint || token);
+    const rawUrl = /^https?:\/\//i.test(credential)
+        ? credential
+        : `${DINGTALK_WEBHOOK_PREFIX}${encodeURIComponent(credential)}`;
+    let url;
+    try {
+        url = new URL(rawUrl);
+    }
+    catch {
+        throw new Error('钉钉 Webhook 地址格式无效');
+    }
+    const isOfficialWebhook = url.protocol === 'https:'
+        && url.hostname.toLowerCase() === 'oapi.dingtalk.com'
+        && url.pathname === '/robot/send'
+        && !!url.searchParams.get('access_token');
+    if (!isOfficialWebhook) {
+        throw new Error('钉钉 Webhook 地址格式无效');
+    }
+    const secret = String(secretInput || '').trim();
+    if (secret) {
+        const timestamp = Math.trunc(Number(timestampInput));
+        const sign = createDingTalkSign(secret, timestamp);
+        url.searchParams.set('timestamp', String(timestamp));
+        url.searchParams.set('sign', sign);
+    }
+    return url.toString();
+}
+async function sendDingTalkMessage(payload) {
+    const url = buildDingTalkWebhook(payload.endpoint, payload.token, payload.secret);
+    const title = assertRequiredText('title', payload.title);
+    const content = assertRequiredText('content', payload.content);
+    const response = await axios.post(url, {
+        msgtype: 'text',
+        text: {
+            content: `${title}\n${content}`,
+        },
+    });
+    return response.data;
+}
+/**
+ * 发送 MeoW 推送（鸿蒙 MeoW 消息推送 API）
+ * @param payload
+ * @param payload.token 必填 用户昵称（作为路径参数）
+ * @param payload.endpoint 可选 自定义接口地址（默认 https://api.chuckfang.com）
+ * @param payload.title 必填 推送标题
+ * @param payload.content 必填 推送内容
+ * @returns MeoW 推送结果
+ */
+async function sendMeowMessage(payload) {
+    const nickname = assertRequiredText('MeoW 昵称', payload.token);
+    const title = assertRequiredText('title', payload.title);
+    const content = assertRequiredText('content', payload.content);
+    const baseUrl = String(payload.endpoint || MEOW_DEFAULT_BASE_URL).trim().replace(/\/+$/, '');
+    if (!/^https?:\/\//i.test(baseUrl)) {
+        throw new Error('MeoW 接口地址格式无效');
+    }
+    const url = `${baseUrl}/${encodeURIComponent(nickname)}`;
+    const response = await axios.post(url, {
+        title,
+        msg: content,
+    });
+    const data = (response && response.data && typeof response.data === 'object') ? response.data : {};
+    const status = Number(data.status);
+    if (Number.isFinite(status) && status !== 200) {
+        // MeoW 业务状态码非 200 视为失败，转为 error 结构便于统一结果判断
+        return {
+            status,
+            error: {
+                message: String(data.msg || data.message || 'MeoW 推送失败'),
+            },
+        };
+    }
+    return data;
+}
+/**
+ * 发送推送
+ * @param payload
+ * @param payload.channel 必填 推送渠道（pushoo 平台名，如 webhook）
+ * @param payload.endpoint Webhook 接口地址（webhook、dingtalk 渠道使用）
+ * @param payload.token 除 webhook、dingtalk 外的渠道必填；兼容旧版钉钉 access token
+ * @param payload.secret 钉钉机器人加签密钥（可选）
+ * @param payload.title 必填 推送标题
+ * @param payload.content 必填 推送内容
+ * @returns 推送结果
+ */
+async function sendPushooMessage(payload = {}) {
+    const channel = assertRequiredText('channel', payload.channel);
+    const endpoint = String(payload.endpoint || '').trim();
+    const rawToken = String(payload.token || '').trim();
+    const secret = String(payload.secret || '').trim();
+    const token = channel === 'webhook' || channel === 'dingtalk'
+        ? rawToken
+        : assertRequiredText('token', rawToken);
+    const title = assertRequiredText('title', payload.title);
+    const content = assertRequiredText('content', payload.content);
+    const options = {};
+    if (channel === 'webhook') {
+        const url = assertRequiredText('endpoint', endpoint);
+        options.webhook = { url, method: 'POST' };
+    }
+    const request = { title, content };
+    if (token)
+        request.token = token;
+    if (channel === 'webhook')
+        request.options = options;
+    const result = channel === 'dingtalk'
+        ? await sendDingTalkMessage({ endpoint, token, secret, title, content })
+        : channel === 'meow'
+            ? await sendMeowMessage({ endpoint, token, title, content })
+            : await pushoo(channel, request);
+    const raw = (result && typeof result === 'object') ? result : { data: result };
+    const hasError = Boolean(raw.error) || raw.ok === false || raw.success === false || raw.status === 'failed';
+    const code = String(raw.code ?? raw.errcode ?? raw.retcode ?? raw.error_code ?? (hasError ? 'error' : 'ok'));
+    const accepted = code === 'ok' || code === '0'
+        || (code === '200' && ['pushplus', 'pushplushxtrip', 'bark'].includes(channel))
+        || (channel === 'wxpusher' && code === '1000');
+    const ok = !hasError && accepted;
+    const message = String(raw.msg || raw.errmsg || raw.message || raw.description || raw.error?.message
+        || (ok ? 'ok' : `推送失败（${code}）`));
+    return {
+        ok,
+        code,
+        msg: message,
+        raw,
+    };
+}
+function mapWxPusherResponse(response) {
+    const raw = response && response.data;
+    const code = raw && raw.code !== undefined ? String(raw.code) : '';
+    const ok = code === '1000';
+    return {
+        ok,
+        code: code || 'error',
+        msg: String(raw && (raw.msg || raw.message) || (ok ? '发送成功' : 'WxPusher 消息发送失败')),
+        raw,
+    };
+}
+/**
+ * 通过 WxPusher 极简推送（Simple Push Token）发送通知。payload.token 为 SPT。
+ */
+async function sendWxPusherMessage(payload = {}, post = axios.post) {
+    const spt = assertRequiredText('WxPusher SPT', payload.token);
+    if (!spt.startsWith('SPT_')) {
+        throw new Error('WxPusher SPT 必须以 SPT_ 开头');
+    }
+    const title = assertRequiredText('推送标题', payload.title);
+    const content = assertRequiredText('推送内容', payload.content);
+    const response = await post('https://wxpusher.zjiecode.com/api/send/message/simple-push', {
+        spt,
+        content,
+        summary: title.slice(0, 100),
+        contentType: 1,
+    }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+    });
+    return mapWxPusherResponse(response);
+}
+/**
+ * 通过 WxPusher 标准接口向已订阅 UID 发送通知。payload.token 为 AppToken，payload.wxPusherUid 为接收者。
+ */
+async function sendWxPusherWechatMessage(payload = {}, post = axios.post) {
+    const appToken = assertRequiredText('WxPusher AppToken', payload.token);
+    const uid = assertRequiredText('WxPusher 接收者 UID', payload.wxPusherUid);
+    const title = assertRequiredText('推送标题', payload.title);
+    const content = assertRequiredText('推送内容', payload.content);
+    const response = await post('https://wxpusher.zjiecode.com/api/send/message', {
+        appToken,
+        uids: [uid],
+        content,
+        summary: title.slice(0, 100),
+        contentType: 1,
+    }, {
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 15000,
+    });
+    return mapWxPusherResponse(response);
+}
+module.exports = {
+    buildDingTalkWebhook,
+    createDingTalkSign,
+    sendMeowMessage,
+    sendPushooMessage,
+    sendWxPusherMessage,
+    sendWxPusherWechatMessage,
+};
+//# sourceMappingURL=push.js.map

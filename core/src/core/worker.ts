@@ -5,7 +5,7 @@ import { getFertilizerStrategyGroups, usesImmediateOrganicFertilizer } from '../
 const { parentPort, workerData } = require('node:worker_threads');
 
 const { CONFIG, updateRuntimeConfig } = require('../config/config');
-const { getLevelExpProgress, loadConfigs } = require('../config/gameConfig');
+const { getLevelExpProgress, loadConfigs, getItemImageById, getAllPlants, getAllItems, getSeedImageBySeedId } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot } = require('../models/store');
 const { checkAndClaimEmails, configureEmailClaim, getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand, getAllLands } = require('../services/farm');
@@ -24,6 +24,8 @@ const { isRanchMarketEnabled, RANCH_MARKET_SWITCH_BY_CURRENCY } = require('../co
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
 const { refreshActivityWindows } = require('../services/activity-windows');
+const { createSolarCalendarAutomation, isSolarCalendarAutomationEnabled, SOLAR_CALENDAR_AUTOMATION_KEYS, SOLAR_CALENDAR_CHECK_INTERVAL_MS } = require('../services/solar-calendar-auto');
+const { startYishuTimer, stopYishuWatchdog, YISHU_AUTOMATION_KEYS } = require('../services/yishuhuanfu-auto');
 const { resetSessionGains, initStatsWithPersistence, saveStats, recordOperation } = require('../services/stats');
 const { initStatusBar, setStatusPlatform, statusData, updateStatusGold } = require('../services/status');
 const { setRecordGoldExpHook } = require('../services/status');
@@ -50,6 +52,9 @@ interface WorkerRuntimeConfig {
 }
 
 const workerConfig = CONFIG as WorkerRuntimeConfig;
+
+// 节令日历与其他活动错峰，避免在同一秒触发大量请求。
+const SOLAR_CALENDAR_CHECK_PHASE_MS = 19 * 60 * 1000;
 
 if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUNT_ID) {
     process.env.FARM_ACCOUNT_ID = String(workerData.accountId);
@@ -84,6 +89,79 @@ function exitWorker(code: number = 0): void {
     process.exit(code);
 }
 
+// 名字 -> 游戏物品图路径 的查表（懒加载，只在首次用到时构建）
+let nameIconMap: Map<string, string> | null = null;
+function buildNameIconMap(): Map<string, string> {
+    if (nameIconMap) return nameIconMap;
+    const map = new Map<string, string>();
+    try {
+        for (const p of getAllPlants() as any[]) {
+            const seedId = toNum(p?.seed_id || 0);
+            const image = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
+            const name = String(p?.name || '').trim();
+            if (name && image && !map.has(name)) map.set(name, image);
+        }
+    } catch {}
+    try {
+        for (const item of getAllItems() as any[]) {
+            const image = getItemImageById(toNum(item?.id || 0));
+            const name = String(item?.name || '').trim();
+            if (name && image && !map.has(name)) map.set(name, image);
+        }
+    } catch {}
+    nameIconMap = map;
+    return map;
+}
+
+// 根据名字/物品ID解析事件图标路径
+function resolveEventIconPath(meta: any): string {
+    // 1) 有 itemId 直接查
+    const itemId = toNum(meta.itemId || 0);
+    if (itemId) {
+        try {
+            const p = getItemImageById(itemId);
+            if (p) return p;
+        } catch {}
+    }
+    // 2) 按名字查表（收获作物/出售等只有名字的事件）
+    const name = String(meta.itemName || meta.plantName || meta.name || '').trim();
+    if (name) {
+        const p = buildNameIconMap().get(name);
+        if (p) return p;
+    }
+    return '';
+}
+
+// 为 QQ 机器人推送补充真实资源：好友头像 + 事件图标（游戏物品图）
+function enrichPushMeta(meta: any): any {
+    if (!meta || typeof meta !== 'object') return meta;
+    const event = String(meta.event || '');
+    // 只对推送关注的事件做额外查表，避免给所有日志增加开销
+    const pushEvents = ['sell_success', 'sell_done', '照顾好友', '领取任务', 'ranch_task_claim',
+        'ranch_steal', 'ranch_cleanFriend', '收获作物', '施肥后收获作物', '神秘商人自动购买'];
+    if (!pushEvents.includes(event)) return meta;
+    const enriched = { ...meta };
+
+    // 好友头像：优先按 friendGid，其次按 friendName 从缓存匹配
+    const gid = toNum(meta.friendGid || 0);
+    const friendName = String(meta.friendName || meta.nickname || '').trim();
+    if (gid || friendName) {
+        try {
+            const cached = getFriendsListCacheOnly();
+            const match = (gid && cached.find((f: any) => toNum(f.gid) === gid))
+                || (friendName && cached.find((f: any) => String(f.name || '') === friendName));
+            if (match && match.avatarUrl) {
+                enriched.avatarUrl = String(match.avatarUrl).trim();
+            }
+        } catch {}
+    }
+
+    // 事件图标：优先 itemId，其次按名字查表（收获作物/出售等）
+    const iconPath = resolveEventIconPath(enriched);
+    if (iconPath) enriched.iconPath = iconPath;
+    return enriched;
+}
+
 // 捕获日志发送给主进程
 setLogHook((tag: string, msg: string, isWarn: boolean, meta: any) => {
     sendToMaster({
@@ -93,7 +171,7 @@ setLogHook((tag: string, msg: string, isWarn: boolean, meta: any) => {
             tag,
             msg,
             isWarn,
-            meta: meta || {},
+            meta: enrichPushMeta(meta || {}),
         }
     });
 });
@@ -590,6 +668,39 @@ function startBusinessLoops(): void {
     startDailyRoutineTimer(false);
     for (const key of COUPON_GIFT_SWITCHES) startCouponGiftTimer(key);
     startMugeRewardTimer();
+    startSolarCalendarTimer();
+    startYishuTimer(workerScheduler, isActivityAutomationReady);
+}
+
+function isActivityAutomationReady(): boolean {
+    return loginReady && !shutdownStarted;
+}
+
+let solarCalendarAutomation: any;
+
+function startSolarCalendarTimer(): void {
+    workerScheduler.clear('solar_calendar_initial');
+    workerScheduler.clear('solar_calendar_interval');
+    if (!isActivityAutomationReady() || !isSolarCalendarAutomationEnabled(getAutomation())) return;
+
+    const generation = runtimeGeneration;
+    const tick = () => runExclusiveAutomationTask('solar_calendar', async () => {
+        if (!isActivityAutomationReady() || generation !== runtimeGeneration) return;
+        const automation = getAutomation();
+        if (!isSolarCalendarAutomationEnabled(automation)) return;
+        if (!solarCalendarAutomation) {
+            const { getSolarCalendar, operateSolarCalendar } = require('../services/solar-calendar');
+            const { getServerTimeSec } = require('../utils/utils');
+            solarCalendarAutomation = createSolarCalendarAutomation({ getSolarCalendar, operateSolarCalendar, getServerTimeSec, log });
+        }
+        await solarCalendarAutomation.runSolarCalendarAutomation({
+            claimEvents: automation.solar_calendar_claim_events === true,
+            claimSeasons: automation.solar_calendar_claim_seasons === true,
+            answerQuiz: automation.solar_calendar_answer_quiz === true,
+        }, (key: string) => isActivityAutomationReady() && generation === runtimeGeneration && getAutomation()[key] === true);
+    }).catch(() => null);
+    workerScheduler.setTimeoutTask('solar_calendar_initial', 150_000, tick);
+    workerScheduler.setIntervalTask('solar_calendar_interval', SOLAR_CALENDAR_CHECK_INTERVAL_MS, tick, { phaseMs: SOLAR_CALENDAR_CHECK_PHASE_MS });
 }
 
 let mugeRewardsRunning = false;
@@ -732,6 +843,8 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
                 if (nextAuto[key] !== prevAuto[key]) startCouponGiftTimer(key);
             }
             if (MUGE_REWARD_KEYS.some((key: string) => nextAuto[key] !== prevAuto[key])) startMugeRewardTimer();
+            if (SOLAR_CALENDAR_AUTOMATION_KEYS.some((key: string) => nextAuto[key] !== prevAuto[key])) startSolarCalendarTimer();
+            if (YISHU_AUTOMATION_KEYS.some((key: string) => nextAuto[key] !== prevAuto[key])) startYishuTimer(workerScheduler, isActivityAutomationReady);
             if (Object.keys(FARM_DAILY_DEFAULTS).some(key => prevAuto[key] === false && nextAuto[key] === true)) {
                 workerScheduler.setTimeoutTask('daily_routines_after_save', 600, () =>
                     runExclusiveAutomationTask('daily_routines', () => runDailyRoutines()).catch(() => null));
@@ -755,6 +868,8 @@ onMasterMessage(async (msg: any) => {
             handleApiCall(msg);
         } else if (msg.type === 'config_sync') {
             applyRuntimeConfig(msg.config || {}, true);
+        } else if (msg.type === 'yishu_shop_accounts') {
+            require('../services/activity-center').setYishuOnlineShopAccounts(msg.accounts);
         } else if (msg.type === 'reload_config') {
             if (typeof loadConfigs === 'function') loadConfigs();
         }
@@ -1035,6 +1150,7 @@ function quiesceBot(reason: string, offlineCode: 'ACCOUNT_OFFLINE' | 'GAME_OFFLI
     stopFriendCheckLoop();
     stopDailyRoutineTimer();
     cleanupTaskSystem();
+    stopYishuWatchdog();
     workerScheduler.clearAll();
     detachRuntimeListeners();
     const done = detach ? detachHostedSession() : cleanup(reason);
@@ -1060,7 +1176,7 @@ function handleTerminalDisconnect(payload: any): void {
     const code = Number(payload?.code) || 0;
     const reason = String(payload?.reason || '连接已断开');
     const phase = String(payload?.phase || 'unknown');
-    log('系统', `连接已断开，不再使用旧 Code 重连 (source=${source}, code=${code}, phase=${phase})`, {
+    log('系统', `连接已断开，本进程不再复用旧 Code 重连（是否用原 Code 重启由主进程决定）(source=${source}, code=${code}, phase=${phase})`, {
         source, disconnectCode: code, reason, phase, diagnostics: payload?.diagnostics || null,
     });
     saveStats();
@@ -1110,12 +1226,36 @@ async function handleApiCall(msg: any): Promise<void> {
             if (getWs()?.readyState !== 1) {
                 throw Object.assign(new Error('账号连接已断开'), { code: 'GAME_OFFLINE' });
             }
-            await runExclusiveAutomationTask(`api:${method}`, async () => {
+            // 概览命中快照时无需排队，缓存缺失时仍在独占任务里切换场景。
+            const ranchDashboard = method === 'getRanchState' && args[0] === 'dashboard'
+                ? require('../services/ranch/state').getCachedDashboardState()
+                : null;
+            if (ranchDashboard) {
+                result = ranchDashboard;
+            } else if (method === 'getActivityDirectorySnapshot') {
+                // 目录查询使用显式场景 ID，仅查询 List，由网关请求队列调度。
+                result = await require('../services/activity-center').getActivityDirectorySnapshot();
+            } else if (method === 'getRanchActivityDirectorySnapshot') {
+                result = await require('../services/activity-center').getRanchActivityDirectorySnapshot();
+            } else if (method === 'scanYishuHuanfuFriendShops' || method === 'refreshYishuHuanfuFriendShops') {
+                // 读取行情缓存和登记手动刷新都不发送网关请求。
+                result = require('../services/activity-center')[method]();
+            } else if (method === 'getBag') {
+                // 只有不带场景 ID 的背包 RPC 需要等待当前场景任务结束。
+                result = await require('../services/warehouse').getBagDetail(() =>
+                    runExclusiveAutomationTask('api:getBag', () => {
+                        if (!loginReady || shutdownStarted) throw new Error('账号未连接');
+                        return getBag();
+                    }, { interactiveRead: true }));
+            } else await runExclusiveAutomationTask(`api:${method}`, async () => {
                 if (!loginReady || shutdownStarted) throw new Error('账号未连接');
                 switch (method) {
                 case 'getRanchState':
                     // 打包版的 fork 使用 JSON IPC，会把缺省的好友 GID 编码成 null。
                     result = await require('../services/ranch').getRanchState(args[0], args[1], args[2] ?? undefined);
+                    break;
+                case 'clearRanchIllustratedNew':
+                    result = await require('../services/ranch/book').clearGiantBookNew();
                     break;
                 case 'clearRanchIllustratedNew':
                     result = await require('../services/ranch/book').clearGiantBookNew();
@@ -1129,8 +1269,32 @@ async function handleApiCall(msg: any): Promise<void> {
                 case 'clearIllustratedNew':
                     result = await require('../services/illustrated').clearIllustratedNew(args[0]);
                     break;
-                case 'getRanchActivityDirectorySnapshot':
-                    result = await require('../services/activity-center').getRanchActivityDirectorySnapshot();
+                case 'getCurrentYishuHuanfuActivity':
+                    result = await require('../services/activity-center').getCurrentYishuHuanfuActivity();
+                    break;
+                case 'queryYishuHuanfuCatalog':
+                    result = await require('../services/activity-center').queryYishuHuanfuCatalog();
+                    break;
+                case 'queryYishuHuanfuRecords':
+                    result = await require('../services/activity-center').queryYishuHuanfuRecords();
+                    break;
+                case 'sellYishuHuanfuSweetPotato':
+                    result = await require('../services/activity-center').sellYishuHuanfuSweetPotato(args[0], args[1], args[2]);
+                    break;
+                case 'getYishuFarmStatus':
+                    result = await require('../services/farm/scheduler').getYishuFarmStatus();
+                    break;
+                case 'resolveYishuSale':
+                    result = await require('../services/activity-center').resolveYishuSale(args[0]);
+                    break;
+                case 'queryYishuHuanfuShop':
+                    result = await require('../services/activity-center').queryYishuHuanfuShop(args[0]);
+                    break;
+                case 'exchangeYishuHuanfuGoods':
+                    result = await require('../services/activity-center').exchangeYishuHuanfuGoods(args[0], args[1]);
+                    break;
+                case 'refreshYishuHuanfuQuote':
+                    result = await require('../services/activity-center').refreshYishuHuanfuQuote();
                     break;
                 case 'getMugeActivity':
                     result = await require('../services/muge-activity').getMugeActivity(args[0]);
@@ -1164,7 +1328,7 @@ async function handleApiCall(msg: any): Promise<void> {
                 result = await require('../services/solar-calendar').operateSolarCalendar(args[0], args[1]);
                 break;
             case 'getFriends':
-                result = await getFriendsList(args[0] === true, 'normal', args[1] === true);
+                result = await getFriendsList(args[0] === true, args[3] === 'low' ? 'low' : 'normal', args[1] === true);
                 if (args[2]) result = { data: result, partial: isFriendsListPartial() };
                 break;
             case 'getFriendsCache':
@@ -1207,9 +1371,6 @@ async function handleApiCall(msg: any): Promise<void> {
                 break;
             case 'purchaseSeed':
                 result = await purchaseSeed(args[0], args[1]);
-                break;
-            case 'getBag':
-                result = await require('../services/warehouse').getBagDetail();
                 break;
             case 'getBagSeeds':
                 result = await require('../services/warehouse').getBagSeeds();
@@ -1307,9 +1468,6 @@ async function handleApiCall(msg: any): Promise<void> {
             }
             case 'getDailyGiftOverview':
                 result = await getDailyGiftOverview(args[0] === true);
-                break;
-            case 'getActivityDirectorySnapshot':
-                result = await require('../services/activity-center').getActivityDirectorySnapshot();
                 break;
             case 'getActivityCenterSnapshot':
                 result = await require('../services/activity-center').getActivityCenterSnapshot();
@@ -1473,7 +1631,7 @@ async function handleApiCall(msg: any): Promise<void> {
             default:
                 error = 'Unknown method';
                 }
-            });
+            }, { interactiveRead: method === 'getRanchState' && (args[0] === 'dashboard' || args[0] === 'bag') });
         }
     } catch (e: any) {
         error = {
@@ -1597,6 +1755,7 @@ function syncStatus(force: boolean = false): void {
 
     const limits = require('../services/friend').getOperationLimits();
     const fullStats = require('../services/stats').getStats(statusData, userState, connected, limits);
+    fullStats.status.gid = String(userState.gid || '');
     const nowMs = Date.now();
     const farmRemainSec = Math.max(0, Math.ceil((Number(nextFarmRunAt || 0) - nowMs) / 1000));
     const friendRemainSec = Math.max(0, Math.ceil((Number(nextFriendRunAt || 0) - nowMs) / 1000));

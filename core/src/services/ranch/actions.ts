@@ -174,9 +174,11 @@ async function planAction(action: string, input: any, raw: any, produceTargets?:
         const strategy = feedStage ?? (bucketType === 2 && input.normalStage === 'longest' ? 'longest' : 'any');
         const nowSeconds = getServerTimeSec();
         const animals = unused.filter(animal => matchesFeedStage(animal, strategy, nowSeconds * 1000));
-        if (!animals.length) plan.message = feedable.length ? '普通罐头本轮已使用' : '当前没有可喂养的动物';
-        if (unused.length && !animals.length) {
-            plan.message = strategy === 'longest' ? '当前没有处于最长生长阶段的可喂养动物' : '当前没有符合罐头使用时机的动物';
+        if (!animals.length) {
+            // 空目标要分清是「没动物可喂」「本轮罐头已用完」还是「被使用时机策略挡下」，提示才有指导性。
+            if (!feedable.length) plan.message = '当前没有可喂养的动物';
+            else if (!unused.length) plan.message = '罐头本轮已使用';
+            else plan.message = strategy === 'longest' ? '当前没有处于最长生长阶段的可喂养动物' : '当前没有符合罐头使用时机的动物';
         }
         plan.payload = { targets: animalRefs(animals), bucket_type: bucketType };
         const maxSeconds = animals.reduce((sum, animal) => {

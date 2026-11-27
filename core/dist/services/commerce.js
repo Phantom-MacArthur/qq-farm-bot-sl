@@ -1,0 +1,582 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const { getItemById, getItemImageById, getShopGoodsById } = require('../config/gameConfig');
+const { getServerTimeSec, toNum, logWarn } = require('../utils/utils');
+const mallService = require('./mall');
+const mysteryShopService = require('./mystery-shop');
+let purchaseTail = Promise.resolve();
+function businessError(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+}
+function positiveInteger(value, code, label) {
+    const text = String(value ?? '').trim();
+    if (!/^[1-9]\d*$/.test(text))
+        throw businessError(code, `${label} must be a positive integer`);
+    const result = Number(text);
+    if (!Number.isSafeInteger(result))
+        throw businessError(code, `${label} is too large`);
+    return result;
+}
+function boundedInteger(value, fallback, min, max) {
+    const result = Number(value);
+    return Number.isInteger(result) && result >= min && result <= max ? result : fallback;
+}
+function itemDto(item, fallbackName = '') {
+    const id = Math.max(0, toNum(item?.id));
+    const metadata = id > 0 ? getItemById(id) : null;
+    return {
+        id,
+        count: Math.max(0, toNum(item?.count)),
+        name: String(metadata?.name || fallbackName || (id > 0 ? `物品 #${id}` : '未知物品')),
+        image: id > 0 ? getItemImageById(id) : '',
+        rarity: Math.max(0, Number(metadata?.rarity) || 0),
+    };
+}
+/**
+ * 常规商城（礼包/特惠/道具）固定展示的四种货币：金币、点券、金豆豆、钻石。
+ * 与商品实际用哪种货币无关 —— 不管切到哪个商城，余额栏位都保持同一组、同一顺序，
+ * 用户不需要因为换了页签就重新找位置。
+ */
+const STANDARD_CURRENCY_IDS = [1001, 1002, 1005, 1004];
+// SVIP 商城（slotType 4）买的是头像框/铭牌碎片这类专属币，金币钻石与它无关，
+// 硬塞四个常规货币只会占位，所以那里只下发商品实际用到的币种。
+function currencyIdsOf(priceIds, includeStandard = true) {
+    const base = includeStandard ? STANDARD_CURRENCY_IDS : [];
+    return [...new Set([...base, ...priceIds.filter(id => id > 0)])];
+}
+function currencyList(ids, balances) {
+    return ids.map(id => ({
+        ...itemDto({ id, count: balances[String(id)] || 0 }),
+        balanceKnown: Object.hasOwn(balances, String(id)),
+    }));
+}
+async function currencyBalances(ids) {
+    const wanted = new Set(ids.filter(id => id > 0));
+    const balances = {};
+    if (!wanted.size)
+        return balances;
+    try {
+        const warehouse = require('./warehouse');
+        const reply = await warehouse.getBag();
+        for (const item of warehouse.getBagItems(reply)) {
+            const id = toNum(item?.id);
+            if (wanted.has(id))
+                balances[String(id)] = (balances[String(id)] || 0) + Math.max(0, toNum(item?.count));
+        }
+        for (const id of wanted)
+            balances[String(id)] ??= 0;
+    }
+    catch {
+        // Catalog data remains useful while a balance refresh is unavailable.
+    }
+    if (wanted.has(1004)) {
+        try {
+            const pay = require('./pay');
+            balances['1004'] = Math.max(0, toNum(await pay.getDiamondBalance()));
+        }
+        catch {
+            delete balances['1004'];
+        }
+    }
+    return balances;
+}
+function limitDto(limit) {
+    if (!limit || toNum(limit.limit_type) === 0)
+        return null;
+    const bought = Math.max(0, toNum(limit.bought_count));
+    const max = Math.max(0, toNum(limit.limit_count));
+    return {
+        type: Math.max(0, toNum(limit.limit_type)),
+        bought,
+        max,
+        remaining: Math.max(0, max - bought),
+    };
+}
+function mallAvailability(goods, limit, slotType) {
+    if (goods?.is_owned)
+        return { status: 'owned', reason: '已拥有该商品' };
+    if (limit?.remaining === 0) {
+        return { status: 'sold_out', reason: goods?.is_free ? '奖励已领取' : '商品已售罄，已达到限购上限' };
+    }
+    if (goods?.ad_only)
+        return { status: 'ad_required', reason: '请在游戏内观看广告领取' };
+    if (goods?.share?.share_only && toNum(goods.share.share_status) !== 2) {
+        return { status: 'share_required', reason: '请在游戏内完成分享条件' };
+    }
+    // Normal unrestricted products omit field 8 in live replies. The official
+    // client uses restriction presence/type to distinguish unlimited purchases.
+    // SVIP still requires its own availability flag and membership check.
+    if (goods?.is_available !== true && !(slotType === 1 && !limit)) {
+        return { status: 'unavailable', reason: '商品当前不可购买' };
+    }
+    return { status: 'available', reason: '' };
+}
+function mallGoodsDto(goods, balances, slotType) {
+    const price = itemDto(goods?.price);
+    const originalPrice = price.count;
+    const discountPrice = Math.max(0, toNum(goods?.discount_price));
+    const promotionStart = toNum(goods?.promotion_start_time);
+    const promotionEnd = toNum(goods?.promotion_end_time);
+    const now = getServerTimeSec();
+    const promotionActive = discountPrice > 0 && promotionStart <= now && promotionEnd > now;
+    if (promotionActive)
+        price.count = discountPrice;
+    const limit = limitDto(goods?.purchase_limit);
+    const isFree = goods?.is_free === true && price.count === 0;
+    const availability = mallAvailability(goods, limit, slotType);
+    const balance = price.id > 0 && Object.hasOwn(balances, String(price.id))
+        ? balances[String(price.id)]
+        : null;
+    return {
+        id: Math.max(0, toNum(goods?.goods_id)),
+        name: String(goods?.name || ''),
+        type: Math.max(0, toNum(goods?.goods_type)),
+        rewards: (Array.isArray(goods?.reward_items) ? goods.reward_items : []).map((item) => itemDto(item)),
+        price: { ...price, balance },
+        originalPrice: promotionActive ? originalPrice : null,
+        isFree,
+        limit,
+        isLimited: !!limit,
+        productType: toNum(goods?.product_type),
+        purchaseStatus: availability.status,
+        unavailableReason: availability.reason,
+        discountText: discountPrice > 0 && !promotionActive ? '' : String(goods?.discount_text || ''),
+        isDiscounted: discountPrice > 0 ? promotionActive : !!goods?.is_discounted,
+        discountEndTime: Math.max(0, discountPrice > 0 ? promotionEnd : toNum(goods?.discount_end_time)) * 1000,
+        available: availability.status === 'available',
+        purchasable: availability.status === 'available',
+    };
+}
+async function getMallCatalog(slotTypeInput = 1, subSlotTypeInput = 0) {
+    const slotType = boundedInteger(slotTypeInput, 1, 1, 100);
+    const subSlotType = boundedInteger(subSlotTypeInput, 0, 0, 100);
+    let membership = null;
+    if (slotType === 4) {
+        const vip = require('./qqvip');
+        const status = await vip.getQQVipRewardsStatus();
+        membership = { isSvip: status.is_qq_vip === true, remainingDays: toNum(status.remaining_days) };
+    }
+    const reply = await mallService.getMallListBySlotType(slotType, subSlotType);
+    const goods = Array.isArray(reply?.goods_list) ? reply.goods_list : [];
+    const currencyIds = currencyIdsOf(goods.map((entry) => Math.max(0, toNum(entry?.price?.id))), slotType !== 4);
+    const balances = await currencyBalances(currencyIds);
+    return {
+        slotType,
+        subSlotType,
+        membership,
+        serverTime: getServerTimeSec() * 1000,
+        refreshCountdown: Math.max(0, toNum(reply?.refresh_countdown)),
+        currencies: currencyList(currencyIds, balances),
+        goods: goods.map((entry) => {
+            const product = mallGoodsDto(entry, balances, slotType);
+            return membership && !membership.isSvip
+                ? { ...product, available: false, purchasable: false, purchaseStatus: 'svip_required', unavailableReason: '需要 SVIP 会员身份' }
+                : product;
+        }),
+    };
+}
+function serializePurchase(operation) {
+    const result = purchaseTail.then(operation, operation);
+    purchaseTail = result.then(() => undefined, () => undefined);
+    return result;
+}
+async function purchaseMallProduct(goodsIdInput, countInput, slotTypeInput = 1, expectedPrice) {
+    const goodsId = positiveInteger(goodsIdInput, 'INVALID_GOODS_ID', 'goodsId');
+    const count = positiveInteger(countInput, 'INVALID_PURCHASE_COUNT', 'count');
+    if (count > 9999)
+        throw businessError('INVALID_PURCHASE_COUNT', 'count exceeds 9999');
+    return serializePurchase(async () => {
+        const slotType = Number(slotTypeInput);
+        if (slotType !== 1 && slotType !== 4 && slotType !== 5)
+            throw businessError('INVALID_MALL_SLOT', '不支持的商城分页');
+        const before = await getMallCatalog(slotType, 0);
+        const goods = before.goods.find((entry) => entry.id === goodsId);
+        if (!goods)
+            throw businessError('GOODS_NOT_FOUND', 'Mall goods not found');
+        if (goods.purchaseStatus === 'sold_out')
+            throw businessError('GOODS_SOLD_OUT', goods.unavailableReason);
+        if (!goods.purchasable)
+            throw businessError('GOODS_UNAVAILABLE', 'Mall goods is unavailable');
+        if (expectedPrice && (Number(expectedPrice.id) !== goods.price.id || Number(expectedPrice.count) !== goods.price.count)) {
+            throw businessError('MALL_PRICE_CHANGED', '商品价格已变化，请刷新商城后重新确认');
+        }
+        if (Array.isArray(expectedPrice?.rewards)) {
+            const signature = (items) => items.map(item => `${item.id}:${item.count}`).sort().join('|');
+            if (signature(expectedPrice.rewards) !== signature(goods.rewards))
+                throw businessError('MALL_CONTENT_CHANGED', '礼包内容已变化，请刷新后重新确认');
+        }
+        if (!goods.isFree && (goods.price.id <= 0 || goods.price.count <= 0 || goods.price.balance === null)) {
+            throw businessError('MALL_BALANCE_UNAVAILABLE', '商品价格或余额未确认，请刷新后重试');
+        }
+        if (goods.limit?.remaining !== null && goods.limit?.remaining < count) {
+            throw businessError('PURCHASE_LIMIT_EXCEEDED', 'Purchase count exceeds the remaining limit');
+        }
+        if (!goods.isFree && goods.price.balance !== null && goods.price.balance < goods.price.count * count) {
+            throw businessError('INSUFFICIENT_BALANCE', 'Insufficient currency balance');
+        }
+        const reply = await mallService.purchaseMallGoods(goodsId, count);
+        let catalog = null;
+        try {
+            catalog = await getMallCatalog(slotType, 0);
+        }
+        catch { }
+        return {
+            purchase: {
+                goodsId: Math.max(0, toNum(reply?.goods_id)),
+                count,
+                rewards: (Array.isArray(reply?.reward_items) ? reply.reward_items : []).map((item) => itemDto(item)),
+                limit: limitDto(reply?.purchase_limit),
+            },
+            catalog,
+            refreshRequired: !catalog,
+        };
+    });
+}
+// ShopService 4 is the official 道具 tab; MallService slot 4 is SVIP.
+const PROPS_SHOP_ID = 4;
+async function getPropsShop() {
+    const reply = await require('./farm/api').getShopInfo(PROPS_SHOP_ID);
+    // ShopInfo 只提供价格数额，币种由匹配的商品配置确定。
+    const offers = (reply.goods_list || []).map((goods) => {
+        const config = getShopGoodsById(toNum(goods.id));
+        const currencyId = config?.shop_id === PROPS_SHOP_ID && config.item_id === toNum(goods.item_id)
+            ? config.price_id : 0;
+        return { goods, currencyId };
+    });
+    const currencyIds = Array.from(new Set(offers.map((offer) => offer.currencyId))).filter(id => id > 0);
+    const balances = await currencyBalances(currencyIds);
+    const now = getServerTimeSec();
+    return {
+        shopId: PROPS_SHOP_ID,
+        slotType: 0,
+        subSlotType: 0,
+        serverTime: now * 1000,
+        refreshCountdown: 0,
+        currencies: currencyIds.map(id => ({ ...itemDto({ id, count: balances[id] || 0 }), balanceKnown: Object.hasOwn(balances, id) })),
+        goods: offers.map(({ goods, currencyId }) => {
+            const start = toNum(goods.discount_start_time);
+            const end = toNum(goods.discount_end_time);
+            // Proto3 omits discount_price=0. Positive, active dates establish
+            // a free promotion even when that price has no wire field.
+            const promotionActive = start > 0 && end > start && start <= now && now < end;
+            const price = promotionActive ? toNum(goods.discount_price) : toNum(goods.price);
+            const reward = itemDto({ id: goods.item_id, count: goods.item_count });
+            const max = toNum(goods.limit_count);
+            const bought = toNum(goods.bought_num);
+            const limit = max > 0 ? { type: 1, bought, max, remaining: Math.max(0, max - bought) } : null;
+            const valid = currencyId > 0 && Number.isSafeInteger(price) && price >= 0 && reward.id > 0 && Number.isSafeInteger(reward.count) && reward.count > 0;
+            const expired = toNum(goods.end_time) > 0 && now >= toNum(goods.end_time);
+            const status = goods.owned ? 'owned' : limit?.remaining === 0 ? 'sold_out'
+                : goods.unlocked !== true || expired || !valid ? 'unavailable' : 'available';
+            const reason = status === 'owned' ? '已拥有该道具' : status === 'sold_out' ? '已达到限购上限'
+                : expired ? '商品已下架' : goods.unlocked !== true ? '道具尚未解锁'
+                    : currencyId <= 0 ? '商品币种未确认，请更新游戏资源' : !valid ? '商品价格或内容未确认' : '';
+            return {
+                id: toNum(goods.id), name: reward.name, type: PROPS_SHOP_ID,
+                rewards: [reward],
+                price: { ...itemDto({ id: currencyId, count: price }), balance: balances[currencyId] ?? null },
+                originalPrice: promotionActive ? toNum(goods.price) : null,
+                isFree: valid && price === 0,
+                limit, isLimited: !!limit,
+                discountText: '', isDiscounted: promotionActive, discountEndTime: promotionActive ? end * 1000 : 0,
+                purchaseStatus: status, unavailableReason: reason,
+                available: status === 'available', purchasable: status === 'available',
+            };
+        }),
+    };
+}
+async function purchaseProps(goodsIdInput, countInput, expectedOffer) {
+    const goodsId = positiveInteger(goodsIdInput, 'INVALID_GOODS_ID', 'goodsId');
+    const count = positiveInteger(countInput, 'INVALID_PURCHASE_COUNT', 'count');
+    if (count > 9999)
+        throw businessError('INVALID_PURCHASE_COUNT', '购买数量超过上限');
+    return serializePurchase(async () => {
+        const before = await getPropsShop();
+        const goods = before.goods.find((entry) => entry.id === goodsId);
+        if (!goods?.purchasable)
+            throw businessError('GOODS_UNAVAILABLE', goods?.unavailableReason || '道具已不在当前商店中');
+        const signature = (items) => items.map(item => `${item.id}:${item.count}`).sort().join('|');
+        if (!expectedOffer || Number(expectedOffer.price?.id) !== goods.price.id || Number(expectedOffer.price?.count) !== goods.price.count
+            || !Array.isArray(expectedOffer.rewards) || signature(expectedOffer.rewards) !== signature(goods.rewards)) {
+            throw businessError('SHOP_OFFER_CHANGED', '道具价格或内容已变化，请刷新后重新确认');
+        }
+        if (goods.limit && goods.limit.remaining < count)
+            throw businessError('PURCHASE_LIMIT_EXCEEDED', '购买数量超过剩余限购数量');
+        const amount = goods.price.count * count;
+        const rewardAmount = goods.rewards[0].count * count;
+        if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(rewardAmount))
+            throw businessError('INVALID_PURCHASE_COUNT', '购买数量无效');
+        if (amount > 0) {
+            let available;
+            if (goods.price.id === 1004) {
+                available = toNum(await require('./pay').getDiamondBalance());
+            }
+            else {
+                const warehouse = require('./warehouse');
+                const bag = await warehouse.getBag();
+                const currency = warehouse.getBagItems(bag).filter((item) => toNum(item.id) === goods.price.id);
+                available = currency.filter((item) => !warehouse.isItemLocked(item)).reduce((sum, item) => sum + toNum(item.count), 0);
+            }
+            if (goods.price.balance === null || available < amount)
+                throw businessError('INSUFFICIENT_BALANCE', `${goods.price.name}可用余额不足`);
+        }
+        const reply = await require('./farm/api').buyGoods(goodsId, count, goods.price.count);
+        const rewards = (reply.get_items || []).map((item) => itemDto(item));
+        const costs = (reply.cost_items || []).map((item) => itemDto(item)).filter((item) => item.count > 0);
+        if (rewards.length !== 1 || rewards[0].id !== goods.rewards[0].id || rewards[0].count !== rewardAmount
+            || costs.some((item) => item.id !== goods.price.id)
+            || costs.reduce((sum, item) => sum + item.count, 0) !== amount) {
+            throw businessError('SHOP_RESULT_UNCONFIRMED', '购买回包与商品不一致，请刷新确认，勿重复购买');
+        }
+        let catalog = null;
+        try {
+            catalog = await getPropsShop();
+        }
+        catch { }
+        return { purchase: { goodsId, count, rewards }, catalog, refreshRequired: !catalog };
+    });
+}
+const PET_SHOP_TYPE = 3;
+const PET_SHOP_PRICES = {
+    90002: { currencyId: 1001, expectedPrice: 500000 },
+    90003: { currencyId: 1001, expectedPrice: 1000000 },
+    90011: { currencyId: 1005, expectedPrice: 4800 },
+};
+async function getPetShop() {
+    const farmApi = require('./farm/api');
+    let shopId = PET_SHOP_TYPE;
+    let profiles;
+    try {
+        profiles = await farmApi.getShopProfiles();
+    }
+    catch { /* Older servers may not expose shop profiles. */ }
+    const discoveredId = toNum((profiles?.shop_profiles || []).find((profile) => toNum(profile.shop_type) === PET_SHOP_TYPE)?.shop_id);
+    if (discoveredId)
+        shopId = discoveredId;
+    const reply = await farmApi.getShopInfo(shopId);
+    const balances = await currencyBalances([1001, 1002, 1005]);
+    const now = getServerTimeSec();
+    return {
+        shopId,
+        slotType: 0,
+        subSlotType: 0,
+        serverTime: now * 1000,
+        refreshCountdown: 0,
+        currencies: currencyList([1001, 1002, 1005], balances),
+        goods: (reply.goods_list || []).map((goods) => {
+            const start = toNum(goods.discount_start_time);
+            const end = toNum(goods.discount_end_time);
+            const promotionActive = start > 0 && end > start && start <= now && now < end;
+            const price = promotionActive ? toNum(goods.discount_price) : toNum(goods.price);
+            const reward = itemDto({ id: goods.item_id, count: goods.item_count });
+            const petPrice = PET_SHOP_PRICES[reward.id];
+            const currencyId = petPrice?.currencyId || 1002;
+            const currency = itemDto({ id: currencyId, count: price });
+            if (currencyId === 1005)
+                currency.name = '金豆';
+            const max = toNum(goods.limit_count);
+            const bought = toNum(goods.bought_num);
+            const limit = max > 0 ? { type: 1, bought, max, remaining: Math.max(0, max - bought) } : null;
+            const valid = Number.isSafeInteger(price) && price >= 0 && reward.id > 0 && Number.isSafeInteger(reward.count) && reward.count > 0;
+            const priceMatches = petPrice?.expectedPrice === undefined || price === petPrice.expectedPrice;
+            const expired = toNum(goods.end_time) > 0 && now >= toNum(goods.end_time);
+            const status = goods.owned ? 'owned' : limit?.remaining === 0 ? 'sold_out'
+                : goods.unlocked !== true || expired || !valid || !petPrice || !priceMatches ? 'unavailable' : 'available';
+            const reason = status === 'owned' ? '已拥有该宠物' : status === 'sold_out' ? '已达到限购上限'
+                : expired ? '商品已下架' : goods.unlocked !== true ? '宠物尚未解锁'
+                    : !petPrice ? '商品不是可购买宠物' : !priceMatches ? '商店价格与游戏内价格不一致，请核对后购买'
+                        : !valid ? '商品价格或内容未确认' : '';
+            return {
+                id: toNum(goods.id), name: reward.name, type: PET_SHOP_TYPE,
+                rewards: [reward],
+                price: { ...currency, balance: balances[currencyId] ?? null },
+                originalPrice: promotionActive ? toNum(goods.price) : null,
+                isFree: valid && price === 0,
+                limit, isLimited: !!limit,
+                discountText: '', isDiscounted: promotionActive, discountEndTime: promotionActive ? end * 1000 : 0,
+                purchaseStatus: status, unavailableReason: reason,
+                available: status === 'available', purchasable: status === 'available',
+            };
+        }),
+    };
+}
+async function purchasePetShop(goodsIdInput, countInput, expectedOffer) {
+    const goodsId = positiveInteger(goodsIdInput, 'INVALID_GOODS_ID', 'goodsId');
+    const count = positiveInteger(countInput, 'INVALID_PURCHASE_COUNT', 'count');
+    if (count > 9999)
+        throw businessError('INVALID_PURCHASE_COUNT', '购买数量超过上限');
+    return serializePurchase(async () => {
+        const before = await getPetShop();
+        const goods = before.goods.find((entry) => entry.id === goodsId);
+        if (!goods?.purchasable)
+            throw businessError('GOODS_UNAVAILABLE', goods?.unavailableReason || '宠物已不在当前商店中');
+        if (!expectedOffer || Number(expectedOffer.price?.id) !== goods.price.id || Number(expectedOffer.price?.count) !== goods.price.count
+            || !Array.isArray(expectedOffer.rewards) || expectedOffer.rewards.length !== 1
+            || Number(expectedOffer.rewards[0].id) !== goods.rewards[0].id || Number(expectedOffer.rewards[0].count) !== goods.rewards[0].count) {
+            throw businessError('SHOP_OFFER_CHANGED', '宠物价格或内容已变化，请刷新后重新确认');
+        }
+        if (goods.limit && goods.limit.remaining < count)
+            throw businessError('PURCHASE_LIMIT_EXCEEDED', '购买数量超过剩余限购数量');
+        const amount = goods.price.count * count;
+        const rewardAmount = goods.rewards[0].count * count;
+        if (!Number.isSafeInteger(amount) || !Number.isSafeInteger(rewardAmount))
+            throw businessError('INVALID_PURCHASE_COUNT', '购买数量无效');
+        if (amount > 0) {
+            const warehouse = require('./warehouse');
+            const bag = await warehouse.getBag();
+            const currency = warehouse.getBagItems(bag).filter((item) => toNum(item.id) === goods.price.id);
+            const available = currency.filter((item) => !warehouse.isItemLocked(item)).reduce((sum, item) => sum + toNum(item.count), 0);
+            if (available < amount)
+                throw businessError('INSUFFICIENT_BALANCE', `${goods.price.name}可用余额不足`);
+        }
+        const reply = await require('./farm/api').buyGoods(goodsId, count, goods.price.count);
+        const rewards = (reply.get_items || []).map((item) => itemDto(item));
+        const costs = (reply.cost_items || []).map((item) => itemDto(item)).filter((item) => item.count > 0);
+        if (rewards.length !== 1 || rewards[0].id !== goods.rewards[0].id || rewards[0].count !== rewardAmount
+            || costs.some((item) => item.id !== goods.price.id)
+            || costs.reduce((sum, item) => sum + item.count, 0) !== amount) {
+            throw businessError('SHOP_RESULT_UNCONFIRMED', '购买回包与商品不一致，请刷新确认，勿重复购买');
+        }
+        let catalog = null;
+        try {
+            catalog = await getPetShop();
+        }
+        catch { }
+        return { purchase: { goodsId, count, rewards }, catalog, refreshRequired: !catalog };
+    });
+}
+async function getMysteryShop(useCache = false) {
+    const cached = useCache ? mysteryShopService.getCachedActiveNPC() : null;
+    const reply = cached || await mysteryShopService.getActiveNPC();
+    const npc = reply?.npc;
+    if (!npc || !reply?.is_active) {
+        const idleBalances = await currencyBalances(STANDARD_CURRENCY_IDS);
+        return {
+            active: false,
+            serverTime: getServerTimeSec() * 1000,
+            currencies: currencyList(STANDARD_CURRENCY_IDS, idleBalances),
+            npc: null,
+        };
+    }
+    const currencyId = Math.max(0, toNum(npc.currency_item_id));
+    const rewardCount = Math.max(0, toNum(npc.reward_count));
+    const unitPrice = Math.max(0, toNum(npc.price));
+    const unitOriginalPrice = Math.max(0, toNum(npc.original_price));
+    const balances = await currencyBalances(currencyIdsOf([currencyId]));
+    return {
+        active: true,
+        serverTime: getServerTimeSec() * 1000,
+        activeTime: Math.max(0, toNum(reply.active_time)) * 1000,
+        expireTime: Math.max(0, toNum(reply.expire_time)) * 1000,
+        currencies: currencyList(currencyIdsOf([currencyId]), balances),
+        npc: {
+            id: Math.max(0, toNum(npc.npc_id)),
+            reward: itemDto({ id: npc.reward_item_id, count: rewardCount }, '神秘商品'),
+            price: { ...itemDto({ id: currencyId, count: unitPrice * rewardCount }), balance: balances[String(currencyId)] ?? null },
+            originalPrice: unitOriginalPrice * rewardCount,
+            unitPrice,
+            unitOriginalPrice,
+            discountPercent: Math.max(0, toNum(npc.discount_percent)),
+        },
+    };
+}
+async function purchaseMysteryOffer(npcIdInput, source = 'manual', expectedOffer, canContinue) {
+    const npcId = positiveInteger(npcIdInput, 'INVALID_MYSTERY_NPC_ID', 'npcId');
+    const accountId = process.env.FARM_ACCOUNT_ID || '';
+    const { getWs } = require('../utils/network');
+    const socket = getWs();
+    const sameSession = () => getWs() === socket;
+    const guard = () => {
+        if (!sameSession() || canContinue?.() === false) {
+            throw businessError('MYSTERY_SESSION_CHANGED', '神秘商人购买任务已取消');
+        }
+    };
+    return serializePurchase(async () => {
+        guard();
+        const before = await getMysteryShop();
+        guard();
+        const offer = before.npc;
+        const visitKey = mysteryShopService.mysteryShopVisitKey(before);
+        if (!visitKey || !offer || offer.id !== npcId) {
+            throw businessError('MYSTERY_OFFER_STALE', '神秘商人已离开或来访无法确认');
+        }
+        if ((source === 'auto' && !expectedOffer) || (expectedOffer && (expectedOffer.visitKey !== visitKey || expectedOffer.reward?.id !== offer.reward.id
+            || expectedOffer.reward?.count !== offer.reward.count || expectedOffer.price?.id !== offer.price.id
+            || expectedOffer.price?.count !== offer.price.count))) {
+            throw businessError('MYSTERY_OFFER_CHANGED', '神秘商人来访、商品或价格已变化');
+        }
+        const alreadySubmitted = () => businessError('MYSTERY_PURCHASE_ALREADY_SUBMITTED', '本次来访已提交过购买，请勿重复下单');
+        if (mysteryShopService.readMysteryShopSubmission(accountId, visitKey))
+            throw alreadySubmitted();
+        if (!Number.isSafeInteger(offer.reward.id) || offer.reward.id <= 0
+            || !Number.isSafeInteger(offer.reward.count) || offer.reward.count <= 0
+            || !Number.isSafeInteger(offer.price.id) || offer.price.id <= 0
+            || !Number.isSafeInteger(offer.price.count) || offer.price.count < 0) {
+            throw businessError('MYSTERY_OFFER_STALE', '神秘商人商品或价格无效');
+        }
+        if (source === 'auto') {
+            const automation = require('../models/store').getAutomation() || {};
+            const { isCurrencyAllowed, canAffordOffer } = require('./mystery-shop-auto');
+            if (automation.mystery_shop_auto_buy !== true) {
+                throw businessError('MYSTERY_AUTO_BUY_DISABLED', '神秘商人自动购买已关闭');
+            }
+            if (!isCurrencyAllowed(offer.price.id, automation)) {
+                throw businessError('MYSTERY_CURRENCY_NOT_ALLOWED', '未允许使用该币种自动购买');
+            }
+            if (canAffordOffer(offer.price).reason === 'balance_unknown') {
+                throw businessError('MYSTERY_BALANCE_UNAVAILABLE', '无法确认神秘商人商品所需余额');
+            }
+        }
+        if (offer.price.balance !== null && offer.price.balance < offer.price.count) {
+            throw businessError('INSUFFICIENT_BALANCE', 'Insufficient currency balance');
+        }
+        guard();
+        if (!mysteryShopService.reserveMysteryShopSubmission(accountId, visitKey))
+            throw alreadySubmitted();
+        // 标记后不做任何可重试的回滚：即使发送或复查失败，也无法排除已经扣款。
+        const unconfirmed = () => businessError('MYSTERY_PURCHASE_NOT_CONFIRMED', '购买结果未确认，请勿重复下单');
+        const confirmation = mysteryShopService.watchPurchase(offer, socket);
+        try {
+            await mysteryShopService.buy(npcId, confirmation.onSent);
+            if (!await confirmation.result || !sameSession())
+                throw unconfirmed();
+        }
+        catch {
+            throw unconfirmed();
+        }
+        finally {
+            confirmation.stop();
+        }
+        mysteryShopService.clearCachedActiveNPC();
+        try {
+            mysteryShopService.appendMysteryShopHistory(accountId, offer, { reward: offer.reward }, source);
+        }
+        catch (cause) {
+            logWarn('商城', `神秘商人购买已确认，但记录写入失败：${cause.message}`, { module: 'shop', event: 'mystery_purchase_history' });
+        }
+        const shop = await getMysteryShop().catch(() => ({ ...before, active: false, npc: null }));
+        return {
+            purchase: {
+                npcId,
+                reward: offer.reward,
+                price: offer.price,
+                originalPrice: offer.originalPrice,
+                discountPercent: offer.discountPercent,
+            },
+            shop,
+        };
+    });
+}
+module.exports = {
+    getPropsShop,
+    purchaseProps,
+    getPetShop,
+    purchasePetShop,
+    getMallCatalog,
+    purchaseMallProduct,
+    getMysteryShop,
+    purchaseMysteryOffer,
+};
+//# sourceMappingURL=commerce.js.map

@@ -3,6 +3,8 @@ import type { AutomationConfig, SettingsSavePayload } from '@/stores/setting'
 import type { BagPreferenceModule, FeatureModuleKey } from '@/utils/account-feature-modules'
 import { NModal } from 'naive-ui/es/modal'
 import { NTab } from 'naive-ui/es/tabs'
+import type { Account, CodeHealthItem } from '@/stores/account'
+import { useNow } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
@@ -23,6 +25,7 @@ import OfflineState from '@/components/ui/OfflineState.vue'
 import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
+import { getAccountRuntimeStatus, isAccountActive } from '@/utils/account-runtime'
 import { useSettingStore } from '@/stores/setting'
 import { useStatusStore } from '@/stores/status'
 import { useToastStore } from '@/stores/toast'
@@ -34,7 +37,7 @@ import {
   runAccountBatch,
   toggleSelectedAccountIds,
 } from '@/utils/account-bulk-actions'
-import { getModuleAutomation, MODULE_GATE_KEYS, wereActivityRewardSettingsSaved } from '@/utils/account-feature-modules'
+import { ACTIVITY_AUTOMATION_DEFAULTS, getModuleAutomation, MODULE_GATE_KEYS, wereActivityRewardSettingsSaved } from '@/utils/account-feature-modules'
 
 const fertilizerLandTypeOptions = [
   { label: '蓝晶土地', short: '蓝', value: 'blue-crystal' },
@@ -125,7 +128,10 @@ function showHint(message: string) {
 }
 
 // ==================== 账号管理 ====================
-const { accounts, loading: accountsLoading, currentAccountId } = storeToRefs(accountStore)
+const { accounts, loading: accountsLoading, currentAccountId, codeHealth, runtimeClockOffset } = storeToRefs(accountStore)
+/** 每秒走一次的表针：凭证剩余时间、掉线重登倒计时都靠它刷新。 */
+const now = useNow({ interval: 1000 })
+const serverNow = computed(() => now.value.getTime() + runtimeClockOffset.value)
 const { status: runtimeStatus } = storeToRefs(statusStore)
 const presence = useAccountPresence()
 const isOffline = computed(() => presence.value === 'offline')
@@ -297,7 +303,7 @@ async function toggleAccount(account: any) {
   // 确认结果之前按钮保持不可用，避免连点把两次操作叠在一起
   if (!accountId || bulkRunning.value || accountStore.pendingActions[accountId])
     return
-  const shouldStop = !!account.running
+  const shouldStop = isAccountActive(account)
   const result = shouldStop
     ? await accountStore.stopAccount(accountId)
     : await accountStore.startAccount(accountId)
@@ -315,7 +321,7 @@ async function toggleAccount(account: any) {
 function isAccountPending(account: any) {
   const accountId = String(account?.id || '')
   return !!accountStore.pendingActions[accountId]
-    || bulkRunning.value
+    || bulkRunning.value || account.runtimeState === 'stopping'
 }
 
 // 新账号的头像要等 worker 登录上报后服务端才落库，保存当下的列表里必然还是空的，
@@ -359,6 +365,8 @@ function scheduleAccountAvatarSync() {
 onBeforeUnmount(() => {
   stopAccountAvatarSync()
   accountStore.stopAccountStateSync()
+  accountStatusRefreshVersion++
+  clearTimeout(accountStatusTimer)
 })
 
 async function handleSaved() {
@@ -391,6 +399,53 @@ async function confirmClearStopped() {
   }
 }
 
+const codeHealthByAccount = computed(() => new Map(codeHealth.value.map(item => [item.accountId, item])))
+
+const codeStatusLabels: Record<CodeHealthItem['level'], string> = {
+  ok: 'Code 正常',
+  unknown: 'Code 状态未知',
+  expiring: '凭证即将过期',
+  expired: '凭证已过期',
+  refresh_failed: '续期失败',
+  offline: 'Code 待核对',
+}
+
+function codeStatusText(account: Account) {
+  if (account.runtimeState === 'relogin_waiting')
+    return cardRuntime(account).text
+  const item = codeHealthByAccount.value.get(String(account.id))
+  if (!item)
+    return ''
+  return item.needsManual ? '需要补 Code' : codeStatusLabels[item.level]
+}
+
+function cardRuntime(account: Account) {
+  return getAccountRuntimeStatus(account, serverNow.value)
+}
+
+let accountStatusTimer: ReturnType<typeof setTimeout> | undefined
+let accountStatusRefreshVersion = 0
+
+watch(activeTab, (tab) => {
+  const version = ++accountStatusRefreshVersion
+  clearTimeout(accountStatusTimer)
+  if (tab !== 'account')
+    return
+  let codeHealthDue = 0
+  async function sync() {
+    if (Date.now() >= codeHealthDue) {
+      codeHealthDue = Date.now() + 10_000
+      void accountStore.fetchCodeHealth()
+    }
+    await accountStore.refreshAccountsSilently()
+    if (version !== accountStatusRefreshVersion)
+      return
+    const transitioning = accounts.value.some(account => cardRuntime(account).busy || account.runtimeState === 'relogin_waiting')
+    accountStatusTimer = setTimeout(() => void sync(), transitioning ? 1000 : 3000)
+  }
+  void sync()
+}, { immediate: true })
+
 // ==================== 策略设置 ====================
 const { settings, loading: settingsLoading, loadedAccountId } = storeToRefs(settingStore)
 
@@ -415,28 +470,28 @@ let seedOptionsLoadedAccountId = ''
 let bagSeedsRequestAccountId = ''
 let bagSeedsLoadedAccountId = ''
 let bagSortRequestRevision = 0
-let previewRequestRevision = 0
 
 // 游戏本地配置的种子名称（seedId -> name），与后端 getBagSeeds 的名称来源（Plant.json）同源。
 const plantNameBySeedId = ref(new Map<number, string>())
-let plantConfigLoaded = false
+let plantConfigRequest: Promise<void> | null = null
 
-async function ensurePlantConfigLoaded() {
-  if (plantConfigLoaded)
+function ensurePlantConfigLoaded() {
+  if (plantNameBySeedId.value.size > 0)
     return
-  plantConfigLoaded = true
-  try {
-    const res = await api.get('/game-config/Plant.json', { skipErrorToast: true } as any)
-    const plants = Array.isArray(res?.data) ? res.data : []
-    plantNameBySeedId.value = new Map(
-      plants
-        .map((plant: any): [number, string] => [Number(plant?.seed_id) || 0, String(plant?.name || '').trim()])
-        .filter(([seedId, name]) => seedId > 0 && !!name),
-    )
-  }
-  catch {
-    // 静态配置加载失败时保持按种子 ID 显示
-  }
+  plantConfigRequest ??= api.get('/game-config/Plant.json', { skipErrorToast: true } as any)
+    .then(({ data }) => {
+      const plants = Array.isArray(data) ? data : []
+      plantNameBySeedId.value = new Map(
+        plants
+          .map((plant: any): [number, string] => [Number(plant?.seed_id) || 0, String(plant?.name || '').trim()])
+          .filter(([seedId, name]) => seedId > 0 && !!name),
+      )
+    })
+    .catch(() => {
+      // 静态配置加载失败时保留商店和背包选项，下次打开再尝试。
+    })
+    .finally(() => { plantConfigRequest = null })
+  return plantConfigRequest
 }
 
 const currentAccountName = computed(() => {
@@ -451,6 +506,7 @@ const localStrategySettings = ref({
   bagSeedMultiLandReservationEnabled: false,
   bagSeedLandTypes: {} as Record<string, string[]>,
   bagSeedFallbackStrategy: 'level',
+  rankedSeedFallbackStrategy: '',
   stealDelaySeconds: 0,
   intervals: { farmMin: 2, farmMax: 5, friendMin: 10, friendMax: 15 },
   friendQuietHours: { enabled: false, start: '23:00', end: '07:00', continueFarm: true },
@@ -467,14 +523,28 @@ const plantingStrategyOptions = [
   { label: '图鉴优先（普通图鉴）', value: 'illustrated' },
 ]
 
-const BAG_FALLBACK_STRATEGY_OPTIONS = [
-  { label: '最高等级作物', value: 'level' },
-  { label: '最大经验/时', value: 'max_exp' },
-  { label: '最大普通肥经验/时', value: 'max_fert_exp' },
-  { label: '最大净利润/时', value: 'max_profit' },
-  { label: '最大普通肥净利润/时', value: 'max_fert_profit' },
-  { label: '优先种植种子', value: 'preferred' },
-]
+const usesRankedSeedFallback = computed(() =>
+  !['preferred', 'bag_priority', 'illustrated'].includes(localStrategySettings.value.plantingStrategy),
+)
+const secondPlantingStrategy = computed({
+  get: () => {
+    const strategy = localStrategySettings.value
+    if (!usesRankedSeedFallback.value)
+      return strategy.bagSeedFallbackStrategy
+    return strategy.rankedSeedFallbackStrategy === strategy.plantingStrategy ? '' : strategy.rankedSeedFallbackStrategy
+  },
+  set: (value: string) => {
+    if (usesRankedSeedFallback.value)
+      localStrategySettings.value.rankedSeedFallbackStrategy = value
+    else
+      localStrategySettings.value.bagSeedFallbackStrategy = value
+  },
+})
+const secondPlantingStrategyOptions = computed(() => {
+  const first = localStrategySettings.value.plantingStrategy
+  const options = plantingStrategyOptions.filter(option => option.value !== first)
+  return usesRankedSeedFallback.value ? [{ label: '继续按第一策略选种', value: '' }, ...options] : options
+})
 
 interface BagSeedItem {
   seedId: number
@@ -722,7 +792,7 @@ async function ensureBagSeedsForUserSort(accountId: string) {
 async function handleBagFallbackStrategyChange(value: string | number) {
   const accountId = currentAccountId.value
   const strategy = String(value)
-  if (!accountId || localStrategySettings.value.plantingStrategy === 'illustrated')
+  if (!accountId || localStrategySettings.value.plantingStrategy !== 'bag_priority' || strategy === 'illustrated')
     return
   await ensureBagSeedsForUserSort(accountId)
   if (accountId === currentAccountId.value && localStrategySettings.value.bagSeedFallbackStrategy === strategy)
@@ -738,30 +808,52 @@ async function handlePreferredSeedChange() {
     await sortBagSeedsByFallbackStrategy('preferred', accountId)
 }
 
-watch(() => [localStrategySettings.value.plantingStrategy, currentAccountId.value] as const, ([strategy, accountId], previous) => {
-  if (strategy === 'bag_priority' && localStrategySettings.value.bagSeedFallbackStrategy === 'bag_priority')
+watch(() => [localStrategySettings.value.plantingStrategy, secondPlantingStrategy.value, currentAccountId.value] as const, ([strategy, fallback, accountId]) => {
+  if (!usesRankedSeedFallback.value && fallback === strategy)
     localStrategySettings.value.bagSeedFallbackStrategy = 'level'
-  if (
-    strategy === 'bag_priority'
-    && accountId
-    && isAccountConnected(accountId)
-    && (previous?.[0] !== strategy || previous?.[1] !== accountId)
-  ) {
-    fetchBagSeeds(accountId)
-  }
+  if (strategy === 'bag_priority' || strategy === 'preferred' || fallback === 'preferred')
+    void fetchBagSeeds(accountId)
+  if (strategy === 'preferred' || fallback === 'preferred')
+    void ensurePlantConfigLoaded()
 }, { immediate: true })
 
 const preferredSeedOptions = computed(() => {
-  const options: { label: string, value: number, disabled?: boolean }[] = [{ label: '自动选择', value: 0, disabled: false }]
-  options.push(...seedOptions.value.map(seed => ({
-    label: `${seed.requiredLevel}级 ${seed.name} (${seed.price}金)`,
-    value: seed.seedId,
-    disabled: seed.locked || seed.soldOut,
-  })))
+  const options = [{ label: '自动选择', value: 0 }]
+  const bagById = new Map(bagSeeds.value.map(seed => [seed.seedId, seed]))
+  const shopSeedIds = new Set(seedOptions.value.map(seed => seed.seedId))
+  const knownSeeds = new Map(plantNameBySeedId.value)
+  for (const seed of bagSeeds.value)
+    knownSeeds.set(seed.seedId, seed.name)
+  const selected = localStrategySettings.value.preferredSeedId
+  if (selected > 0 && !shopSeedIds.has(selected) && !knownSeeds.has(selected))
+    knownSeeds.set(selected, `种子 #${selected}`)
+  for (const [seedId, name] of knownSeeds) {
+    if (shopSeedIds.has(seedId))
+      continue
+    const bag = bagById.get(seedId)
+    const seedName = name.endsWith('种子') || name.startsWith('种子 #') ? name : `${name}种子`
+    const label = bag ? `${seedName}（背包 ${bag.count}）` : seedName
+    options.push({ label, value: seedId })
+  }
+  options.push(...seedOptions.value.map((seed) => {
+    const bag = bagById.get(seed.seedId)
+    const detail = bag ? `背包 ${bag.count}` : seed.locked ? '未解锁' : seed.soldOut ? '已售罄' : `${seed.price}金`
+    return {
+      label: `${seed.requiredLevel}级 ${seed.name}（${detail}）`,
+      value: seed.seedId,
+    }
+  }))
   return options
 })
 
-const strategyPreviewLabel = ref<string | null>(null)
+function refreshPreferredSeedInventory(show: boolean) {
+  if (!show)
+    return
+  void ensurePlantConfigLoaded()
+  bagSeedsLoadedAccountId = ''
+  void fetchBagSeeds()
+}
+
 // 「策略预览」弹窗：展示各策略下当前等级可种的最优作物（与已删除的分析页同源）
 const strategyPreviewVisible = ref(false)
 const bagSeedsDialogVisible = ref(false)
@@ -776,68 +868,54 @@ async function saveBagSeedsDialog(save: (module: BagPreferenceModule) => Promise
     bagSeedsDialogVisible.value = false
 }
 
-watch(() => [
-  localStrategySettings.value.plantingStrategy,
-  localStrategySettings.value.bagSeedFallbackStrategy,
-  localStrategySettings.value.preferredSeedId,
-  seedOptionsRevision.value,
-  currentAccountId.value,
-] as const, async ([plantingStrategy, fallbackStrategy, preferredSeedId, , accountId]) => {
-  const currentSeeds = seedOptions.value
-  const requestRevision = ++previewRequestRevision
-  let strategy = plantingStrategy
-  if (strategy === 'preferred') {
-    strategyPreviewLabel.value = null
-    return
-  }
-  if (strategy === 'bag_priority' || strategy === 'illustrated') {
-    strategy = fallbackStrategy || 'level'
-    if (strategy === 'bag_priority') {
-      strategyPreviewLabel.value = '按背包优先顺序安排'
+function useSeedStrategyPreview(strategy: () => string, excludedSeedId = () => 0) {
+  const label = ref<string | null>(null)
+  const seedId = ref(0)
+  watch([strategy, seedOptionsRevision, currentAccountId, excludedSeedId], async ([selected, , accountId, excluded], _, onCleanup) => {
+    label.value = null
+    if (!accountId || selected !== 'level' && !analyticsSortByMap[selected]) {
+      seedId.value = 0
       return
     }
-    if (strategy === 'preferred') {
-      const seed = preferredSeedId > 0 ? currentSeeds.find(item => item.seedId === preferredSeedId) : undefined
-      strategyPreviewLabel.value = seed ? `${seed.requiredLevel}级 ${seed.name}` : '未选择优先种子'
+    const available = seedOptions.value.filter(seed => !seed.locked && !seed.soldOut && seed.seedId !== excluded)
+    const setPreview = (seed?: typeof available[number]) => {
+      seedId.value = seed?.seedId ?? 0
+      label.value = seed ? `${seed.requiredLevel}级 ${seed.name}` : '暂无可用种子'
+    }
+    if (!available.length || selected === 'level') {
+      setPreview(available.sort((a, b) => b.requiredLevel - a.requiredLevel || a.seedId - b.seedId)[0])
       return
     }
-  }
-  if (currentSeeds.length === 0) {
-    strategyPreviewLabel.value = null
-    return
-  }
-  const available = currentSeeds.filter(seed => !seed.locked && !seed.soldOut)
-  if (available.length === 0) {
-    strategyPreviewLabel.value = '暂无可用种子'
-    return
-  }
-  if (strategy === 'level') {
-    const best = [...available].sort((a, b) => b.requiredLevel - a.requiredLevel || a.seedId - b.seedId)[0]
-    strategyPreviewLabel.value = best ? `${best.requiredLevel}级 ${best.name}` : null
-    return
-  }
-  const sortBy = analyticsSortByMap[strategy]
-  if (!sortBy)
-    return
 
-  try {
-    const { data } = await api.get('/api/analytics', {
-      params: { sort: sortBy },
-      headers: accountId ? { 'x-account-id': accountId } : undefined,
-    })
-    if (requestRevision !== previewRequestRevision || accountId !== currentAccountId.value)
-      return
-    const rankings: any[] = data?.ok ? (data.data || []) : []
-    const availableIds = new Set(available.map(seed => seed.seedId))
-    const match = rankings.find(item => availableIds.has(Number(item.seedId)))
-    const seed = match ? available.find(item => item.seedId === Number(match.seedId)) : undefined
-    strategyPreviewLabel.value = seed ? `${seed.requiredLevel}级 ${seed.name}` : '暂无匹配种子'
-  }
-  catch {
-    if (requestRevision === previewRequestRevision && accountId === currentAccountId.value)
-      strategyPreviewLabel.value = null
-  }
-}, { immediate: true })
+    const controller = new AbortController()
+    onCleanup(() => controller.abort())
+    try {
+      const { data } = await api.get('/api/analytics', {
+        params: { sort: analyticsSortByMap[selected] },
+        headers: { 'x-account-id': accountId },
+        signal: controller.signal,
+      })
+      if (controller.signal.aborted || accountId !== currentAccountId.value)
+        return
+      const availableById = new Map(available.map(seed => [seed.seedId, seed]))
+      const match = (data?.ok ? data.data || [] : []).find((item: any) => availableById.has(Number(item.seedId)))
+      setPreview(match ? availableById.get(Number(match.seedId)) : undefined)
+    }
+    catch {
+      if (!controller.signal.aborted)
+        seedId.value = 0
+    }
+  }, { immediate: true })
+  return { label, seedId }
+}
+
+const { label: strategyPreviewLabel, seedId: primaryPreviewSeedId } = useSeedStrategyPreview(
+  () => localStrategySettings.value.plantingStrategy,
+)
+const { label: secondStrategyPreviewLabel } = useSeedStrategyPreview(
+  () => secondPlantingStrategy.value,
+  () => usesRankedSeedFallback.value ? primaryPreviewSeedId.value : 0,
+)
 
 function syncLocalStrategySettings() {
   if (settings.value) {
@@ -848,6 +926,7 @@ function syncLocalStrategySettings() {
       bagSeedMultiLandReservationEnabled: !!settings.value.bagSeedMultiLandReservationEnabled,
       bagSeedLandTypes: settings.value.bagSeedLandTypes ?? {},
       bagSeedFallbackStrategy: settings.value.bagSeedFallbackStrategy ?? 'level',
+      rankedSeedFallbackStrategy: settings.value.rankedSeedFallbackStrategy ?? '',
       stealDelaySeconds: settings.value.stealDelaySeconds ?? 0,
       intervals: settings.value.intervals,
       friendQuietHours: {
@@ -888,7 +967,6 @@ watch(currentAccountId, (accountId) => {
   seedOptionsLoadedAccountId = ''
   bagSeedsRequestAccountId = ''
   bagSeedsLoadedAccountId = ''
-  strategyPreviewLabel.value = null
   bagSeedsDialogVisible.value = false
   if (accountId)
     loadStrategyData(accountId)
@@ -902,7 +980,7 @@ watch([currentAccountId, presence], ([accountId, next], [previousAccountId, prev
     bagSeedsLoadedAccountId = ''
   }
   fetchSeedOptions(accountId)
-  if (localStrategySettings.value.plantingStrategy === 'bag_priority')
+  if (['bag_priority', 'preferred'].includes(localStrategySettings.value.plantingStrategy) || secondPlantingStrategy.value === 'preferred')
     fetchBagSeeds(accountId)
 })
 
@@ -957,6 +1035,7 @@ const localAutomationSettings = ref({
     fertilizer_land_types: [...defaultFertilizerLandTypes],
     fertilizer_smart_seconds: 300,
     show_manual_fertilizer: true,
+    ...ACTIVITY_AUTOMATION_DEFAULTS,
   },
   fertilizerBuyOrganicCount: 10,
   fertilizerBuyOrganicThresholdHours: 10,
@@ -1049,6 +1128,7 @@ function syncLocalAutomationSettings() {
         fertilizer_land_types: [...allFertilizerLandTypes],
         fertilizer_smart_seconds: 300,
         show_manual_fertilizer: true,
+        ...ACTIVITY_AUTOMATION_DEFAULTS,
       }
     }
     else {
@@ -1084,6 +1164,7 @@ function syncLocalAutomationSettings() {
         fertilizer_land_types: [...allFertilizerLandTypes],
         fertilizer_smart_seconds: 300,
         show_manual_fertilizer: true,
+        ...ACTIVITY_AUTOMATION_DEFAULTS,
       }
       localAutomationSettings.value.automation = {
         ...defaults,
@@ -1127,6 +1208,7 @@ function buildModuleSavePayload(module: FeatureModuleKey, gateOnly: boolean): Se
       bagSeedPriority: strategy.bagSeedPriority,
       bagSeedLandTypes: strategy.bagSeedLandTypes,
       bagSeedFallbackStrategy: strategy.bagSeedFallbackStrategy,
+      rankedSeedFallbackStrategy: strategy.rankedSeedFallbackStrategy,
       bagSeedMultiLandReservationEnabled: strategy.bagSeedMultiLandReservationEnabled,
       intervals: { farmMin, farmMax },
       plantDelaySeconds: 0,
@@ -1216,7 +1298,7 @@ async function saveFeatureModule(module: FeatureModuleKey, gateOnly = false): Pr
   automationSaving.value = strategySaving.value = true
   try {
     const payload = buildModuleSavePayload(module, gateOnly)
-    if (!gateOnly && module === 'planting' && (payload.plantingStrategy === 'bag_priority' || payload.bagSeedFallbackStrategy === 'bag_priority')) {
+    if (!gateOnly && module === 'planting' && (payload.plantingStrategy === 'bag_priority' || secondPlantingStrategy.value === 'bag_priority')) {
       bagSortRequestRevision++
       payload.bagSeedPriority = mergeVisibleBagSeedOrder(normalizeVisibleBagSeedOrder(payload.bagSeedPriority))
     }
@@ -1504,33 +1586,49 @@ async function confirmDefaultPlanOperation() {
                    横跨组件完整宽度，不单独定义局部样式 -->
                 <div class="has-divider">
                   <div class="min-w-0 flex items-center gap-3 pr-7">
-                    <div class="h-11 w-11 flex shrink-0 items-center justify-center overflow-hidden rounded-lg bg-gray-100 dark:bg-gray-700">
+                    <div class="relative h-11 w-11 flex shrink-0 items-center justify-center rounded-lg bg-gray-100 dark:bg-gray-700">
                       <img
                         v-if="canShowAccountAvatar(acc)"
                         :src="getAccountAvatar(acc)"
-                        class="h-full w-full object-cover"
+                        class="h-full w-full rounded-lg object-cover"
+                        alt=""
                         @error="handleAccountAvatarError(acc)"
                       >
                       <span v-else class="i-carbon-user text-xl text-gray-400" />
+                      <span
+                        class="account-card__status"
+                        :class="cardRuntime(acc).color"
+                        role="img"
+                        :aria-label="cardRuntime(acc).text"
+                        :title="cardRuntime(acc).text"
+                      >
+                        <span v-if="cardRuntime(acc).busy" class="i-carbon-circle-dash animate-spin" aria-hidden="true" />
+                      </span>
                     </div>
                     <div class="min-w-0 flex-1">
                       <h4 class="truncate text-base font-bold">
                         {{ acc.name || acc.nick || acc.id }}
                       </h4>
-                      <div class="mt-1 flex flex-wrap items-center gap-1.5">
+                      <div class="mt-1 min-w-0 flex items-center gap-1.5">
                         <span
                           v-if="acc.platform"
-                          class="rounded px-1.5 py-0.5 text-xs leading-tight font-medium"
+                          class="shrink-0 rounded px-1.5 py-0.5 text-xs leading-tight font-medium"
                           :class="getPlatformClass(acc.platform)"
                         >
                           {{ getPlatformLabel(acc.platform) }}
                         </span>
-                        <!-- 状态徽标与下方启动/停止按钮读同一个字段，避免“已停止”却显示停止 -->
-                        <span class="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500 dark:text-gray-400">
-                          <span class="h-2 w-2 rounded-full" :class="acc.running ? 'bg-green-500' : 'bg-gray-300'" />
-                          {{ acc.running ? '运行中' : '已停止' }}
+                        <span
+                          v-if="acc.runtimeState === 'relogin_waiting' || codeHealthByAccount.has(String(acc.id))"
+                          class="min-w-0 text-xs text-gray-500 dark:text-gray-400"
+                          :class="{ truncate: acc.runtimeState !== 'relogin_waiting' }"
+                          :title="codeHealthByAccount.get(String(acc.id))?.reason"
+                        >
+                          {{ codeStatusText(acc) }}
                         </span>
                       </div>
+                      <p v-if="acc.runtimeState !== 'relogin_waiting' && cardRuntime(acc).text !== '运行中'" class="mt-1 truncate text-xs text-gray-500 dark:text-gray-400" aria-hidden="true">
+                        {{ cardRuntime(acc).text }}
+                      </p>
                     </div>
                   </div>
 
@@ -1542,14 +1640,14 @@ async function confirmDefaultPlanOperation() {
                     :aria-hidden="selectionMode ? 'true' : undefined"
                   >
                     <BaseButton
-                      :variant="acc.running ? 'soft-danger' : 'soft-success'"
+                      :variant="isAccountActive(acc) ? 'soft-danger' : 'soft-success'"
                       class="account-card-btn !px-1"
                       :disabled="isAccountPending(acc)"
-                      :title="acc.running ? '停止' : '启动'"
+                      :title="isAccountActive(acc) ? '停止' : '启动'"
                       @click="toggleAccount(acc)"
                     >
-                      <span class="mr-1" :class="acc.running ? 'i-carbon-stop-filled' : 'i-carbon-play-filled'" />
-                      <span>{{ acc.running ? '停止' : '启动' }}</span>
+                      <span class="mr-1" :class="isAccountActive(acc) ? 'i-carbon-stop-filled' : 'i-carbon-play-filled'" />
+                      <span>{{ isAccountActive(acc) ? '停止' : '启动' }}</span>
                     </BaseButton>
                     <BaseButton
                       variant="secondary"
@@ -1698,6 +1796,8 @@ async function confirmDefaultPlanOperation() {
                         v-model="localStrategySettings.preferredSeedId"
                         label="优先种植种子"
                         :options="preferredSeedOptions"
+                        filterable
+                        @update:show="refreshPreferredSeedInventory"
                       />
                       <div v-else-if="localStrategySettings.plantingStrategy === 'bag_priority'" class="base-field">
                         <label class="base-field__label">第一优先策略预览</label>
@@ -1721,28 +1821,33 @@ async function confirmDefaultPlanOperation() {
                       </div>
                     </div>
 
-                    <div v-if="['bag_priority', 'illustrated'].includes(localStrategySettings.plantingStrategy)" class="space-y-2">
+                    <div class="space-y-2">
 
                       <!-- 第二优先策略（版式同第一优先策略行） -->
                       <div class="grid grid-cols-2 gap-2">
                         <BaseSelect
-                          v-model="localStrategySettings.bagSeedFallbackStrategy"
+                          v-model="secondPlantingStrategy"
                           label="第二优先策略"
-                          :options="localStrategySettings.plantingStrategy === 'illustrated' ? [...BAG_FALLBACK_STRATEGY_OPTIONS, { label: '背包种子优先', value: 'bag_priority' }] : BAG_FALLBACK_STRATEGY_OPTIONS"
+                          :options="secondPlantingStrategyOptions"
+                          :virtual-scroll="false"
+                          :theme-overrides="{ peers: { InternalSelectMenu: { height: 'none' } } }"
                           @change="handleBagFallbackStrategyChange"
                         />
                         <BaseSelect
-                          v-if="localStrategySettings.bagSeedFallbackStrategy === 'preferred'"
+                          v-if="secondPlantingStrategy === 'preferred'"
                           v-model="localStrategySettings.preferredSeedId"
                           label="优先种植种子"
                           :options="preferredSeedOptions"
+                          filterable
+                          @update:show="refreshPreferredSeedInventory"
                           @change="handlePreferredSeedChange"
                         />
-                        <div v-else-if="localStrategySettings.bagSeedFallbackStrategy === 'bag_priority'" class="base-field">
+                        <div v-else-if="secondPlantingStrategy === 'bag_priority'" class="base-field">
                           <label class="base-field__label">第二优先策略预览</label>
                           <BaseButton variant="secondary" @click="openBagSeedsDialog">背包种子</BaseButton>
                         </div>
-                        <div v-else-if="!isOffline && !seedOptionsError" class="base-field">
+                        <IllustratedPriorityPreview v-else-if="secondPlantingStrategy === 'illustrated'" kind="farm" :account-id="currentAccountId" :connected="!isOffline" as-fallback />
+                        <div v-else-if="secondPlantingStrategy && !isOffline && !seedOptionsError" class="base-field">
                           <label class="base-field__label">
                             第二优先策略预览
                           </label>
@@ -1750,11 +1855,12 @@ async function confirmDefaultPlanOperation() {
                             class="settings-preview w-full justify-between"
                             title="根据当前策略自动匹配，仅供预览"
                           >
-                            <span class="truncate">{{ strategyPreviewLabel ?? '加载中...' }}</span>
+                            <span class="truncate">{{ secondStrategyPreviewLabel ?? '加载中...' }}</span>
                             <div class="i-carbon-information shrink-0 text-base" />
                           </div>
                         </div>
                       </div>
+                      <p class="settings-note">两项策略处理后还有空地时，购买买得起的最低单价种子补种。</p>
                     </div>
                   </div>
 
@@ -1954,6 +2060,20 @@ async function confirmDefaultPlanOperation() {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 16px;
+}
+
+.account-card__status {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  display: grid;
+  width: 13px;
+  height: 13px;
+  place-items: center;
+  border: 2px solid var(--ui-surface-solid);
+  border-radius: 50%;
+  color: #fff;
+  font-size: 8px;
 }
 
 /* 卡片三个动作：等分整行宽度，高度引用内容区标题栏控件标准，

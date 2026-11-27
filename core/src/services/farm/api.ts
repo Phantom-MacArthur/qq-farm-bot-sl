@@ -107,18 +107,65 @@ const ORGANIC_FERTILIZER_ID: number = 1012;
 const MAX_ORGANIC_FERTILIZE_OPERATIONS: number = 240;
 const MAX_ORGANIC_FERTILIZE_ROUNDS: number = 20;
 
+const FERTILIZER_EMPTY_TTL_MS: number = 5 * 60 * 1000;
+const fertilizerEmptyUntil: Map<number, number> = new Map();
+
+function isFertilizerEmptyError(error: any): boolean {
+    return isFertilizerStockError(error)
+        && /容器不足|容器为空/.test([error?.errorMessage, error?.error_message, error?.message].join(' '));
+}
+
+function markFertilizerContainerEmpty(fertilizerId: number): void {
+    fertilizerEmptyUntil.set(toNum(fertilizerId), Date.now() + FERTILIZER_EMPTY_TTL_MS);
+}
+
+function clearFertilizerContainerEmpty(fertilizerId: number): void {
+    fertilizerEmptyUntil.delete(toNum(fertilizerId));
+}
+
+function isFertilizerContainerEmpty(fertilizerId: number): boolean {
+    const key: number = toNum(fertilizerId);
+    const until: number = fertilizerEmptyUntil.get(key) || 0;
+    if (!until) return false;
+    if (Date.now() >= until) {
+        fertilizerEmptyUntil.delete(key);
+        return false;
+    }
+    return true;
+}
+
+networkEvents?.on?.('itemChanges', (items: any[]) => {
+    for (const change of items) {
+        const id = toNum(change?.item?.id);
+        if ((id === NORMAL_FERTILIZER_ID || id === ORGANIC_FERTILIZER_ID) && toNum(change?.delta) > 0) {
+            clearFertilizerContainerEmpty(id);
+        }
+    }
+});
+
 async function fertilizeOne(landId: number, fertilizerId: number = NORMAL_FERTILIZER_ID): Promise<any> {
     return fertilizeBatch([landId], fertilizerId);
 }
 
-// 官方一键施肥：一条请求提交多个地块，每个地块只施一次。
-async function fertilizeBatch(landIds: number[], fertilizerId: number): Promise<any> {
+async function requestFertilize(landIds: number[], fertilizerId: number): Promise<any> {
     const body = types.FertilizeRequest.encode(types.FertilizeRequest.create({
         land_ids: landIds.map((landId: number) => toLong(landId)),
         fertilizer_id: toLong(fertilizerId),
     })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
-    const reply = decodeChangedLands(types.FertilizeReply, replyBody);
+    try {
+        const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
+        const reply = decodeChangedLands(types.FertilizeReply, replyBody);
+        clearFertilizerContainerEmpty(fertilizerId);
+        return reply;
+    } catch (error) {
+        if (isFertilizerEmptyError(error)) markFertilizerContainerEmpty(fertilizerId);
+        throw error;
+    }
+}
+
+// 官方一键施肥：一条请求提交多个地块，每个地块只施一次。
+async function fertilizeBatch(landIds: number[], fertilizerId: number): Promise<any> {
+    const reply = await requestFertilize(landIds, fertilizerId);
     if (reply.operation_limits && onOperationLimitsUpdate) {
         onOperationLimitsUpdate(reply.operation_limits);
     }
@@ -152,15 +199,11 @@ function logFertilizerStockSkip(error: any): void {
  * 游戏中拖动施肥间隔很短，这里用 50ms
  */
 async function fertilize(landIds: number[], fertilizerId: number = NORMAL_FERTILIZER_ID, propagateErrors: boolean = false): Promise<number> {
+    if (isFertilizerContainerEmpty(fertilizerId)) return 0;
     let successCount: number = 0;
     for (const landId of landIds) {
         try {
-            const body = types.FertilizeRequest.encode(types.FertilizeRequest.create({
-                land_ids: [toLong(landId)],
-                fertilizer_id: toLong(fertilizerId),
-            })).finish();
-            const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
-            decodeChangedLands(types.FertilizeReply, replyBody);
+            await requestFertilize([landId], fertilizerId);
             successCount++;
         } catch (error) {
             if (isFertilizerStockError(error)) {
@@ -191,7 +234,7 @@ async function fertilize(landIds: number[], fertilizerId: number = NORMAL_FERTIL
  */
 async function fertilizeOrganicLoop(landIds: number[] | any[], propagateErrors: boolean = false): Promise<number> {
     const ids: number[] = (Array.isArray(landIds) ? landIds : []).filter(Boolean);
-    if (ids.length === 0) return 0;
+    if (ids.length === 0 || isFertilizerContainerEmpty(ORGANIC_FERTILIZER_ID)) return 0;
 
     let successCount: number = 0;
     let idx: number = 0;
@@ -203,12 +246,7 @@ async function fertilizeOrganicLoop(landIds: number[] | any[], propagateErrors: 
     while (successCount < operationLimit) {
         const landId = ids[idx];
         try {
-            const body = types.FertilizeRequest.encode(types.FertilizeRequest.create({
-                land_ids: [toLong(landId)],
-                fertilizer_id: toLong(ORGANIC_FERTILIZER_ID),
-            })).finish();
-            const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Fertilize', body);
-            decodeChangedLands(types.FertilizeReply, replyBody);
+            await requestFertilize([landId], ORGANIC_FERTILIZER_ID);
             successCount++;
         } catch (error) {
             if (isFertilizerStockError(error)) {
@@ -319,6 +357,9 @@ module.exports = {
     isFertilizerStockError,
     logFertilizerStockSkip,
     fertilizeOrganicLoop,
+    isFertilizerContainerEmpty,
+    NORMAL_FERTILIZER_ID,
+    ORGANIC_FERTILIZER_ID,
     removePlant,
     upgradeLand,
     unlockLand,

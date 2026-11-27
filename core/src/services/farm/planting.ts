@@ -1,5 +1,8 @@
 import type { FertilizerSettings } from '../../config/fertilizer-strategy';
-import { getFertilizerStrategyGroups, usesImmediateOrganicFertilizer } from '../../config/fertilizer-strategy';
+import { getFertilizerStrategyGroups, usesImmediateOrganicFertilizer, usesNormalFertilizer } from '../../config/fertilizer-strategy';
+import { getYishuActivityEnd, YISHU_SEED_ID } from '../../config/yishuhuanfu';
+import { appendYishuHistory } from '../yishuhuanfu-history';
+import { estimateYishuLand } from './yishuhuanfu-plan';
 /**
  * 种植引擎 - 种植策略、种子选择、自动种植、按配置施肥
  */
@@ -7,7 +10,7 @@ import { getFertilizerStrategyGroups, usesImmediateOrganicFertilizer } from '../
 const protobuf = require('protobufjs');
 const { performance } = require('node:perf_hooks');
 const { getPlantNameBySeedId, formatGrowTime, getPlantGrowTime, getAllSeeds, getPlantBySeedId, getPlantByFruitId, getPlantById } = require('../../config/gameConfig');
-const { getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedMultiLandReservationEnabled, getBagSeedLandTypes, getBagSeedFallbackStrategy, getPlantDelaySeconds } = require('../../models/store');
+const { getPreferredSeed, getAutomation, getPlantingStrategy, getBagSeedPriority, getBagSeedMultiLandReservationEnabled, getBagSeedLandTypes, getBagSeedFallbackStrategy, getRankedSeedFallbackStrategy, getPlantDelaySeconds } = require('../../models/store');
 const { getUserState, getWsErrorState, sendMsgAsync } = require('../../utils/network');
 const { toNum, getServerTimeSec, log, logWarn, sleep } = require('../../utils/utils');
 const { types } = require('../../utils/proto');
@@ -15,9 +18,9 @@ const { getPlantRankings } = require('../analytics');
 const { recordSeedShopCatalog } = require('../seed-price-cache');
 const { recordOperation } = require('../stats');
 const { updateStatusGold } = require('../status');
-const { getBagSeeds } = require('../warehouse');
+const { getBagSeeds, getCurrentTotalsFromBag } = require('../warehouse');
 const { getCareerInfoOrNull } = require('../career');
-const { getAllLands, buyGoods, removePlant, fertilizeOne, decodeChangedLands } = require('./api');
+const { getAllLands, buyGoods, removePlant, fertilizeOne, isFertilizerContainerEmpty, decodeChangedLands } = require('./api');
 const { isRipeningOnlyMode, runRipeningFertilizer } = require('./ripening');
 const {
     selectFutureLayoutReservation,
@@ -54,6 +57,14 @@ interface PlantingPacing {
     defer?: boolean;
     deferred?: boolean;
     shopSeed?: { seedId: number; strategy: string; remaining: number };
+    cheapestSeed?: PlantingPacing['shopSeed'];
+}
+
+interface PlantingRoundResult {
+    plantedLands: number[];
+    remainingLandIds: number[];
+    deferredLandIds?: number[];
+    uncertain: boolean;
 }
 
 function getRemainingPlantDelayMs(pacing: PlantingPacing): number {
@@ -105,6 +116,7 @@ async function plantSeeds(seedId: number | string, landIds: number[], options: {
     layouts?: PlantingLayout[];
     propagateErrors?: boolean;
     pacing?: PlantingPacing;
+    canPlant?: (landId: number) => boolean;
 } = {}): Promise<PlantSeedsResult> {
     const pacing = options.pacing || { lastPlantAt: null };
     const normalizedLandIds = (Array.isArray(landIds) ? landIds : []).map((id: any) => toNum(id)).filter(Boolean);
@@ -141,6 +153,7 @@ async function plantSeeds(seedId: number | string, landIds: number[], options: {
         let resolvedMasterId = 0;
         let resolvedOccupiedIds: number[] = [];
         try {
+            if (options.canPlant && !options.canPlant(landId)) continue;
             const body = encodePlantRequest(seedId, layout.landIds);
             const { body: replyBody } = await sendMsgAsync('gamepb.plantpb.PlantService', 'Plant', body);
             pacing.lastPlantAt = performance.now();
@@ -305,6 +318,7 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
     const bagSeedLandTypes = getBagSeedLandTypes() || {};
     const landTypeAvailable = !!(landTypeById && landTypeById.size > 0);
     const allBagSeeds = (Array.isArray(bagSeeds) ? bagSeeds : [])
+        .filter((seed: any) => toNum(seed.seedId) !== YISHU_SEED_ID)
         .filter((seed: any) => !options.illustratedTargets || options.illustratedTargets.has(toNum(seed.seedId)))
         .map((seed: any) => options.illustratedTargets ? { ...seed, count: Math.min(1, toNum(seed.count)) } : seed);
     
@@ -482,7 +496,7 @@ async function plantFromBagSeeds(landsToPlant: any[], landTypeById?: Map<number,
     };
 }
 
-async function findBestSeed(overrideStrategy?: string): Promise<any[]> {
+async function findBestSeed(overrideStrategy?: string, preferredFallback = 'level', rankedFallback = ''): Promise<any[]> {
     const SEED_SHOP_ID: number = 2;
     const { getShopInfo } = require('./api');
     const shopReply = await getShopInfo(SEED_SHOP_ID);
@@ -492,9 +506,14 @@ async function findBestSeed(overrideStrategy?: string): Promise<any[]> {
     }
 
     const state = getUserState();
+    const strategy: string = overrideStrategy || getPlantingStrategy();
+    const allowYishu = (strategy === 'preferred' || rankedFallback === 'preferred')
+        && toNum(getPreferredSeed()) === YISHU_SEED_ID;
     const available: any[] = [];
     for (const goods of shopReply.goods_list) {
-        if (!goods.unlocked) continue;
+        const seedId = toNum(goods.item_id);
+        if (!goods.unlocked || (seedId === YISHU_SEED_ID && !allowYishu)
+            || (strategy === 'cheapest' && !getPlantBySeedId(seedId))) continue;
 
         let meetsConditions: boolean = true;
         let requiredLevel: number = 0;
@@ -520,7 +539,7 @@ async function findBestSeed(overrideStrategy?: string): Promise<any[]> {
         available.push({
             goods,
             goodsId: toNum(goods.id),
-            seedId: toNum(goods.item_id),
+            seedId,
             price: toNum(goods.price),
             requiredLevel,
             unitItemCount: Math.max(1, toNum(goods.item_count) || 1),
@@ -533,17 +552,36 @@ async function findBestSeed(overrideStrategy?: string): Promise<any[]> {
         return [];
     }
 
-    // 返回完整候选序列，让调用方能按剩余土地布局逐个尝试。
-    const strategy: string = overrideStrategy || getPlantingStrategy();
+    const primary = strategy === 'preferred' ? available : available.filter(candidate => candidate.seedId !== YISHU_SEED_ID);
+    const ranked = rankShopSeeds(primary, strategy, state.level, preferredFallback);
+    if (!rankedFallback || rankedFallback === strategy) return ranked;
+
+    // 配置第二策略时，第一策略只决定本轮首选作物。剩余地块按第二策略补种。
+    const firstSeed = ranked[0]?.seedId;
+    const firstCandidates = ranked.filter(candidate => candidate.seedId === firstSeed);
+    if (rankedFallback === 'bag_priority' || rankedFallback === 'illustrated') return firstCandidates;
+    const remaining = available.filter(candidate => candidate.seedId !== firstSeed);
+    const secondStrategy = rankedFallback === 'preferred' && toNum(getPreferredSeed()) === firstSeed
+        ? 'level' : rankedFallback;
+    return [...firstCandidates, ...rankShopSeeds(remaining, secondStrategy, state.level)];
+}
+
+function rankShopSeeds(available: any[], strategy: string, playerLevel: number, preferredFallback = 'level'): any[] {
+    if (strategy === 'cheapest') {
+        return available.sort((a, b) => a.price / a.unitItemCount - b.price / b.unitItemCount
+            || a.price - b.price || a.seedId - b.seedId);
+    }
     const byLevelAndId = (a: any, b: any): number =>
         (b.requiredLevel - a.requiredLevel) || (a.seedId - b.seedId);
+    let compareCandidates = byLevelAndId;
     const analyticsSortByMap: Record<string, string> = {
         max_exp: 'exp',
         max_fert_exp: 'fert',
         max_profit: 'profit',
         max_fert_profit: 'fert_profit',
     };
-    const analyticsSortBy = analyticsSortByMap[strategy];
+    const rankingStrategy = strategy === 'preferred' ? preferredFallback : strategy;
+    const analyticsSortBy = analyticsSortByMap[rankingStrategy];
     if (analyticsSortBy) {
         try {
             const rankings = getPlantRankings(analyticsSortBy);
@@ -551,30 +589,26 @@ async function findBestSeed(overrideStrategy?: string): Promise<any[]> {
             rankings.forEach((row: any, index: number) => {
                 const seedId = toNum(row && row.seedId);
                 const level = Number(row && row.level);
-                if (seedId > 0 && (!Number.isFinite(level) || level <= state.level) && !rankingBySeedId.has(seedId)) {
+                if (seedId > 0 && (!Number.isFinite(level) || level <= playerLevel) && !rankingBySeedId.has(seedId)) {
                     rankingBySeedId.set(seedId, index);
                 }
             });
-            return available.sort((a: any, b: any) => {
+            compareCandidates = (a: any, b: any) => {
                 const aRank = rankingBySeedId.get(a.seedId) ?? Number.MAX_SAFE_INTEGER;
                 const bRank = rankingBySeedId.get(b.seedId) ?? Number.MAX_SAFE_INTEGER;
                 return (aRank - bRank) || byLevelAndId(a, b);
-            });
+            };
         } catch (e: any) {
-            logWarn('商店', `策略 ${strategy} 计算失败: ${e.message}，回退最高等级`);
+            logWarn('商店', `策略 ${rankingStrategy} 计算失败: ${e.message}，回退最高等级`);
         }
     }
 
-    available.sort(byLevelAndId);
-    if (strategy === 'preferred') {
-        const preferred = getPreferredSeed();
-        if (preferred > 0) {
-            const index = available.findIndex((candidate: any) => candidate.seedId === preferred);
-            if (index >= 0) available.unshift(...available.splice(index, 1));
-            else logWarn('商店', `优先种子 ${preferred} 当前不可购买，回退自动选择`);
-        }
+    const preferred = strategy === 'preferred' ? toNum(getPreferredSeed()) : 0;
+    if (preferred > 0 && !available.some(candidate => candidate.seedId === preferred)) {
+        logWarn('商店', `优先种子 ${preferred} 当前不可购买，回退自动选择`);
     }
-    return available;
+    return available.sort((a, b) => Number(b.seedId === preferred) - Number(a.seedId === preferred)
+        || compareCandidates(a, b));
 }
 
 async function purchaseSeed(goodsIdInput: unknown, countInput: unknown): Promise<any> {
@@ -787,74 +821,53 @@ async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[]
     if (landsToPlant.length === 0) return { plantedLands: [] };
 
     const accountStrategy = String(getPlantingStrategy() || '').trim();
+    const secondStrategy = ['preferred', 'bag_priority', 'illustrated'].includes(accountStrategy)
+        ? getBagSeedFallbackStrategy() || 'level'
+        : getRankedSeedFallbackStrategy();
+    const preferredSeed = toNum(getPreferredSeed());
+    const usesYishuInStrategy = preferredSeed === YISHU_SEED_ID
+        && (accountStrategy === 'preferred' || secondStrategy === 'preferred');
+    const eventPlant = usesYishuInStrategy ? null : await plantYishuLands(latestLands, landsToPlant, pacing);
+    const eventLands = eventPlant?.plantedLandIds || [];
+    const used = new Set<number>(eventPlant?.reservedLandIds || eventLands);
+    landsToPlant = landsToPlant.filter(id => !used.has(id));
+    if (eventPlant?.uncertain || pacing.deferred || landsToPlant.length === 0) {
+        if (eventLands.length) await runFertilizerByConfig(eventLands, options);
+        return { plantedLands: eventLands };
+    }
+
+    const finishPlanting = async (result: PlantingRoundResult): Promise<PlantingRoundResult> => {
+        const cheapest = !result.uncertain && !pacing.deferred && result.remainingLandIds.length > 0
+            && (toNum(state.gold) > 0 || pacing.cheapestSeed)
+            ? await plantFromShop(result.remainingLandIds, state, 'cheapest', { ...options, pacing })
+            : null;
+        const plantedLands = [...new Set([...eventLands, ...result.plantedLands, ...(cheapest?.plantedLands || [])])];
+        if (plantedLands.length) await runFertilizerByConfig(plantedLands, options);
+        return { ...result, ...(cheapest || {}), plantedLands, deferredLandIds: result.deferredLandIds };
+    };
 
     if (accountStrategy === 'illustrated') {
-        const plantedLands: number[] = [];
-        try {
-            const book = await require('../illustrated').getNormalIllustratedList();
-            if (!Array.isArray(book.list)) throw new Error('普通图鉴列表无效');
-            const pending = new Set<number>(book.list.filter((item: any) => !item.unlocked).map((item: any) => {
-                const id = toNum(item.fruit_id);
-                return toNum((getPlantBySeedId(id) || getPlantByFruitId(id))?.seed_id) || id;
-            }));
-            // 用最新土地识别进行中目标，跨轮次与重启也不会重复安排。
-            const latest = await getAllLands();
-            if (!Array.isArray(latest.lands)) throw new Error('土地状态无效');
-            const growing = new Set<number>(latest.lands.map((land: any) => toNum(getPlantById(toNum(land.plant?.id))?.seed_id)).filter(Boolean));
-            const targets = new Set([...pending].filter(id => !growing.has(id)));
-            const landTypes = await resolveLandTypeMapForBagSeeds(latest.lands);
-            const bag = await plantFromBagSeeds(landsToPlant, landTypes, { ...options, pacing, illustratedTargets: targets });
-            plantedLands.push(...bag.plantedLandIds);
-            let remaining = bag.remainingLandIds;
-            if (bag.fallbackAllowed && !pacing.deferred && remaining.length) {
-                const shop = await plantFromShop(remaining, state, 'level', { ...options, pacing, illustratedTargets: targets });
-                plantedLands.push(...shop.plantedLands);
-                remaining = shop.remainingLandIds;
-                if (!shop.uncertain && !pacing.deferred && remaining.length) {
-                    const strategy = getBagSeedFallbackStrategy() || 'level';
-                    if (strategy === 'bag_priority') {
-                        const extra = await plantFromBagSeeds(remaining, landTypes, { ...options, pacing, stopOnUncertain: true });
-                        plantedLands.push(...extra.plantedLandIds);
-                        remaining = extra.remainingLandIds;
-                        if (!extra.fallbackAllowed || pacing.deferred) {
-                            if (plantedLands.length) await runFertilizerByConfig(plantedLands, options);
-                            return { plantedLands: [...new Set(plantedLands)], deferredLandIds: extra.deferredLandIds };
-                        }
-                    }
-                    const fallback = await plantFromShop(remaining, state, strategy === 'bag_priority' ? 'level' : strategy, {
-                        ...options, pacing,
-                    });
-                    plantedLands.push(...fallback.plantedLands);
-                }
-            }
-            log('种植', `图鉴优先：待点亮 ${pending.size} 种，生长中 ${[...pending].filter(id => growing.has(id)).length} 种，本轮种植 ${plantedLands.length} 块`, {
-                module: 'farm', event: '图鉴种植', result: 'info',
-            });
-            if (plantedLands.length) await runFertilizerByConfig(plantedLands, options);
-            return { plantedLands: [...new Set(plantedLands)], deferredLandIds: bag.deferredLandIds };
-        } catch (error: any) {
-            logWarn('种植', `图鉴种植状态未确认，停止本轮补种：${error.message}`, { module: 'farm', event: '图鉴种植', result: 'error' });
-            if (options.propagateErrors) throw error;
-            return { plantedLands: [...new Set(plantedLands)] };
-        }
+        const result = await plantIllustratedLands(landsToPlant, state, {
+            ...options, pacing, fallbackStrategy: secondStrategy === 'illustrated' ? 'level' : secondStrategy,
+        });
+        return finishPlanting(result);
     }
+
+    const plantAutoBagSeeds = async (landIds: number[], stopOnUncertain = false) => {
+        const landTypeById = await resolveLandTypeMapForBagSeeds(latestLands);
+        const allUnlockedLandIds = targetLandIds
+            ? [...landsToPlant]
+            : latestLands.filter(land => land?.unlocked).map(land => toNum(land.id)).filter(id => id > 0);
+        return plantFromBagSeeds(landIds, landTypeById, {
+            propagateErrors: options.propagateErrors, allUnlockedLandIds, pacing, stopOnUncertain,
+        });
+    };
 
     // 背包种子优先策略
     if (accountStrategy === 'bag_priority') {
         let bagResult: any;
         try {
-            const landTypeById = await resolveLandTypeMapForBagSeeds(latestLands);
-            const allUnlockedLandIds = targetLandIds
-                ? [...landsToPlant]
-                : latestLands
-                    .filter((land: any) => !!(land && land.unlocked))
-                    .map((land: any) => toNum(land.id))
-                    .filter((id: number) => id > 0);
-            bagResult = await plantFromBagSeeds(landsToPlant, landTypeById, {
-                propagateErrors: options.propagateErrors,
-                allUnlockedLandIds,
-                pacing,
-            });
+            bagResult = await plantAutoBagSeeds(landsToPlant);
         } catch (e: any) {
             logWarn('种植', `读取背包种子失败，本轮跳过第二优先策略以避免误购: ${e.message}`, {
                 module: 'farm',
@@ -862,15 +875,19 @@ async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[]
                 result: 'bag_load_error',
             });
             if (options.propagateErrors) throw e;
-            return { plantedLands: [] };
+            return { plantedLands: eventLands };
         }
 
-        const plantedLands: number[] = bagResult.plantedLandIds || [];
+        const result: PlantingRoundResult = {
+            plantedLands: bagResult.plantedLandIds,
+            remainingLandIds: bagResult.remainingLandIds,
+            deferredLandIds: bagResult.deferredLandIds,
+            uncertain: !bagResult.fallbackAllowed,
+        };
 
         // 如果允许回退且有剩余空地，使用第二优先策略补种
         if (bagResult.fallbackAllowed && bagResult.remainingLandIds.length > 0 && !pacing.deferred) {
-            const configuredFallback = getBagSeedFallbackStrategy();
-            const fallbackStrategy = configuredFallback === 'bag_priority' ? 'level' : configuredFallback || 'level';
+            const fallbackStrategy = secondStrategy === 'bag_priority' ? 'level' : secondStrategy;
             log('种植', `开始按第二优先策略"${getPlantingStrategyLabel(fallbackStrategy)}"补种剩余空地`, {
                 module: 'farm',
                 event: '种植种子',
@@ -878,29 +895,168 @@ async function autoPlantEmptyLands(deadLandIds: number[], emptyLandIds: number[]
                 strategy: fallbackStrategy,
                 remainingCount: bagResult.remainingLandIds.length,
             });
-            const shopResult = await plantFromShop(bagResult.remainingLandIds, state, fallbackStrategy, { ...options, pacing });
-            plantedLands.push(...(shopResult.plantedLands || []));
+            const fallback = fallbackStrategy === 'illustrated'
+                ? await plantIllustratedLands(bagResult.remainingLandIds, state, { ...options, pacing })
+                : await plantFromShop(bagResult.remainingLandIds, state, fallbackStrategy, {
+                    ...options, pacing, knownLands: latestLands,
+                });
+            result.plantedLands.push(...fallback.plantedLands);
+            result.remainingLandIds = fallback.remainingLandIds;
+            result.uncertain = fallback.uncertain;
+            result.deferredLandIds = [...new Set([...(result.deferredLandIds || []), ...(fallback.deferredLandIds || [])])];
         }
-
-        // 施肥
-        if (plantedLands.length > 0) {
-            await runFertilizerByConfig(plantedLands, options);
-        }
-        return {
-            plantedLands: [...new Set(plantedLands)],
-            deferredLandIds: bagResult.deferredLandIds || [],
-        };
+        return finishPlanting(result);
     }
 
-    // 其他策略：从商店购买种植
-    const shopResult = await plantFromShop(landsToPlant, state, undefined, { ...options, pacing });
-    if (shopResult.plantedLands && shopResult.plantedLands.length > 0) {
-        await runFertilizerByConfig(shopResult.plantedLands, options);
+    const shopResult = await plantFromShop(landsToPlant, state, undefined, {
+        ...options, pacing, knownLands: latestLands, plantBagFallback: ids => plantAutoBagSeeds(ids, true),
+    });
+    if (secondStrategy === 'illustrated' && !shopResult.uncertain && !pacing.deferred && shopResult.remainingLandIds.length > 0) {
+        const result = await plantIllustratedLands(shopResult.remainingLandIds, state, {
+            ...options, pacing, skipSeedId: accountStrategy === 'preferred' ? preferredSeed : undefined,
+        });
+        return finishPlanting({ ...result, plantedLands: [...shopResult.plantedLands, ...result.plantedLands] });
     }
-    return shopResult;
+    return finishPlanting(shopResult);
 }
 
-async function plantFromShop(landsToPlant: number[], state: any, overrideStrategy?: string, options: { propagateErrors?: boolean; pacing?: PlantingPacing; illustratedTargets?: Set<number> } = {}): Promise<any> {
+async function plantIllustratedLands(landIds: number[], state: any, options: {
+    pacing: PlantingPacing;
+    propagateErrors?: boolean;
+    fallbackStrategy?: string;
+    skipSeedId?: number;
+}): Promise<PlantingRoundResult> {
+    const { pacing, fallbackStrategy, skipSeedId } = options;
+    const plantedLands: number[] = [];
+    let deferredLandIds: number[] = [];
+    let remainingLandIds = landIds;
+    let uncertain = false;
+    try {
+        const book = await require('../illustrated').getNormalIllustratedList();
+        if (!Array.isArray(book.list)) throw new Error('普通图鉴列表无效');
+        const pending = new Set<number>(book.list.filter((item: any) => !item.unlocked).map((item: any) => {
+            const id = toNum(item.fruit_id);
+            return toNum((getPlantBySeedId(id) || getPlantByFruitId(id))?.seed_id) || id;
+        }));
+        // 用最新土地识别进行中的作物，包括第一策略刚种下的作物。
+        const latest = await getAllLands();
+        if (!Array.isArray(latest.lands)) throw new Error('土地状态无效');
+        const growing = new Set<number>(latest.lands.map((land: any) => toNum(getPlantById(toNum(land.plant?.id))?.seed_id)).filter(Boolean));
+        const targets = new Set([...pending].filter(id => id !== skipSeedId && !growing.has(id)));
+        if (!targets.size && !fallbackStrategy) return { plantedLands, deferredLandIds, remainingLandIds, uncertain };
+
+        const landTypes = await resolveLandTypeMapForBagSeeds(latest.lands);
+        const bag = await plantFromBagSeeds(landIds, landTypes, { ...options, illustratedTargets: targets });
+        plantedLands.push(...bag.plantedLandIds);
+        deferredLandIds = bag.deferredLandIds;
+        remainingLandIds = bag.remainingLandIds;
+        uncertain = !bag.fallbackAllowed;
+        if (!uncertain && !pacing.deferred && remainingLandIds.length) {
+            const shop = await plantFromShop(remainingLandIds, state, 'level', { ...options, illustratedTargets: targets });
+            plantedLands.push(...shop.plantedLands);
+            remainingLandIds = shop.remainingLandIds;
+            uncertain = shop.uncertain;
+            if (fallbackStrategy && !uncertain && !pacing.deferred && remainingLandIds.length) {
+                if (fallbackStrategy === 'bag_priority') {
+                    const extra = await plantFromBagSeeds(remainingLandIds, landTypes, { ...options, stopOnUncertain: true });
+                    plantedLands.push(...extra.plantedLandIds);
+                    remainingLandIds = extra.remainingLandIds;
+                    uncertain = !extra.fallbackAllowed;
+                    deferredLandIds = [...new Set([...deferredLandIds, ...extra.deferredLandIds])];
+                }
+                if (!uncertain && !pacing.deferred && remainingLandIds.length) {
+                    const fallback = await plantFromShop(remainingLandIds, state, fallbackStrategy === 'bag_priority' ? 'level' : fallbackStrategy, {
+                        ...options, knownLands: latest.lands,
+                    });
+                    plantedLands.push(...fallback.plantedLands);
+                    remainingLandIds = fallback.remainingLandIds;
+                    uncertain = fallback.uncertain;
+                }
+            }
+        }
+        log('种植', `图鉴优先：待点亮 ${pending.size} 种，生长中 ${[...pending].filter(id => growing.has(id)).length} 种，本轮种植 ${plantedLands.length} 块`, {
+            module: 'farm', event: '图鉴种植', result: 'info',
+        });
+    } catch (error: any) {
+        logWarn('种植', `图鉴种植状态未确认，停止本轮补种：${error.message}`, { module: 'farm', event: '图鉴种植', result: 'error' });
+        if (options.propagateErrors) throw error;
+        uncertain = true;
+    }
+    return { plantedLands: [...new Set(plantedLands)], deferredLandIds, remainingLandIds, uncertain };
+}
+
+let lastYishuPlantNotice = '';
+
+function canPlantYishuOnLand(land: any): boolean {
+    const now = getServerTimeSec();
+    const end = getYishuActivityEnd(now);
+    return !!land?.unlocked && end > now && estimateYishuLand(land, now, end).eligible;
+}
+
+async function plantYishuLands(lands: any[], empty: number[], pacing: PlantingPacing, mode: 'automatic' | 'preferred' = 'automatic') {
+    if (mode === 'automatic' && getAutomation().yishu_plant !== true) return null;
+    const now = getServerTimeSec();
+    const end = getYishuActivityEnd(now);
+    if (!end) return null;
+    const candidates = lands.filter(land => land.unlocked && empty.includes(toNum(land.id)));
+    if (!candidates.length) return null;
+    const plans = candidates.map(land => estimateYishuLand(land, now, end));
+    const seeds = await getBagSeeds();
+    const count = toNum(seeds.find((seed: any) => toNum(seed.seedId) === YISHU_SEED_ID)?.count);
+    if (count <= 0) return null;
+    const ids = plans.filter(plan => plan.eligible).map(plan => plan.landId);
+    const result = await plantSeeds(YISHU_SEED_ID, ids, {
+        maxPlantCount: count,
+        pacing,
+        canPlant: id => {
+            const land = candidates.find(item => toNum(item.id) === id);
+            const enabled = mode === 'preferred' ? toNum(getPreferredSeed()) === YISHU_SEED_ID : getAutomation().yishu_plant === true;
+            return enabled && canPlantYishuOnLand(land);
+        },
+    });
+    const deferred = plans.filter(plan => !plan.eligible);
+    const state = [plans[0]?.deadline, deferred.map(plan => plan.landId).join(',')].join(':');
+    if (result.planted > 0 || (deferred.length && lastYishuPlantNotice !== state)) {
+        lastYishuPlantNotice = state;
+        appendYishuHistory(process.env.FARM_ACCOUNT_ID || '', now, {
+            type: 'plant', status: result.uncertain ? 'pending' : result.planted ? 'planted' : 'skip',
+            reason: result.planted ? '已种植红薯 ' + result.planted + ' 块' : '预计赶不上 23:30，保留红薯种子',
+            landIds: result.plantedLandIds, plots: plans,
+        });
+    }
+    return result;
+}
+
+async function plantPreferredSeedFromBag(
+    seedId: number,
+    landsToPlant: number[],
+    pacing: PlantingPacing,
+    knownLands?: any[],
+    propagateErrors?: boolean,
+): Promise<PlantSeedsResult | null> {
+    if (seedId === YISHU_SEED_ID) {
+        if (!getYishuActivityEnd(getServerTimeSec())) return null;
+        const lands = knownLands?.length ? knownLands : (await getAllLands()).lands;
+        return plantYishuLands(lands, landsToPlant, pacing, 'preferred');
+    }
+
+    const bag = await getBagSeeds();
+    const count = toNum(bag.find((seed: any) => toNum(seed.seedId) === seedId)?.count);
+    if (count <= 0) return null;
+    const layouts = selectNonOverlappingLayouts(buildPlantingLayouts(landsToPlant, getPlantSizeBySeedId(seedId)), count);
+    if (!layouts.length) return null;
+    return plantSeeds(seedId, layouts.map((layout: PlantingLayout) => layout.anchorLandId), {
+        layouts, pacing, propagateErrors,
+    });
+}
+
+async function plantFromShop(landsToPlant: number[], state: any, overrideStrategy?: string, options: {
+    propagateErrors?: boolean;
+    pacing?: PlantingPacing;
+    illustratedTargets?: Set<number>;
+    knownLands?: any[];
+    plantBagFallback?: (landIds: number[]) => ReturnType<typeof plantFromBagSeeds>;
+} = {}): Promise<PlantingRoundResult> {
     const pacing = options.pacing || { lastPlantAt: null };
     if (pacing.deferred || (isSlicedPlanting(pacing) && getRemainingPlantDelayMs(pacing) > 0)) {
         pacing.deferred = true;
@@ -909,55 +1065,117 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
     let remainingLandIds: number[] = [...new Set<number>((Array.isArray(landsToPlant) ? landsToPlant : [])
         .map((id: any) => toNum(id)).filter((id: number) => id > 0))];
     const plantedLands: number[] = [];
+    let deferredLandIds: number[] = [];
     let uncertain = false;
-    const strategyKey = `${getPlantingStrategy()}:${overrideStrategy || ''}:${getPreferredSeed()}`;
-    if (pacing.shopSeed?.strategy !== strategyKey) delete pacing.shopSeed;
-    if (pacing.shopSeed && options.illustratedTargets && !options.illustratedTargets.has(pacing.shopSeed.seedId)) delete pacing.shopSeed;
+    const accountStrategy = getPlantingStrategy();
+    const preferredSeed = toNum(getPreferredSeed());
+    const preferredFallback = !overrideStrategy && accountStrategy === 'preferred'
+        ? getBagSeedFallbackStrategy() || 'level'
+        : undefined;
+    const rankedFallback = !overrideStrategy && !['preferred', 'bag_priority', 'illustrated'].includes(accountStrategy)
+        ? getRankedSeedFallbackStrategy()
+        : '';
+    const fallback = preferredFallback || rankedFallback;
+    const plantBagFallback = fallback === 'bag_priority' ? options.plantBagFallback : undefined;
+    const usePreferredStock = preferredSeed > 0 && (overrideStrategy || accountStrategy) === 'preferred';
+    let useSecondaryPreferredStock = preferredSeed > 0 && rankedFallback === 'preferred';
+    let yishuLands: Map<number, any> | undefined;
+    const canPlantPurchasedYishu = (id: number) => toNum(getPreferredSeed()) === YISHU_SEED_ID
+        && canPlantYishuOnLand(yishuLands?.get(id));
+    const getPlantableLands = async (seedId: number) => {
+        if (seedId !== YISHU_SEED_ID) return remainingLandIds;
+        if (!getYishuActivityEnd(getServerTimeSec())) return [];
+        if (!yishuLands) {
+            try {
+                const lands = options.knownLands?.length ? options.knownLands : (await getAllLands()).lands;
+                yishuLands = new Map((Array.isArray(lands) ? lands : []).map(land => [toNum(land?.id), land]));
+            } catch (error: any) {
+                if (options.propagateErrors) throw error;
+                logWarn('种植', `无法确认红薯成熟时间，跳过该种子：${error.message}`);
+                return [];
+            }
+        }
+        return remainingLandIds.filter(canPlantPurchasedYishu);
+    };
+    const plantPreferredStock = async () => {
+        try {
+            const result = await plantPreferredSeedFromBag(preferredSeed, remainingLandIds, pacing, options.knownLands, options.propagateErrors);
+            if (!result) return;
+            plantedLands.push(...result.plantedLandIds);
+            const consumed = new Set([...result.occupiedLandIds, ...result.reservedLandIds]);
+            remainingLandIds = remainingLandIds.filter(id => !consumed.has(id));
+            uncertain = result.uncertain;
+            if (!uncertain && result.planted > 0 && remainingLandIds.length > 0 && isSlicedPlanting(pacing)) pacing.deferred = true;
+        } catch (e: any) {
+            logWarn('种植', `无法确认优先种子的背包库存或种植结果，停止本轮补种：${e.message}`);
+            if (options.propagateErrors) throw e;
+            uncertain = true;
+        }
+    };
+    const strategyKey = `${accountStrategy}:${overrideStrategy || ''}:${preferredSeed}:${fallback || ''}`;
+    const stockKey = overrideStrategy === 'cheapest' ? 'cheapestSeed' : 'shopSeed';
+    if (pacing[stockKey]?.strategy !== strategyKey) delete pacing[stockKey];
+    const pendingStock = pacing[stockKey];
     // 分次种植可能留下已购的一包种子。即使商品已售罄，也先核对背包后使用余量。
-    if (pacing.shopSeed) {
-        const seedId = pacing.shopSeed.seedId;
+    if (pendingStock && (!options.illustratedTargets || options.illustratedTargets.has(pendingStock.seedId))) {
+        const seedId = pendingStock.seedId;
         const bag = await getBagSeeds();
-        const count = Math.min(options.illustratedTargets ? 1 : Infinity, pacing.shopSeed.remaining, toNum(bag.find((seed: any) => toNum(seed.seedId) === seedId)?.count));
-        const layouts = selectNonOverlappingLayouts(buildPlantingLayouts(remainingLandIds, getPlantSizeBySeedId(seedId)), count);
+        const count = Math.min(options.illustratedTargets ? 1 : Infinity, pendingStock.remaining, toNum(bag.find((seed: any) => toNum(seed.seedId) === seedId)?.count));
+        const plantableLands = await getPlantableLands(seedId);
+        const layouts = selectNonOverlappingLayouts(buildPlantingLayouts(plantableLands, getPlantSizeBySeedId(seedId)), count);
         if (layouts.length > 0) {
             const result = await plantSeeds(seedId, layouts.map((layout: PlantingLayout) => layout.anchorLandId), {
                 layouts, pacing, propagateErrors: options.propagateErrors,
+                canPlant: seedId === YISHU_SEED_ID ? canPlantPurchasedYishu : undefined,
             });
             plantedLands.push(...result.plantedLandIds);
             if (result.planted > 0) options.illustratedTargets?.delete(seedId);
             const consumed = new Set([...result.reservedLandIds, ...result.occupiedLandIds]);
             remainingLandIds = remainingLandIds.filter(id => !consumed.has(id));
-            pacing.shopSeed.remaining = count - result.planted;
-            if (result.uncertain || pacing.shopSeed.remaining <= 0) delete pacing.shopSeed;
+            pendingStock.remaining = count - result.planted;
+            if (result.uncertain || pendingStock.remaining <= 0) delete pacing[stockKey];
             if (result.uncertain || remainingLandIds.length === 0) return { plantedLands, remainingLandIds, uncertain: result.uncertain };
             if (isSlicedPlanting(pacing) || pacing.deferred) {
                 pacing.deferred = true;
                 return { plantedLands, remainingLandIds, uncertain: false };
             }
         }
-        delete pacing.shopSeed;
     }
+    delete pacing[stockKey];
+    if (usePreferredStock) {
+        await plantPreferredStock();
+        if (uncertain || pacing.deferred || remainingLandIds.length === 0) return { plantedLands, remainingLandIds, uncertain };
+    }
+
     let candidates: any[] = [];
     try {
-        candidates = await findBestSeed(overrideStrategy);
-        candidates = candidates.filter(candidate => !options.illustratedTargets || options.illustratedTargets.has(toNum(candidate.seedId)));
+        candidates = await findBestSeed(overrideStrategy, preferredFallback, rankedFallback);
+        const onlyPreferred = preferredFallback === 'bag_priority' || preferredFallback === 'illustrated';
+        candidates = candidates.filter(candidate => (!onlyPreferred || candidate.seedId === preferredSeed)
+            && (!options.illustratedTargets || options.illustratedTargets.has(toNum(candidate.seedId))));
         if (options.illustratedTargets) candidates.sort((a, b) => a.requiredLevel - b.requiredLevel || a.seedId - b.seedId);
     } catch (e: any) {
         logWarn('商店', `查询失败: ${e.message}`);
         if (options.propagateErrors) throw e;
         return { plantedLands, remainingLandIds, uncertain: true };
     }
-    if (candidates.length === 0) return { plantedLands, remainingLandIds, uncertain: false };
-
-    for (const candidate of candidates) {
-        if (options.illustratedTargets && !options.illustratedTargets.has(toNum(candidate.seedId))) continue;
+    const firstRankedSeed = candidates[0]?.seedId;
+    for (const candidate of useSecondaryPreferredStock ? [...candidates, undefined] : candidates) {
         if (remainingLandIds.length === 0 || uncertain || pacing.deferred) break;
+        if (useSecondaryPreferredStock && (!candidate || candidate.seedId !== firstRankedSeed || candidate.seedId === YISHU_SEED_ID)) {
+            useSecondaryPreferredStock = false;
+            await plantPreferredStock();
+            if (remainingLandIds.length === 0 || uncertain || pacing.deferred) break;
+        }
+        if (!candidate) break;
+        if (options.illustratedTargets && !options.illustratedTargets.has(toNum(candidate.seedId))) continue;
         const seedName = getPlantNameBySeedId(candidate.seedId);
         const plantCfg = getPlantBySeedId(candidate.seedId);
         const plantSize = getPlantSizeBySeedId(candidate.seedId);
         const growTime = plantCfg ? getPlantGrowTime(plantCfg.id) : 0;
         const growTimeStr = growTime > 0 ? ` 生长${formatGrowTime(growTime)}` : '';
-        const allLayouts: PlantingLayout[] = buildPlantingLayouts(remainingLandIds, plantSize);
+        const plantableLands = await getPlantableLands(candidate.seedId);
+        const allLayouts: PlantingLayout[] = buildPlantingLayouts(plantableLands, plantSize);
         let layouts: PlantingLayout[] = selectNonOverlappingLayouts(allLayouts, options.illustratedTargets ? 1 : allLayouts.length);
         if (layouts.length === 0) {
             log('种植', `${seedName} 无合法${plantSize}x${plantSize} 布局，继续下一候选`, {
@@ -1004,7 +1222,8 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
         try {
             const buyReply = await buyGoods(candidate.goodsId, purchaseUnits, candidate.price);
             if (buyReply.get_items && buyReply.get_items.length > 0) {
-                const gotItem = buyReply.get_items[0];
+                const gotItem = buyReply.get_items.find((item: any) => toNum(item?.id) === candidate.seedId)
+                    || buyReply.get_items[0];
                 const gotId = toNum(gotItem && gotItem.id);
                 const gotCount = toNum(gotItem && gotItem.count);
                 if (gotId > 0) actualSeedId = gotId;
@@ -1024,6 +1243,23 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
                 count: purchaseUnits * unitItemCount, purchaseUnits, cost: candidate.price * purchaseUnits
             });
         } catch (e: any) {
+            const insufficientGold = /金币(?:余额)?不足|金币不够/.test(e?.errorMessage || '');
+            const unavailable = /售罄|售完|超过.*限购|达到.*限购/.test(e?.errorMessage || '');
+            const canFallBack = overrideStrategy === 'cheapest' || fallback
+                || ((usePreferredStock || rankedFallback === 'preferred') && candidate.seedId === preferredSeed);
+            if (canFallBack && e?.name === 'GatewayError' && (insufficientGold || unavailable)) {
+                if (insufficientGold) {
+                    const totals = await getCurrentTotalsFromBag().catch(() => null);
+                    if (totals && totals.gold !== null) {
+                        state.gold = totals.gold;
+                        updateStatusGold(state.gold);
+                    }
+                }
+                logWarn('购买', `${e.errorMessage}，跳过 ${seedName} 种子并继续补种`, {
+                    module: 'farm', event: '购买种子跳过', result: insufficientGold ? 'insufficient_gold' : 'shop_unavailable', seedId: candidate.seedId,
+                });
+                continue;
+            }
             logWarn('购买', `${seedName} 购买结果不确定，停止后续购买: ${e.message}`, {
                 module: 'warehouse', event: '购买种子', result: 'purchase_uncertain', seedId: candidate.seedId
             });
@@ -1032,8 +1268,9 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
             break;
         }
 
-        if (options.illustratedTargets && actualSeedId !== toNum(candidate.seedId)) {
-            logWarn('种植', '图鉴种子购买回包与目标不符，停止本轮种植并等待重新核对', { module: 'farm', event: '图鉴种植', result: 'error' });
+        const requiresMatchingSeed = options.illustratedTargets || candidate.seedId === preferredSeed || actualSeedId === YISHU_SEED_ID;
+        if (requiresMatchingSeed && actualSeedId !== candidate.seedId) {
+            logWarn('种植', '种子购买回包与目标不符，停止本轮种植并等待重新核对', { module: 'farm', event: '种植种子', result: 'error' });
             uncertain = true;
             break;
         }
@@ -1042,6 +1279,7 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
             layouts,
             propagateErrors: options.propagateErrors,
             pacing,
+            canPlant: actualSeedId === YISHU_SEED_ID ? canPlantPurchasedYishu : undefined,
         });
         plantedLands.push(...result.plantedLandIds);
         if (result.planted > 0) options.illustratedTargets?.delete(toNum(candidate.seedId));
@@ -1062,25 +1300,40 @@ async function plantFromShop(landsToPlant: number[], state: any, overrideStrateg
                 module: 'farm', event: '种植种子', result: 'plant_uncertain', seedId: actualSeedId
             });
         } else if (pacing.defer) {
-            if (receivedSeedCount > result.planted) pacing.shopSeed = { seedId: actualSeedId, strategy: strategyKey, remaining: receivedSeedCount - result.planted };
+            if (receivedSeedCount > result.planted) pacing[stockKey] = { seedId: actualSeedId, strategy: strategyKey, remaining: receivedSeedCount - result.planted };
             if (isSlicedPlanting(pacing) && result.planted > 0 && remainingLandIds.length > 0) pacing.deferred = true;
         }
     }
 
-    return { plantedLands: [...new Set(plantedLands)], remainingLandIds, uncertain };
+    if (plantBagFallback && remainingLandIds.length > 0 && !uncertain && !pacing.deferred) {
+        try {
+            const bag = await plantBagFallback(remainingLandIds);
+            plantedLands.push(...bag.plantedLandIds);
+            remainingLandIds = bag.remainingLandIds;
+            deferredLandIds = bag.deferredLandIds;
+            uncertain = !bag.fallbackAllowed;
+        } catch (e: any) {
+            logWarn('种植', `背包种植状态未确认，停止本轮补种: ${e.message}`);
+            if (options.propagateErrors) throw e;
+            uncertain = true;
+        }
+    }
+    return { plantedLands: [...new Set(plantedLands)], remainingLandIds, deferredLandIds, uncertain };
 }
 
 interface FertilizerRunOptions {
     skipNormal?: boolean;
     reason?: string;
     propagateErrors?: boolean;
+    lands?: any[];
 }
 
 async function runFertilizerByConfig(plantedLands: any[] = [], options: FertilizerRunOptions = {}): Promise<{ normal: number; organic: number }> {
     const automation = getAutomation() || {};
     if (automation.fertilizer_enabled === false) return { normal: 0, organic: 0 };
+    const providedLands = Array.isArray(options.lands) ? options.lands : undefined;
     if (!Object.keys(automation.fertilizer_land_strategies ?? {}).length) {
-        return runFertilizerForScope(automation, plantedLands, options);
+        return runFertilizerForScope(automation, plantedLands, options, providedLands);
     }
 
     const totals = { normal: 0, organic: 0 };
@@ -1089,7 +1342,7 @@ async function runFertilizerByConfig(plantedLands: any[] = [], options: Fertiliz
     if (!groups.length) return totals;
     let snapshot: unknown;
     try {
-        snapshot = (await getAllLands())?.lands;
+        snapshot = providedLands ?? (await getAllLands())?.lands;
     } catch (error: any) {
         logWarn('施肥', `无法确认地块类型，跳过本轮施肥: ${error.message}`, {
             module: 'farm', event: '施肥', result: 'error',
@@ -1211,9 +1464,19 @@ async function runFertilizerForScope(automation: FertilizerSettings, plantedLand
 
     let fertilizedNormal: number = 0;
     let fertilizedOrganic: number = 0;
+    let attemptedNormal = false;
 
-    if (!skipNormal && (fertilizerConfig === 'normal' || fertilizerConfig === 'both' || fertilizerConfig === 'smart')) {
-        if (normalTargets.length === 0) {
+    if (!skipNormal && usesNormalFertilizer(fertilizerConfig)) {
+        if (isFertilizerContainerEmpty(NORMAL_FERTILIZER_ID)) {
+            log('施肥', `${reasonLabel}：普通化肥容器为空，5 分钟内不再发送施肥请求`, {
+                module: 'farm',
+                event: eventName,
+                result: 'skip',
+                reason,
+                type: 'normal',
+                cause: 'container_empty',
+            });
+        } else if (normalTargets.length === 0) {
             log('施肥', `${reasonLabel}：普通化肥目标为空（传入 ${planted.length} 块，范围: ${selectedLandTypeNames.join('、')}），跳过普通施肥`, {
                 module: 'farm',
                 event: eventName,
@@ -1224,20 +1487,22 @@ async function runFertilizerForScope(automation: FertilizerSettings, plantedLand
                 landTypes: selectedLandTypes,
             });
         } else {
-        fertilizedNormal = await fertilize(normalTargets, NORMAL_FERTILIZER_ID, options.propagateErrors);
-        if (fertilizedNormal > 0) {
-            log('施肥', `${reasonLabel}：已为${fertilizedNormal}/${normalTargets.length} 块地施普通化肥（范围: ${selectedLandTypeNames.join('、')}）`, {
-            module: 'farm',
-            event: eventName,
-            result: 'ok',
-            reason,
-            type: 'normal',
-            count: fertilizedNormal,
-            landTypes: selectedLandTypes,
-        });
-            recordOperation('fertilize', fertilizedNormal);
+            attemptedNormal = true;
+            fertilizedNormal = await fertilize(normalTargets, NORMAL_FERTILIZER_ID, options.propagateErrors);
+            if (fertilizedNormal > 0) {
+                log('施肥', `${reasonLabel}：已为${fertilizedNormal}/${normalTargets.length} 块地施普通化肥（范围: ${selectedLandTypeNames.join('、')}）`, {
+                    module: 'farm',
+                    event: eventName,
+                    result: 'ok',
+                    reason,
+                    type: 'normal',
+                    count: fertilizedNormal,
+                    landTypes: selectedLandTypes,
+                });
+                recordOperation('fertilize', fertilizedNormal);
             } else {
-                log('施肥', `${reasonLabel}：普通化肥施肥 0/${normalTargets.length} 块（可能化肥不足或地块不可施）`, {
+                const emptyLatched: boolean = isFertilizerContainerEmpty(NORMAL_FERTILIZER_ID);
+                log('施肥', `${reasonLabel}：普通化肥施肥 0/${normalTargets.length} 块（${emptyLatched ? '普通化肥容器为空，5 分钟内不再申请' : '可能化肥不足或地块不可施'}）`, {
                     module: 'farm',
                     event: eventName,
                     result: 'skip',
@@ -1250,7 +1515,8 @@ async function runFertilizerForScope(automation: FertilizerSettings, plantedLand
         }
     }
 
-    if (fertilizerConfig === 'organic' || fertilizerConfig === 'both') {
+    if ((fertilizerConfig === 'organic' || fertilizerConfig === 'both')
+        && !isFertilizerContainerEmpty(ORGANIC_FERTILIZER_ID)) {
         let organicTargets: number[] = planted;
 
         if (latestLands.length > 0) {
@@ -1280,7 +1546,7 @@ async function runFertilizerForScope(automation: FertilizerSettings, plantedLand
     }
     else if (fertilizerConfig === 'smart') {
         try {
-            const snapshot = normalTargets.length === 0 && latestLands.length > 0 ? latestLands : undefined;
+            const snapshot = !attemptedNormal && latestLands.length > 0 ? latestLands : undefined;
             fertilizedOrganic = await runRipeningFertilizer(automation, snapshot, options.propagateErrors);
         } catch (e: any) {
             logWarn('施肥', `临熟催熟失败: ${e.message}`);
@@ -1346,6 +1612,7 @@ async function fertilizeOwnLand(landIdInput: unknown, fertilizerTypeInput: unkno
 }
 
 module.exports = {
+    plantYishuLands,
     getRemainingPlantDelayMs,
     getPlantSizeBySeedId,
     plantSeeds,

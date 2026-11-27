@@ -12,7 +12,8 @@ export type PlantingStrategy =
   | 'bag_priority'
   | 'illustrated';
 
-export type BagSeedFallbackStrategy = Exclude<PlantingStrategy, 'illustrated'>;
+export type BagSeedFallbackStrategy = PlantingStrategy;
+export type RankedSeedFallbackStrategy = PlantingStrategy | '';
 
 export type FertilizerMode = 'both' | 'normal' | 'organic' | 'smart' | 'none' | 'normal_ripen' | 'organic_ripen';
 
@@ -50,6 +51,31 @@ export interface AutomationConfig extends RanchAutomationConfig, Record<keyof ty
   fertilizer_smart_seconds: number;
   skip_own_weed_bug: boolean;
   show_manual_fertilizer: boolean;
+  solar_calendar_claim_events: boolean;
+  solar_calendar_claim_seasons: boolean;
+  solar_calendar_answer_quiz: boolean;
+  // 以薯换福：领种子 / 分享 / 自动按好友收购价卖薯，数值项控制比价频率与分摊风险。
+  yishu_claim_seed: boolean;
+  yishu_share: boolean;
+  yishu_auto_sell: boolean;
+  yishu_plant: boolean;
+  yishu_harvest: boolean;
+  yishu_use_unshared_price: boolean;
+  /** 空值保留旧版 yishu_auto_sell 的保存值。 */
+  yishu_sell_mode: '' | 'off' | 'scan' | 'auto';
+  /** 小铺收购提成（好友把蜜薯卖进你的铺子产生）到账后自动领。 */
+  yishu_claim_commission: boolean;
+  /** 好友铺子当天都收满时，把剩下的卖给自己铺子（不浪费已收获的蜜薯）。 */
+  yishu_sell_fallback_own: boolean;
+  /** 每次比价扫描的好友数量上限，好友越多单轮读请求越多。 */
+  yishu_scan_friend_limit: number;
+  /** 两次比价之间的最小间隔（分钟），间隔内复用上一轮结果。 */
+  yishu_scan_interval_minutes: number;
+  /** 背包蜜薯达到这个数量才自动卖出。 */
+  yishu_sell_min_count: number;
+  yishu_sell_min_price: number;
+  /** 最早出售时间（北京时间 HH:MM），缺省为 12:00。 */
+  yishu_sell_after_time: string;
 }
 
 export interface IntervalConfig {
@@ -100,6 +126,7 @@ export interface AccountConfig {
   /** seedId -> 允许种植的土地类型。缺 key 视为不限制。 */
   bagSeedLandTypes: Record<string, FertilizerLandType[]>;
   bagSeedFallbackStrategy: BagSeedFallbackStrategy;
+  rankedSeedFallbackStrategy: RankedSeedFallbackStrategy;
   autoAcceptFriendMinLevel: number;
   autoAcceptRequireOwnLevel: boolean;
 }
@@ -156,6 +183,12 @@ export interface DeviceInfo {
   userAgent: string;
 }
 
+export interface AutoCodeRefreshConfig {
+  /** 掉线重登：账号掉线后等待一段时间自动续期并重登。 */
+  offlineEnabled: boolean;
+  offlineDelaySeconds: number;
+}
+
 export interface SystemConfig {
   serverUrl: string;
   clientVersion: string;
@@ -166,14 +199,15 @@ export interface SystemConfig {
   os: string;
   timeZone: string;
   deviceInfo: DeviceInfo;
+  autoCodeRefresh?: AutoCodeRefreshConfig;
+  /** 服务启动后是否自动拉起已保存账号（系统级，默认开启）。 */
+  autoStartAccounts?: boolean;
 }
 
 /**
- * 微信 Code 定时刷新与自动重登（落在 store.json，对所有微信扫码账号统一生效）。
- * intervalMinutes 同时是「凭证失效后延迟重登」的等待时长；maxRetries 是每账号每天的
- * 恢复重试上限（只统计 ws_400 / kickout / 重连失败 / 刷新失败这类恢复场景）。
+ * 旧版微信 Code 设置格式，仍用于读取已有的配置和兼容旧面板接口。
  */
-export interface AutoCodeRefreshConfig {
+export interface LegacyAutoCodeRefreshConfig {
   enabled: boolean;
   intervalMinutes: number;
   maxRetries: number;
@@ -189,10 +223,35 @@ export interface UserDefaultPlan {
   updatedAt: number;
 }
 
+export interface QqBotPushUser {
+  openid: string;
+  nickname: string;
+  avatar: string;
+  lastSeenAt: number;
+}
+
+export interface QqBotPushConfig {
+  channelEnabled: boolean;
+  enabled: boolean;
+  appId: string;
+  appSecret: string;
+  openid: string;
+  eventKeys: string[];
+  batchWindowSec: number;
+  dailyLimit: number;
+  minuteLimit: number;
+  includeIcons: boolean;
+  includeAvatars: boolean;
+  showAccount: boolean;
+  offlineNotify: boolean;
+  accountRoutes?: Record<string, string[]>;
+  discoveredUsers?: QqBotPushUser[];
+}
+
 export interface GlobalConfig {
   accountConfigs: Record<string, AccountConfig>;
   defaultAccountConfig: AccountConfig;
-  autoCodeRefresh: AutoCodeRefreshConfig;
+  autoCodeRefresh: LegacyAutoCodeRefreshConfig;
   ui: UIConfig;
   loginSettings: LoginSettings;
   captureSettings: CaptureSettings;
@@ -201,6 +260,7 @@ export interface GlobalConfig {
   offlineReminderDefault: OfflineReminder | null;
   // 旧版全局开关仅为尚未保存账号开关的配置提供默认值。
   pushNotifications?: { notificationTypes?: Partial<NotificationTypes> };
+  qqBotPush?: QqBotPushConfig;
   systemConfig: SystemConfig | null;
   userDefaultPlan: UserDefaultPlan | null;
 }

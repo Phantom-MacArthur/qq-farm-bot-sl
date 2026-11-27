@@ -31,6 +31,7 @@ function pickDefaultPlanConfig(raw: unknown): Record<string, any> {
         fertilizerBuyNormalCheckIntervalMinutes: cfg.fertilizerBuyNormalCheckIntervalMinutes,
         emailClaimHour: cfg.emailClaimHour,
         bagSeedFallbackStrategy: cfg.bagSeedFallbackStrategy,
+        rankedSeedFallbackStrategy: cfg.rankedSeedFallbackStrategy,
         autoAcceptFriendMinLevel: cfg.autoAcceptFriendMinLevel,
         autoAcceptRequireOwnLevel: !!cfg.autoAcceptRequireOwnLevel,
     };

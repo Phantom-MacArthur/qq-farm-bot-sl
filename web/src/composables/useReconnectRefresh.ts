@@ -20,6 +20,11 @@ export function useAccountPresence() {
     const account = accountStore.currentAccount
     if (!account)
       return 'unknown'
+    if (account.runtimeState) {
+      return account.runtimeState === 'running' && account.online === true && !hasAccountOfflineResponse.value
+        ? 'online'
+        : 'offline'
+    }
     if (!account.running)
       return 'offline'
     if (String(statusStore.status?.accountId || '') !== id)

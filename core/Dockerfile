@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 ARG NODE_IMAGE=node:20.19.6-alpine3.21
-ARG PNPM_VERSION=10.30.2
+ARG PNPM_VERSION=12.21.0
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 FROM ${NODE_IMAGE} AS pnpm-base

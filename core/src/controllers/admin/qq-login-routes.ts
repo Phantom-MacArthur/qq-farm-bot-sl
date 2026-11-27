@@ -43,7 +43,7 @@ function mountQqLoginRoutes(app: Application, _ctx: AdminContext): void {
     app.post('/api/qq-login/tasks/:taskId/code', async (req: Request, res: Response) => {
         try {
             const result = await getMiniappCode(String(req.params.taskId || ''));
-            res.json({ ok: true, data: { code: result.code, nickname: result.nickname || '', app_id: QQ_MINIAPP_APP_ID } });
+            res.json({ ok: true, data: { code: result.code, nickname: result.nickname || '', uin: result.uin || '', app_id: QQ_MINIAPP_APP_ID } });
         }
         catch (error: any) {
             sendError(res, error, 'QQ 小程序授权 Code 获取失败');

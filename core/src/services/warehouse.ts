@@ -6,10 +6,11 @@ export {};
  * 协议说明：BagReply 使用 item_bag（ItemBag），item_bag.items 才是背包物品列表
  */
 const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById, getSeedImageBySeedId, getEffectiveSellInfo, getMutantEffectsByIds } = require('../config/gameConfig');
+const { parseSellConditions } = require('../config/sell-conditions');
 const { isAutomationOn } = require('../models/store');
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toLong, toNum, toTimeSec, log, logWarn, sleep, getSystemDateKey } = require('../utils/utils');
+const { toLong, toNum, toTimeSec, log, logWarn, sleep, getSystemDateKey, getServerTimeSec } = require('../utils/utils');
 const { getSellConditionContext } = require('./activity-windows');
 const { updateStatusGold } = require('./status');
 
@@ -509,10 +510,16 @@ async function getCurrentTotalsFromBag(): Promise<{ gold: number | null; exp: nu
     return { gold, exp };
 }
 
-async function getBagDetail(): Promise<any> {
-    const bagReply: any = await getBag();
+async function getBagDetail(loadBag = getBag): Promise<any> {
+    const bagReply: any = await loadBag();
     const rawItems: any[] = getBagItems(bagReply);
-    const baseContext: SellConditionContext = await getSellConditionContext();
+    const needsActivityWindows = rawItems.some((item: any) => {
+        if (toNum(item.uid) <= 0 || toNum(item.count) <= 0) return false;
+        const config = getItemById(toNum(item.id));
+        return config?.cond_sells && parseSellConditions(config.sell_cond).some(({ type }: { type: string }) =>
+            type === '活动结束后' || type === '活动结束前' || type === '活动区间外');
+    });
+    const baseContext: SellConditionContext = needsActivityWindows ? await getSellConditionContext() : { nowSec: getServerTimeSec() };
 
     // Balance/container entries have no UID and are not real bag stacks. Keep
     // them separate so status widgets can consume them without displaying them.
@@ -785,6 +792,9 @@ async function sellAllFruits(): Promise<void> {
             result: totalGoldEarned > 0 ? 'ok' : 'unknown_gain',
             count: toSell.length,
             gold: totalGoldEarned,
+            // QQ 机器人推送用：取首个出售物品，供图标查表
+            itemId: toSell.length > 0 ? toNum(toSell[0].id) : 0,
+            itemName: toSell.length > 0 ? getFruitName(toNum(toSell[0].id)) : '',
             totalsBefore,
             totalsAfter,
             totalsDeltaGold,

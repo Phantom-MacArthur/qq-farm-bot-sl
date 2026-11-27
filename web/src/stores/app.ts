@@ -8,8 +8,8 @@ export const EXPANDED_LAYOUT_MIN_WIDTH = 962
 export const COLLAPSED_LAYOUT_MIN_WIDTH = 884
 
 export const useAppStore = defineStore('app', () => {
-  // 活动详情有自己的标题栏，打开时布局隐藏通用页头并让活动外壳撑满内容区。
-  const activityDetailOpen = ref(false)
+  // 自带页头的活动详情使用独立布局。
+  const activityUsesCustomLayout = ref(false)
   // 保留上游组件的状态契约；实际切换由页头直接导航，不触发转场。
   const spaceSwitching = ref(false)
   const sidebarCollapsedPreference = useStorage('sidebar_collapsed', false)
@@ -44,7 +44,7 @@ export const useAppStore = defineStore('app', () => {
     sidebarAutoCollapsed,
     sidebarToggleLabel,
     layoutMinWidth,
-    activityDetailOpen,
+    activityUsesCustomLayout,
     spaceSwitching,
     themeMode,
     isDark,

@@ -75,3 +75,19 @@ test('释放扫码会话会同时丢弃尚未消费的凭证快照', () => {
     wxLoginAdapter.releasePendingWxInfo('session-release');
     assert.equal(wxLoginAdapter.peekPendingWxInfo('session-release', 'wxid-2'), null);
 });
+
+test('编辑重扫的凭据只允许原账号读取和消费', () => {
+    const sessionId = 'session-account';
+    const wxid = 'wxid-owner';
+    wxLoginAdapter.registerPendingWxInfo(sessionId, {
+        accountId: '1', wxid, loginBuffer: 'buffer', refreshtoken: 'r', accesstoken: 'a', nickname: 'nick',
+    });
+
+    assert.equal(wxLoginAdapter.peekPendingWxInfo(sessionId, wxid), null);
+    assert.equal(wxLoginAdapter.peekPendingWxInfo(sessionId, wxid, '2'), null);
+    assert.equal(wxLoginAdapter.consumePendingWxInfo(sessionId, wxid, '2'), false);
+    assert.ok(wxLoginAdapter.peekPendingWxInfo(sessionId, wxid, '1'));
+    assert.ok(wxLoginAdapter.peekPendingWxInfo(sessionId, wxid, '1'));
+    assert.equal(wxLoginAdapter.consumePendingWxInfo(sessionId, wxid, '1'), true);
+    assert.equal(wxLoginAdapter.peekPendingWxInfo(sessionId, wxid, '1'), null);
+});

@@ -48,8 +48,10 @@ const props = withDefaults(defineProps<{
   deployBusy: boolean
   keepBackups?: boolean
   disabled?: boolean
+  manageBackups?: boolean
 }>(), {
   keepBackups: true,
+  manageBackups: true,
 })
 
 const emit = defineEmits<{
@@ -74,7 +76,7 @@ const deleteTargets = ref<RollbackReleaseItem[]>([])
 
 const isBusy = computed(() => Boolean(props.disabled || props.deployBusy || actionBusy.value || backupBusy.value))
 const backupEnabled = computed(() => props.keepBackups !== false)
-const showBackupSwitch = computed(() => props.mode !== 'docker' && props.mode !== 'binary')
+const showBackupSwitch = computed(() => props.manageBackups && props.mode !== 'docker' && props.mode !== 'binary')
 
 watch(() => props.releases, (list) => {
   const allowedIds = new Set(list.filter(item => !item.isActive && item.canDelete).map(item => item.releaseId))
@@ -108,7 +110,7 @@ const selectedBytes = computed(() =>
 
 /** 只在有可执行的批量操作时显示，避免常驻一排禁用按钮。 */
 const showToolbar = computed(() =>
-  selectedIds.value.length > 0 || outdatedDeletableItems.value.length > 0 || hasOrphans.value,
+  props.manageBackups && (selectedIds.value.length > 0 || outdatedDeletableItems.value.length > 0 || hasOrphans.value),
 )
 
 function releaseStatus(item: RollbackReleaseItem): { label: string, tone: 'active' | 'warn' } | null {
@@ -245,7 +247,7 @@ const deleteConfirmMessage = computed(() => {
 
 async function confirmRollback(): Promise<void> {
   const item = rollbackTarget.value
-  if (!item || actionBusy.value)
+  if (!item || isBusy.value || !item.canRollback)
     return
   actionBusy.value = true
   actionError.value = ''
@@ -269,7 +271,7 @@ async function confirmRollback(): Promise<void> {
 }
 
 async function confirmDelete(): Promise<void> {
-  if (actionBusy.value)
+  if (!props.manageBackups || isBusy.value)
     return
   actionBusy.value = true
   actionError.value = ''
@@ -300,7 +302,7 @@ async function confirmDelete(): Promise<void> {
 }
 
 async function handleToggleBackup(nextValue: boolean | undefined): Promise<void> {
-  if (nextValue === undefined || isBusy.value || nextValue === backupEnabled.value)
+  if (!props.manageBackups || nextValue === undefined || isBusy.value || nextValue === backupEnabled.value)
     return
   backupBusy.value = true
   actionError.value = ''
@@ -433,13 +435,13 @@ defineExpose({
       >
         <div class="release-item__check">
           <NCheckbox
-            v-if="!item.isActive"
+            v-if="manageBackups && !item.isActive"
             :checked="selectedSet.has(item.releaseId)"
             :disabled="isBusy || !item.canDelete"
             :aria-label="`选择版本 ${item.shortCommit || item.releaseId}`"
             @update:checked="toggleItemSelected(item.releaseId, $event)"
           />
-          <span v-else class="release-item__active-dot" title="当前运行中" />
+          <span v-else-if="item.isActive" class="release-item__active-dot" title="当前运行中" />
         </div>
 
         <div class="release-item__body">
@@ -475,6 +477,7 @@ defineExpose({
             回滚
           </BaseButton>
           <BaseButton
+            v-if="manageBackups"
             variant="ghost"
             size="sm"
             class="release-item__delete"

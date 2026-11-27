@@ -11,6 +11,7 @@ const { recordFarmReward } = require('./farm-reward-history');
 
 const DAILY_KEY: string = 'daily_share';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
+const SHARE_REWARD_ALREADY_CLAIMED = 1009001;
 
 type ShareCheckStatus = 'unchecked' | 'entry_available' | 'entry_unavailable' | 'already_claimed' | 'check_failed';
 
@@ -28,7 +29,7 @@ function isCheckedToday(): boolean {
 }
 
 function isAlreadyClaimedError(error: any): boolean {
-    return Number(error?.code) === 1009001 || /\bcode=1009001\b/.test(String(error?.message || error || ''));
+    return Number(error?.code) === SHARE_REWARD_ALREADY_CLAIMED || /\bcode=1009001\b/.test(String(error?.message || error || ''));
 }
 
 async function checkCanShare(): Promise<any> {
@@ -56,7 +57,9 @@ async function claimShareReward(): Promise<any> {
     const body: Uint8Array = types.ClaimShareRewardRequest.encode(types.ClaimShareRewardRequest.create({
         field_1: true,
     })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ClaimShareReward', body);
+    const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ClaimShareReward', body, {
+        expectedErrorCodes: [SHARE_REWARD_ALREADY_CLAIMED],
+    });
     return types.ClaimShareRewardReply.decode(replyBody);
 }
 

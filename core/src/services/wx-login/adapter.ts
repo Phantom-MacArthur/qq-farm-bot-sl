@@ -19,11 +19,14 @@ const wxLogin = new WxLoginService();
 
 export interface PendingWxInfo {
     sessionId: string;
+    accountId?: string;
     wxid: string;
     loginBuffer: string;
     refreshtoken: string;
     accesstoken: string;
     nickname: string;
+    expiresIn?: number;
+    expiresAt?: number;
 }
 
 interface PendingWxEntry extends PendingWxInfo {
@@ -75,7 +78,7 @@ function cleanupExpiredPending(): void {
     }
 }
 
-/** 扫码确认后登记凭证快照，供账号保存接口在持久化前读取。 */
+/** 取码后登记凭证快照，供账号保存接口在持久化前读取。 */
 function registerPendingWxInfo(sessionId: string, info: Omit<PendingWxInfo, 'sessionId' | 'wxid'> & { wxid: string }): void {
     const id = String(sessionId || '');
     const wxid = String(info.wxid || '').trim();
@@ -86,33 +89,30 @@ function registerPendingWxInfo(sessionId: string, info: Omit<PendingWxInfo, 'ses
 /**
  * 读取待绑定凭证，不消费。
  *
- * 必须按会话声明的微信号取凭证，否则任何人都能拿别人的 sessionId
- * 把凭证绑进任意账号；账号持久化成功后才消费，失败时保留以便重试。
+ * 核对扫码的微信号。编辑重扫还需核对创建任务时指定的账号。
+ * 账号持久化成功后才消费，失败时保留以便重试。
  */
-function peekPendingWxInfo(sessionId: string, wxid: string): PendingWxInfo | null {
+function peekPendingWxInfo(sessionId: string, wxid: string, accountId?: string): PendingWxInfo | null {
     cleanupExpiredPending();
     const id = String(sessionId || '');
     const targetWxid = String(wxid || '').trim();
     const entry = pendingWxInfos.get(id);
     if (!id || !targetWxid || !entry) return null;
     if (String(entry.wxid || '') !== targetWxid) return null;
+    if (entry.accountId && entry.accountId !== accountId) return null;
     if (!String(entry.loginBuffer || '')) return null;
     const { createdAt, ...info } = entry;
     void createdAt;
     return info;
 }
 
-function consumePendingWxInfo(sessionId: string, wxid: string): boolean {
-    const id = String(sessionId || '');
-    const entry = pendingWxInfos.get(id);
-    if (!entry || String(entry.wxid || '') !== String(wxid || '').trim()) return false;
-    pendingWxInfos.delete(id);
-    return true;
+function consumePendingWxInfo(sessionId: string, wxid: string, accountId?: string): boolean {
+    return !!peekPendingWxInfo(sessionId, wxid, accountId) && pendingWxInfos.delete(sessionId);
 }
 
 /** 换绑或绑定失败时释放会话快照，避免过期凭证长期驻留内存。 */
-function releasePendingWxInfo(sessionId: string): void {
-    pendingWxInfos.delete(String(sessionId || ''));
+function releasePendingWxInfo(sessionId: string): boolean {
+    return pendingWxInfos.delete(String(sessionId || ''));
 }
 
 /**

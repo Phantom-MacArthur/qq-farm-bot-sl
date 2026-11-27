@@ -2,7 +2,10 @@ import type { FertilizerSettings } from '../../config/fertilizer-strategy';
 import type { FertilizerMode } from '../../types/config';
 import { getFertilizerStrategyGroups, usesRipeningFertilizer } from '../../config/fertilizer-strategy';
 
-const { getAllLands, fertilizeBatch, fertilizeOrganicLoop, isFertilizerStockError, logFertilizerStockSkip } = require('./api');
+const {
+    getAllLands, fertilizeBatch, fertilizeOrganicLoop, isFertilizerContainerEmpty,
+    isFertilizerStockError, logFertilizerStockSkip, NORMAL_FERTILIZER_ID, ORGANIC_FERTILIZER_ID,
+} = require('./api');
 const {
     filterLandIdsByTypes,
     getFastMatureLands,
@@ -21,7 +24,8 @@ export async function runRipeningFertilizer(
     lands?: any[],
     propagateErrors = false,
 ): Promise<number> {
-    const groups = [...getFertilizerStrategyGroups(automation)].filter(([mode]) => usesRipeningFertilizer(mode));
+    const groups = [...getFertilizerStrategyGroups(automation)].filter(([mode]) =>
+        usesRipeningFertilizer(mode) && !isFertilizerContainerEmpty(ripeningFertilizerId(mode)));
     if (!groups.length) return 0;
     const snapshot = lands ?? (await getAllLands())?.lands;
     if (!Array.isArray(snapshot)) return 0;
@@ -39,9 +43,15 @@ export async function runRipeningFertilizer(
     return total;
 }
 
+function ripeningFertilizerId(mode: FertilizerMode): number {
+    return mode === 'normal_ripen' ? NORMAL_FERTILIZER_ID : ORGANIC_FERTILIZER_ID;
+}
+
 async function fertilizeRipeningTargets(mode: FertilizerMode, candidates: number[], roots: any[], propagateErrors: boolean): Promise<number> {
     let targets = candidates;
     const normal = mode === 'normal_ripen';
+    const fertilizerId = ripeningFertilizerId(mode);
+    if (isFertilizerContainerEmpty(fertilizerId)) return 0;
     if (normal) {
         const eligible = new Set<number>(getNormalFertilizerTargetsFromLands(roots));
         targets = targets.filter(landId => eligible.has(landId));
@@ -54,7 +64,7 @@ async function fertilizeRipeningTargets(mode: FertilizerMode, candidates: number
     } else {
         let reply: any;
         try {
-            reply = await fertilizeBatch(targets, normal ? 1011 : 1012);
+            reply = await fertilizeBatch(targets, fertilizerId);
         } catch (error) {
             if (!isFertilizerStockError(error)) throw error;
             logFertilizerStockSkip(error);

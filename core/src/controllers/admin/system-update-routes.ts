@@ -1,9 +1,8 @@
-import type { Application, Request, Response } from 'express';
-import type { AdminContext } from './context';
+import type { Application, NextFunction, Request, Response } from 'express';
 export {};
 
 const systemUpdate = require('../../services/system-update');
-const { createAuthRequired, handleApiError } = require('./middleware');
+const { handleApiError } = require('./middleware');
 
 function sendUpdateError(res: Response, err: any): void {
     if (Number.isInteger(err?.statusCode)) {
@@ -17,10 +16,17 @@ function sendUpdateError(res: Response, err: any): void {
     handleApiError(res, err);
 }
 
-function mountSystemUpdateRoutes(app: Application, ctx: AdminContext): void {
-    const authRequired = createAuthRequired(ctx);
+function requireJson(req: Request, res: Response, next: NextFunction): void {
+    // Require a JSON body so an ordinary cross-site form cannot trigger a panel update.
+    if (!req.is('application/json')) {
+        res.status(415).json({ ok: false, error: '请使用 application/json 提交更新请求' });
+        return;
+    }
+    next();
+}
 
-    app.get('/api/system/update/status', authRequired, async (_req: Request, res: Response) => {
+function mountSystemUpdateRoutes(app: Application): void {
+    app.get('/api/system/update/status', async (_req: Request, res: Response) => {
         try {
             const data = await systemUpdate.getSystemUpdateStatus();
             res.json({ ok: true, data });
@@ -29,7 +35,7 @@ function mountSystemUpdateRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    app.post('/api/system/update/check', authRequired, async (_req: Request, res: Response) => {
+    app.post('/api/system/update/check', requireJson, async (_req: Request, res: Response) => {
         try {
             const data = await systemUpdate.checkSystemUpdates();
             res.json({ ok: true, data });
@@ -38,7 +44,7 @@ function mountSystemUpdateRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    app.post('/api/system/update/pull', authRequired, async (_req: Request, res: Response) => {
+    app.post('/api/system/update/pull', requireJson, async (_req: Request, res: Response) => {
         try {
             const data = await systemUpdate.pullSystemUpdates();
             res.json({ ok: true, data });
@@ -47,7 +53,7 @@ function mountSystemUpdateRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    app.post('/api/system/update/apply', authRequired, async (req: Request, res: Response) => {
+    app.post('/api/system/update/apply', requireJson, async (req: Request, res: Response) => {
         try {
             const pullFirst = req.body?.pullFirst !== false;
             const data = await systemUpdate.applySystemUpdate({ pullFirst });
@@ -57,30 +63,9 @@ function mountSystemUpdateRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    app.post('/api/system/update/rollback', authRequired, async (req: Request, res: Response) => {
+    app.post('/api/system/update/rollback', requireJson, async (req: Request, res: Response) => {
         try {
             const data = await systemUpdate.rollbackSystemRelease(req.body?.releaseId);
-            res.json({ ok: true, data });
-        } catch (err: any) {
-            sendUpdateError(res, err);
-        }
-    });
-
-    app.post('/api/system/update/releases/delete', authRequired, async (req: Request, res: Response) => {
-        try {
-            const data = await systemUpdate.deleteSystemReleases({
-                releaseIds: req.body?.releaseIds,
-                cleanOrphans: req.body?.cleanOrphans,
-            });
-            res.json({ ok: true, data });
-        } catch (err: any) {
-            sendUpdateError(res, err);
-        }
-    });
-
-    app.put('/api/system/update/backup-setting', authRequired, async (req: Request, res: Response) => {
-        try {
-            const data = await systemUpdate.setSystemBackupEnabled(req.body?.keepBackups);
             res.json({ ok: true, data });
         } catch (err: any) {
             sendUpdateError(res, err);

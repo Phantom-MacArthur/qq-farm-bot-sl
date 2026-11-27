@@ -18,6 +18,58 @@ function loadSource(path, imports = {}) {
   return module.exports
 }
 
+function makeLogHarness(t) {
+  const account = vue.reactive({ currentAccountId: 'a' })
+  const logReads = []
+  const handlers = new Map()
+  const { useStatusStore } = loadSource('../src/stores/status.ts', {
+    '@/api': {
+      __esModule: true,
+      default: {
+        get: path => path === '/api/logs'
+          ? new Promise(resolve => logReads.push(logs => resolve({ data: { ok: true, data: logs } })))
+          : Promise.resolve({ data: { ok: false } }),
+      },
+      getApiErrorMessage: () => '',
+    },
+    '@/constants/log-filters': { LOG_CACHE_LIMIT: 500 },
+    '@/stores/account': { useAccountStore: () => account },
+    'socket.io-client': { io: () => ({ on: (event, handler) => handlers.set(event, handler), connect() {} }) },
+  })
+  const pinia = createPinia()
+  t.after(() => disposePinia(pinia))
+  return { account, logReads, handlers, status: useStatusStore(pinia) }
+}
+
+test('filtered log history from a page refresh survives the first subscription to the selected account', async (t) => {
+  const { logReads, handlers, status } = makeLogHarness(t)
+  status.connectRealtime('')
+  status.setRealtimeLogsEnabled(false)
+  const loading = status.fetchLogs('a', { module: 'farm,friend,warehouse' })
+  status.connectRealtime('a')
+  handlers.get('logs:snapshot')({ accountId: 'a', logs: [{ msg: 'unfiltered' }] })
+  logReads[0]([{ msg: 'farm history' }])
+  await loading
+  assert.deepEqual(status.logs.map(log => log.msg), ['farm history'])
+})
+
+test('switching the selected account drops previous HTTP and socket logs before subscribing', async (t) => {
+  const { account, logReads, handlers, status } = makeLogHarness(t)
+  status.connectRealtime('a')
+  handlers.get('log:new')({ accountId: 'a', msg: 'previous' })
+  assert.equal(status.logs.length, 1)
+  const previousRead = status.fetchLogs('a')
+  account.currentAccountId = 'b'
+  assert.equal(status.logs.length, 0)
+  handlers.get('log:new')({ accountId: 'a', msg: 'late event' })
+  handlers.get('logs:snapshot')({ accountId: 'all', logs: [{ msg: 'all accounts' }] })
+  logReads[0]([{ msg: 'late response' }])
+  await previousRead
+  assert.equal(status.logs.length, 0)
+  handlers.get('logs:snapshot')({ accountId: 'b', logs: [{ msg: 'new account' }] })
+  assert.deepEqual(status.logs.map(log => log.msg), ['new account'])
+})
+
 function makePresenceHarness(t) {
   const messages = []
   const apiModule = loadSource('../src/api/index.ts', {
@@ -128,14 +180,16 @@ test('offline responses from previous selections, canceled requests, and pre-rec
 })
 
 const accountApiError = value => value?.response?.data?.error || value?.error || value?.message || '请求失败'
-const bulkActions = loadSource('../src/utils/account-bulk-actions.ts')
+const accountRuntime = loadSource('../src/utils/account-runtime.ts')
+const bulkActions = loadSource('../src/utils/account-bulk-actions.ts', { './account-runtime': accountRuntime })
 
 function loadAccountStore(api, pinia, toast = loadSource('../src/stores/toast.ts')) {
   const apiModule = { __esModule: true, default: api, getApiErrorMessage: accountApiError, selectedAccountId: vue.ref('') }
   const { useAccountStore } = loadSource('../src/stores/account.ts', {
     '@/api': apiModule,
+    '@/utils/account-runtime': accountRuntime,
     '@/utils/account-bulk-actions': bulkActions,
-    './setting': loadSource('../src/stores/setting.ts', { '@/api': apiModule }),
+    '@/utils/request-guard': loadSource('../src/utils/request-guard.ts'),
     './toast': toast,
   })
   return useAccountStore(pinia)
@@ -155,10 +209,10 @@ function accountState({ running = false, online = false } = {}) {
   return { data: { ok: true, data: { accounts: [{ id: '7', name: 'acc', running, online }] } } }
 }
 
-test('全部启动串行处理已停止和已断线账号，并拦住重复提交', async (t) => {
+test('全部启动立即提交待重登账号，也允许另一账号先完成，并拦住重复提交', async (t) => {
   const calls = []
   const accounts = [
-    { id: '1', platform: 'wx', hasWxCredential: true, running: false },
+    { id: '1', platform: 'wx', hasWxCredential: true, running: false, online: false, runtimeState: 'relogin_waiting', reloginAt: Date.now() + 60_000 },
     { id: '2', platform: 'qq', running: false },
     { id: '3', running: true, online: false },
   ]
@@ -167,18 +221,22 @@ test('全部启动串行处理已停止和已断线账号，并拦住重复提�
   const refresh = new Promise((resolve) => {
     finishRefresh = resolve
   })
+  let thirdStarted
+  const third = new Promise(resolve => { thirdStarted = resolve })
   const { store } = createHarness(t, {
     get: async () => {
       calls.push('get-accounts')
       const snapshot = accounts.map(account => account.id === '3' ? { ...account, running: disconnectedWorkerRunning } : { ...account })
       return { data: { ok: true, data: { accounts: snapshot } } }
     },
-    post: async (url, _body, config) => {
-      calls.push([url, config?.headers?.['x-account-id']])
-      if (url === '/api/settings/auto-code-refresh/run')
+    post: async (url) => {
+      calls.push(url)
+      if (url === '/api/accounts/1/start')
         await refresh
       if (url === '/api/accounts/3/stop')
         disconnectedWorkerRunning = false
+      if (url === '/api/accounts/3/start')
+        thirdStarted()
       return { data: { ok: true } }
     },
   })
@@ -186,17 +244,16 @@ test('全部启动串行处理已停止和已断线账号，并拦住重复提�
   const batch = store.startAllAccounts()
   assert.equal(store.bulkKind, 'start')
   await store.startAllAccounts()
-  assert.deepEqual(calls, [['/api/settings/auto-code-refresh/run', '1']])
+  await third
+  assert.deepEqual(calls.filter(call => call.endsWith('/start')), [
+    '/api/accounts/1/start',
+    '/api/accounts/2/start',
+    '/api/accounts/3/start',
+  ])
+  assert.ok(calls.indexOf('/api/accounts/3/stop') < calls.indexOf('/api/accounts/3/start'))
+  assert.equal(calls.includes('/api/accounts/1/stop'), false)
   finishRefresh()
   await batch
-  assert.deepEqual(calls, [
-    ['/api/settings/auto-code-refresh/run', '1'],
-    ['/api/accounts/2/start', undefined],
-    ['/api/accounts/3/stop', undefined],
-    'get-accounts',
-    ['/api/accounts/3/start', undefined],
-    'get-accounts',
-  ])
   assert.equal(store.bulkRunning, false)
 })
 
@@ -341,4 +398,29 @@ test('停止轮询期间的单次失败不清空账号列表', async (t) => {
 
   assert.deepEqual(result, { ok: true, confirmed: true })
   assert.equal(store.accounts.length, 1)
+})
+
+test('后端确认取消重登后立即显示已停止，较早的列表响应不能覆盖', async (t) => {
+  let finishRead
+  let reads = 0
+  const { store } = createHarness(t, {
+    get: () => {
+      reads++
+      return new Promise(resolve => { finishRead = resolve })
+    },
+    post: async () => ({
+      data: { ok: true, data: { runtime: { id: '7', running: false, online: false, runtimeState: 'stopped', runtimeUpdatedAt: 2, reloginAt: 0 } } },
+    }),
+  })
+  const waiting = { id: '7', running: false, runtimeState: 'relogin_waiting', runtimeUpdatedAt: 1, reloginAt: 5000 }
+  store.accounts = [{ ...waiting }]
+  const oldRead = store.refreshAccountsSilently()
+  await Promise.resolve()
+  assert.deepEqual(await store.stopAccount('7'), { ok: true, confirmed: true })
+  assert.equal(store.accounts[0].runtimeState, 'stopped')
+  assert.equal(store.accounts[0].reloginAt, 0)
+  finishRead({ data: { ok: true, data: { accounts: [waiting] } } })
+  await oldRead
+  assert.equal(reads, 1)
+  assert.equal(store.accounts[0].runtimeState, 'stopped')
 })

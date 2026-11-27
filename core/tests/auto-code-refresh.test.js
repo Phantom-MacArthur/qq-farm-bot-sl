@@ -217,7 +217,7 @@ test('手动停止后定时与掉线恢复不再取码，显式刷新仍可执�
     }
 });
 
-test('data provider 把手动停止转为退出轮询，把启动/重启转为恢复轮询', async () => {
+test('手动启停、重启和换码会撤销等待中的自动重登', async () => {
     const calls = [];
     const accounts = [{
         id: '7', name: 'wx account', platform: 'wx',
@@ -227,30 +227,31 @@ test('data provider 把手动停止转为退出轮询，把启动/重启转为�
         workers: {},
         store: { maskWxCredentialsForClient: data => data },
         getAccounts: () => ({ accounts }),
-        startWorker: () => { calls.push('startWorker'); return true; },
+        startWorker: account => { calls.push(`startWorker:${account.code}`); return true; },
         stopWorker: account => { calls.push(`stopWorker:${account.id}`); },
-        restartWorker: () => { calls.push('restartWorker'); },
-        scheduleAutoCodeRefresh: accountId => calls.push(`schedule:${accountId}`),
-        pauseAutoCodeRefreshPolling: accountId => calls.push(`pause:${accountId}`),
-        resumeAutoCodeRefreshPolling: accountId => calls.push(`resume:${accountId}`),
-        refreshAccountCode: async () => { calls.push('refresh'); return true; },
+        restartWorker: account => { calls.push(`restartWorker:${account.code}`); },
+        cancelPendingRelogin: accountId => calls.push(`cancel:${accountId}`),
+        ensureFreshGameCode: async (accountId) => {
+            calls.push(`refresh:${accountId}`);
+            accounts[0] = { ...accounts[0], code: 'fresh-code' };
+            return { ok: true };
+        },
     });
 
     assert.equal(await provider.startAccount('7'), true);
-    assert.deepEqual(calls, ['resume:7', 'schedule:7', 'refresh']);
+    assert.deepEqual(calls, ['cancel:7', 'refresh:7', 'startWorker:fresh-code']);
 
     calls.length = 0;
     assert.equal(await provider.stopAccount('7'), true);
-    assert.deepEqual(calls, ['stopWorker:7', 'pause:7']);
+    assert.deepEqual(calls, ['cancel:7', 'stopWorker:7']);
 
     calls.length = 0;
     assert.equal(await provider.restartAccount('7'), true);
-    assert.deepEqual(calls, ['resume:7', 'schedule:7', 'restartWorker']);
+    assert.deepEqual(calls, ['cancel:7', 'restartWorker:fresh-code']);
 
-    // “立即刷新”也是显式意图：先恢复轮询，成功后重新排期
     calls.length = 0;
     assert.deepEqual(await provider.refreshAccountCode('7'), { ok: true });
-    assert.deepEqual(calls, ['resume:7', 'refresh', 'schedule:7']);
+    assert.deepEqual(calls, ['cancel:7', 'refresh:7', 'restartWorker:fresh-code']);
 });
 
 test('刷新配置的非法值会被夹紧到可用区间', async () => {

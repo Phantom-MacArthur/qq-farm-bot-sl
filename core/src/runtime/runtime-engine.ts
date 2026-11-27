@@ -9,7 +9,10 @@ const { createDataProvider } = require('./data-provider');
 const { createReloginReminderService } = require('./relogin-reminder');
 const { createRuntimeState } = require('./runtime-state');
 const { createWorkerManager } = require('./worker-manager');
-const { createAutoCodeRefreshService } = require('./auto-code-refresh');
+const { startWxKeepAlive, stopWxKeepAlive, applyWxKeepAliveConfig, notifyAccountOffline, cancelPendingRelogin } = require('../services/wx-keepalive');
+const { ensureFreshGameCode } = require('../services/wx-credential');
+const { recordAutoRefreshSuccess, recordAutoRefreshFailure } = require('../services/preflight-stats');
+const { createQqBotPushService } = require('../services/qq-bot-push');
 
 const { listHostedSessions, findAccountSession } = require('../session/ipc');
 
@@ -56,6 +59,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         buildDefaultStatus,
         filterLogs,
     } = runtimeState;
+    const qqBotPush = createQqBotPushService({ store, log });
 
     const reloginReminder = createReloginReminderService({
         store,
@@ -70,20 +74,9 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         sendConfiguredPush,
     } = reloginReminder;
 
-    // worker 控制能力要等 createWorkerManager 之后才存在，而自动刷新服务又必须先于
-    // worker 管理器建好（掉线钩子会回调它），所以这里用一个晚绑定的句柄。
-    const workerControls: { restartWorker?: (account: any) => void } = {};
-
-    const autoCodeRefresh = createAutoCodeRefreshService({
-        store,
-        getAccounts: store.getAccounts,
-        addOrUpdateAccount: store.addOrUpdateAccount,
-        resolveWorkerControls: () => workerControls,
-        log,
-        addAccountLog,
-    });
-
-    const { startWorker, stopWorker, restartWorker, callWorkerApi, startAccountWorker, stopAccountWorker, detachAllWorkers } = createWorkerManager({
+    const findAccount = (accountId: string) => store.getAccounts().accounts.find((account: any) => String(account.id) === accountId);
+    const { startWorker, stopWorker, restartWorker, callWorkerApi, startAccountWorker, stopAccountWorker, detachAllWorkers,
+        cancelStoredCodeRetry, cancelAllStoredCodeRetries } = createWorkerManager({
         fork,
         WorkerThread: Worker,
         runtimeMode,
@@ -96,22 +89,47 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         addAccountLog,
         normalizeStatusForPanel,
         buildConfigSnapshotForAccount,
-        triggerOfflineReminder,
+        triggerOfflineReminder: (payload: any) => {
+            void triggerOfflineReminder(payload);
+            void qqBotPush.sendOfflineNotification(payload);
+        },
         sendConfiguredPush,
         addOrUpdateAccount: store.addOrUpdateAccount,
+        getAccount: findAccount,
         deleteAccount: store.deleteAccount,
-        scheduleAutoRelogin: autoCodeRefresh.scheduleRelogin,
-        refreshAccountCode: autoCodeRefresh.refreshAccountCode,
         onStatusSync: (accountId: string, status: any, accountName?: string) => {
-            runtimeEvents.emit('status', { accountId, status, accountName });
-            if (onStatusSync) onStatusSync(accountId, status, accountName);
+            const payload = { ...status, accountRuntime: dataProvider.getAccountRuntime(accountId) };
+            runtimeEvents.emit('status', { accountId, status: payload, accountName });
+            if (onStatusSync) onStatusSync(accountId, payload, accountName);
         },
         onWorkerLog: (entry: any, accountId: string, accountName?: string) => {
             runtimeEvents.emit('worker_log', { entry, accountId, accountName });
             if (onLog) onLog(entry, accountId, accountName);
+            qqBotPush.enqueueLog(entry, accountName, accountId);
+        },
+        onAccountOffline: (accountId: string, _accountName: string, reason: string) => {
+            notifyAccountOffline(accountId, reason);
         },
     });
-    workerControls.restartWorker = restartWorker;
+
+    function startAccountKeepAlive(): void {
+        startWxKeepAlive({
+            restartWorker: (account: any) => startWorker(account),
+            isAccountRunning: (accountId: string) => workers[accountId]?.status?.connection?.connected === true,
+            log,
+            addAccountLog,
+            // 自动续期账本：只记到期前预防 / 掉线重登，供账号卡片展示无人值守结果。
+            recordPreflightResult: (accountId: string, ok: boolean, at: number) => {
+                if (ok) recordAutoRefreshSuccess(accountId, at);
+                else recordAutoRefreshFailure(accountId, at);
+            },
+        });
+    }
+
+    /** 系统配置里改了「掉线重登」后，把新策略读回来并写进系统日志。 */
+    function applyAccountKeepAliveConfig(): void {
+        applyWxKeepAliveConfig();
+    }
 
     const dataProvider = createDataProvider({
         workers,
@@ -131,12 +149,13 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         startWorker: startAccountWorker,
         stopWorker: stopAccountWorker,
         restartWorker,
-        scheduleAutoCodeRefresh: autoCodeRefresh.scheduleAccount,
-        rescheduleAllAutoCodeRefresh: autoCodeRefresh.rescheduleAll,
-        stopAutoCodeRefresh: autoCodeRefresh.stopAccount,
-        pauseAutoCodeRefreshPolling: autoCodeRefresh.pausePolling,
-        resumeAutoCodeRefreshPolling: autoCodeRefresh.resumePolling,
-        refreshAccountCode: autoCodeRefresh.refreshAccountCode,
+        // 手动停止 / 启动 / 重启要先撤掉「等待重登」，否则定时器到点会把账号拉回来。
+        cancelPendingRelogin: (accountId: string) => {
+            cancelStoredCodeRetry(accountId);
+            cancelPendingRelogin(accountId);
+        },
+        ensureFreshGameCode,
+        applyAccountKeepAliveConfig,
     });
 
     runtimeEvents.on('log', (entry: any) => {
@@ -180,13 +199,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         const accounts = (store.getAccounts().accounts || []);
         if (accounts.length > 0) {
             log('系统', `发现 ${accounts.length} 个账号，正在启动...`);
-            for (const acc of accounts) {
-                if (acc.platform === 'wx' && acc.loginBuffer) {
-                    const refreshed = await autoCodeRefresh.refreshAccountCode(acc.id, 'startup');
-                    if (refreshed) continue;
-                }
-                startWorker(acc);
-            }
+            for (const acc of accounts) await dataProvider.startAccount(acc.id);
         } else {
             log('系统', '未发现账号，请访问管理面板添加账号');
         }
@@ -206,6 +219,9 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
             startAdminServer(dataProvider);
         }
 
+        startAccountKeepAlive();
+        qqBotPush.start();
+
         if (processRef.env.FARM_SESSION_SOCKET) {
             const sessions = await listHostedSessions();
             for (const account of store.getAccounts().accounts) {
@@ -216,11 +232,12 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         } else if (shouldAutoStartAccounts) {
             await startAllAccounts();
         }
-        // 调度必须在建号、启动、重启后都重建，不能因为历史配置让已删账号的任务继续跑。
-        autoCodeRefresh.rescheduleAll();
     }
 
     function stopAllAccounts(): void {
+        cancelAllStoredCodeRetries();
+        qqBotPush.stop();
+        stopWxKeepAlive();
         for (const accountId of Object.keys(workers)) {
             stopWorker(accountId);
         }
@@ -234,7 +251,12 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         start,
         startAllAccounts,
         stopAllAccounts,
-        detachAllWorkers,
+        startAccountKeepAlive,
+        applyAccountKeepAliveConfig,
+        detachAllWorkers: () => {
+            stopWxKeepAlive();
+            return detachAllWorkers();
+        },
         broadcastConfigToWorkers,
         broadcastGameConfigReload,
         startWorker,

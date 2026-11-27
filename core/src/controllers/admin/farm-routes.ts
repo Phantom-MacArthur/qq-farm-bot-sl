@@ -440,9 +440,14 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
 
             const ok = await ctx.provider.startAccount(accountId);
             if (!ok) {
-                return res.status(404).json({ ok: false, error: 'Account not found' });
+                if (!accountId) return res.status(404).json({ ok: false, error: '账号不存在' });
+                return res.status(409).json({
+                    ok: false,
+                    error: '账号启动失败或已取消，请查看账号状态',
+                    data: { runtime: ctx.provider.getAccountRuntime?.(accountId), serverTime: Date.now() },
+                });
             }
-            res.json({ ok: true });
+            res.json({ ok: true, data: { runtime: ctx.provider.getAccountRuntime?.(accountId), serverTime: Date.now() } });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -457,7 +462,7 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
             }
-            res.json({ ok: true });
+            res.json({ ok: true, data: { runtime: ctx.provider.getAccountRuntime?.(accountId), serverTime: Date.now() } });
         } catch (e: any) {
             handleApiError(res, e);
         }

@@ -5,10 +5,20 @@ export {};
 
 const { rpc, inScene, isUnlocked } = require('./transport');
 const { animalMap, mutationMap, cubMap, canMap, facilityMap, itemMap, taskMap, itemDto, pendingOperationView, quantity, levelInfo, error } = require('./model');
-const { getServerTimeSec } = require('../../utils/utils');
+const { getServerTimeSec, getSystemDateKey } = require('../../utils/utils');
 const { types } = require('../../utils/proto');
-const { getUserState } = require('../../utils/network');
+const { getUserState, getWs } = require('../../utils/network');
 const { getCareerInfoOrNull } = require('../career');
+
+const DASHBOARD_CACHE_TTL_MS = 15_000;
+let dashboardSnapshot: { socket: unknown; loadedAt: number; dateKey: string; state: any } | null = null;
+
+function getCachedDashboardState() {
+    const cached = dashboardSnapshot;
+    if (!cached || cached.socket !== getWs() || Date.now() - cached.loadedAt >= DASHBOARD_CACHE_TTL_MS
+        || !isUnlocked() || cached.dateKey !== getSystemDateKey()) return null;
+    return cached.state;
+}
 
 function bagItems(bag: any): any[] {
     return [...bag.physical_items, ...bag.virtual_items];
@@ -115,7 +125,7 @@ async function loadBag(): Promise<any> {
 }
 
 async function loadRaw(cells?: any): Promise<any> {
-    return { cells: cells || await rpc('cells'), bag: await loadBag() };
+    return { cells: cells || await rpc('cells'), bag: await loadBag(), loadedAt: Date.now() };
 }
 
 function shedAwaitingActivation(raw: any): any {
@@ -135,7 +145,7 @@ function snapshot(raw: any): any {
         canNormal: balance(raw.bag, 7003).total,
         canOrganic: balance(raw.bag, 7004).total,
     });
-    return {
+    const state = {
         todayAssetGains,
         unlocked: true, sceneId: 2, serverTime: getServerTimeSec() * 1000, ...info,
         currencies: [1007, 1002, 1005, 1008, 7002].map(id => ({ ...itemDto({ id, count: balance(raw.bag, id).total }), locked: balance(raw.bag, id).locked })),
@@ -144,6 +154,12 @@ function snapshot(raw: any): any {
         hourglassSeconds: balance(raw.bag, 1006).total,
         facilities: raw.cells.facilities.filter((facility: any) => [6, 7, 8].includes(facility.module_type)).map((facility: any) => facilityDto(facility, info.level)),
     };
+    const socket = getWs();
+    if (socket && !raw.recipient && raw.loadedAt > 0
+        && (dashboardSnapshot?.socket !== socket || raw.loadedAt >= dashboardSnapshot.loadedAt)) {
+        dashboardSnapshot = { socket, loadedAt: raw.loadedAt, dateKey: getSystemDateKey(), state: { ...state } };
+    }
+    return state;
 }
 
 function canLockRanchItem(item: any): boolean {
@@ -278,11 +294,16 @@ async function ranchCareer(gid: number): Promise<any> {
 }
 
 async function getState(view = 'animals', shopId?: number, hostGid?: string): Promise<any> {
-    if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'overview', 'mall'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面');
+    if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'overview', 'mall', 'dashboard'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面');
     if (!isUnlocked()) return { unlocked: false, sceneId: 2, reason: '牧场尚未解锁，请先在游戏中完成开启条件' };
+    if (view === 'dashboard') {
+        const cached = getCachedDashboardState();
+        if (cached) return cached;
+    }
     return inScene(async (cells: any) => {
         const raw = await loadRaw(cells);
         const state = snapshot(raw);
+        if (view === 'dashboard') return state;
         state.pendingOperations = require('./operation-state').forCurrentAccount().pending().map(pendingOperationView);
         if (view === 'overview' || view === 'animals') state.career = await ranchCareer(getUserState().gid);
         if (view === 'bag') state.bag = inventory(raw);
@@ -345,4 +366,4 @@ async function resourceBalances(keys: string[]): Promise<any[]> {
     });
 }
 
-module.exports = { getState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, readRanchMallGoods, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };
+module.exports = { getState, getCachedDashboardState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, readRanchMallGoods, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };

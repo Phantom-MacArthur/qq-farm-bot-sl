@@ -16,6 +16,12 @@ interface DevicePreset {
     deviceInfo: DeviceInfo;
 }
 
+interface AutoCodeRefreshConfig {
+    /** 掉线重登：账号掉线后等待一段时间自动续期并重登。 */
+    offlineEnabled: boolean;
+    offlineDelaySeconds: number;
+}
+
 interface SystemConfig {
     serverUrl: string;
     clientVersion: string;
@@ -26,6 +32,8 @@ interface SystemConfig {
     os: string;
     timeZone: string;
     deviceInfo: DeviceInfo;
+    autoCodeRefresh?: AutoCodeRefreshConfig;
+    autoStartAccounts?: boolean;
 }
 
 interface RuntimeConfig extends SystemConfig {
@@ -43,12 +51,14 @@ interface RuntimeConfig extends SystemConfig {
 // ============ 设备预设 ============
 
 // clientVersion 由 CONFIG.clientVersion 动态获取，不写死在预设中
-// Verified in the official QQ PlayerLogin and Heartbeat from the 2026-11-17 capture.
-const DEFAULT_CLIENT_VERSION = '1.17.0.4_20261117';
-const DEFAULT_CLIENT_VERSION_UPDATED_AT = 1794888024122;
-// Independently verified from the official WeChat package 82 configuration on 2026-11-17.
-const DEFAULT_WX_CLIENT_VERSION = '1.17.0.4_20261117';
-const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT = 1794891946317;
+// Verified in the official QQ PlayerLogin and Heartbeat from the 2026-11-17 capture,
+// refreshed to the 2026-11-25 client 1.17.1.10_20261117.
+const DEFAULT_CLIENT_VERSION = '1.17.1.10_20261117';
+const DEFAULT_CLIENT_VERSION_UPDATED_AT = 1795596035361;
+// Independently verified from the official WeChat package configuration on 2026-11-17,
+// both ends now use 1.17.1.10_20261117.
+const DEFAULT_WX_CLIENT_VERSION = '1.17.1.10_20261117';
+const DEFAULT_WX_CLIENT_VERSION_UPDATED_AT = 1795596035361;
 const DEFAULT_TIME_ZONE = 'Asia/Shanghai';
 
 function resolveClientVersion(savedVersion: unknown, savedUpdatedAt: unknown, platform = 'qq'): { clientVersion: string; clientVersionUpdatedAt: number } {
@@ -191,6 +201,8 @@ const DEVICE_PRESETS: DevicePreset[] = [
 
 const DEFAULT_DEVICE_INFO: DeviceInfo = { ...DEVICE_PRESETS[0].deviceInfo, clientVersion: DEFAULT_CLIENT_VERSION };
 
+const OFFLINE_RECONNECT_INTERVAL_SECONDS = 5 * 60;
+
 const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
     serverUrl: 'wss://gate-obt.nqf.qq.com/prod/ws',
     clientVersion: DEFAULT_CLIENT_VERSION,
@@ -201,9 +213,23 @@ const DEFAULT_SYSTEM_CONFIG: SystemConfig = {
     os: DEFAULT_DEVICE_INFO.os,
     timeZone: DEFAULT_TIME_ZONE,
     deviceInfo: { ...DEFAULT_DEVICE_INFO },
+    autoCodeRefresh: { offlineEnabled: true, offlineDelaySeconds: OFFLINE_RECONNECT_INTERVAL_SECONDS },
+    autoStartAccounts: true,
 };
 
+/**
+ * 保留旧版启停设置，微信掉线重登统一使用五分钟间隔。
+ */
+function normalizeAutoCodeRefresh(input: unknown): AutoCodeRefreshConfig {
+    const src: any = (input && typeof input === 'object') ? input : {};
+    return {
+        offlineEnabled: (src.offlineEnabled ?? src.enabled) !== false,
+        offlineDelaySeconds: OFFLINE_RECONNECT_INTERVAL_SECONDS,
+    };
+}
+
 const CONFIG: RuntimeConfig = {
+    autoCodeRefresh: { ...DEFAULT_SYSTEM_CONFIG.autoCodeRefresh },
     serverUrl: DEFAULT_SYSTEM_CONFIG.serverUrl,
     clientVersion: DEFAULT_CLIENT_VERSION,
     clientVersionUpdatedAt: DEFAULT_CLIENT_VERSION_UPDATED_AT,
@@ -267,6 +293,12 @@ function updateRuntimeConfig(newConfig: Partial<SystemConfig>): void {
     if (newConfig.timeZone !== undefined) {
         CONFIG.timeZone = normalizeTimeZone(newConfig.timeZone);
     }
+    if (newConfig.autoCodeRefresh) {
+        CONFIG.autoCodeRefresh = normalizeAutoCodeRefresh(newConfig.autoCodeRefresh);
+    }
+    if (newConfig.autoStartAccounts !== undefined) {
+        CONFIG.autoStartAccounts = newConfig.autoStartAccounts === true;
+    }
     if (newConfig.deviceInfo) {
         CONFIG.deviceInfo = normalizeDeviceInfo(newConfig.deviceInfo);
         // 同步 os 与 clientVersion 到顶层
@@ -286,11 +318,17 @@ function getRuntimeConfig(): SystemConfig {
         os: CONFIG.os,
         timeZone: CONFIG.timeZone,
         deviceInfo: { ...CONFIG.deviceInfo },
+        autoCodeRefresh: { ...CONFIG.autoCodeRefresh },
+        autoStartAccounts: CONFIG.autoStartAccounts !== false,
     };
 }
 
 function getDefaultSystemConfig(): SystemConfig {
-    return { ...DEFAULT_SYSTEM_CONFIG, deviceInfo: { ...DEFAULT_DEVICE_INFO } };
+    return {
+        ...DEFAULT_SYSTEM_CONFIG,
+        deviceInfo: { ...DEFAULT_DEVICE_INFO },
+        autoCodeRefresh: { ...DEFAULT_SYSTEM_CONFIG.autoCodeRefresh },
+    };
 }
 
 function getDevicePresets(): DevicePreset[] {
@@ -335,5 +373,8 @@ module.exports = {
     normalizeTimeZone,
     resolveClientVersion,
     resolveClientVersionUpdatedAt,
+    normalizeAutoCodeRefresh,
+    DEFAULT_AUTO_CODE_REFRESH: DEFAULT_SYSTEM_CONFIG.autoCodeRefresh,
+    OFFLINE_RECONNECT_INTERVAL_SECONDS,
     DEVICE_PRESETS,
 };

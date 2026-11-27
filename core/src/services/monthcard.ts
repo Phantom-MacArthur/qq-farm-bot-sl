@@ -78,7 +78,7 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
         lastHasCard = infos.length === 0 ? false : (claimable.length > 0 || isClaimedToday() ? true : null);
         lastHasClaimable = claimable.length > 0;
         if (claimable.length > 0) lastRewards = describeRewardItems(claimable.map((x: any) => x.reward));
-        else if (!isClaimedToday()) lastRewards = describeRewardItems(infos.filter(info => Number(info?.goods_id) > 0).map(info => info.reward));
+        else if (!isClaimedToday()) lastRewards = [];
         if (!infos.length) {
             markDoneToday();
             lastResult = 'none';

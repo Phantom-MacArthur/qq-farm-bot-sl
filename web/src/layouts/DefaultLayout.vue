@@ -9,10 +9,9 @@ import { SPACE_TRANSITION_STYLE, spaceTransition } from '@/components/space-tran
 import { useAppStore } from '@/stores/app'
 
 const route = useRoute()
-const { activityDetailOpen, layoutMinWidth } = storeToRefs(useAppStore())
-// 页头固定在滚动区之外；活动详情自带标题栏，打开时隐藏通用页头。
-const activityDetail = computed(() => ['activity-center', 'ranch-activity-center'].includes(String(route.name)) && activityDetailOpen.value)
-const showPageHeader = computed(() => !route.meta.fullBleed && !activityDetail.value)
+const { activityUsesCustomLayout, layoutMinWidth } = storeToRefs(useAppStore())
+const customActivityLayout = computed(() => ['activity-center', 'ranch-activity-center'].includes(String(route.name)) && activityUsesCustomLayout.value)
+const showPageHeader = computed(() => !route.meta.fullBleed && !customActivityLayout.value)
 const compactSettings = computed(() => route.name === 'Settings' || route.name === 'SystemSettings')
 const scrolled = ref(false)
 const scrollEl = ref<HTMLElement | null>(null)
@@ -76,7 +75,7 @@ onBeforeUnmount(() => {
           :class="[
             route.meta.fullBleed ? 'overflow-hidden p-0' : 'overflow-y-auto',
             {
-              'page-scroll--fill': activityDetail,
+              'page-scroll--fill': customActivityLayout,
               'page-scroll--dashboard': route.name === 'dashboard',
             },
           ]"

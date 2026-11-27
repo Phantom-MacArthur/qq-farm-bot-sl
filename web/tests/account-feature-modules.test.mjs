@@ -26,6 +26,7 @@ const {
   isModuleEnabled,
   setSharedFriendAction,
   wereActivityRewardSettingsSaved,
+  yishuAutomationDraft,
 } = module.exports
 
 function createContext(automationOverrides = {}, strategyOverrides = {}, automationTopOverrides = {}) {
@@ -131,6 +132,23 @@ test('activity card saves all four Muge reward choices', () => {
   }
   assert.deepEqual(MUGE_REWARD_OPTIONS.map(option => option.key), Object.keys(settings))
   assert.deepEqual(getModuleAutomation('activity', settings), settings)
+})
+
+test('Yishu draft defaults the minimum quote and preserves a configured zero', () => {
+  assert.equal(yishuAutomationDraft({}).yishu_sell_min_price, 450)
+  const draft = yishuAutomationDraft({ yishu_sell_min_price: 0 })
+  assert.equal(getModuleAutomation('activity', draft).yishu_sell_min_price, 0)
+})
+
+test('Yishu draft defaults to noon and preserves a previously saved sale time', () => {
+  assert.equal(yishuAutomationDraft({}).yishu_sell_after_time, '12:00')
+  assert.equal(yishuAutomationDraft({ yishu_sell_after_time: '' }).yishu_sell_after_time, '12:00')
+  assert.equal(yishuAutomationDraft({ yishu_sell_after_time: '22:00' }).yishu_sell_after_time, '22:00')
+})
+
+test('Yishu draft migrates the former confirmation mode to quote-only mode', () => {
+  assert.equal(yishuAutomationDraft({ yishu_sell_mode: 'confirm', yishu_auto_sell: true }).yishu_sell_mode, 'scan')
+  assert.equal(yishuAutomationDraft({ yishu_sell_mode: 'auto' }).yishu_sell_mode, 'auto')
 })
 
 test('a backend must echo the requested reward settings before the activity draft closes', () => {

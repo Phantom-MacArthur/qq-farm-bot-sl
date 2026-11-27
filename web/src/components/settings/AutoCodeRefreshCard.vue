@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import type { AutoCodeRefreshConfig } from '@/stores/setting'
 import BaseButton from '@/components/ui/BaseButton.vue'
-import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 
 withDefaults(defineProps<{
@@ -37,30 +36,8 @@ const config = defineModel<AutoCodeRefreshConfig>('config', { required: true })
     </div>
 
     <div v-else>
-      <BaseSwitch v-model="config.enabled" label="启用定时刷新" />
-      <!-- 两个字段按内容宽靠左排同一行、固定 24px 间距。 -->
-      <div class="mt-3 flex items-start gap-6">
-        <BaseInput
-          v-model.number="config.maxRetries"
-          label="每日最大重试次数"
-          inline-label
-          type="number"
-          controls="vertical"
-          min="1"
-          max="100"
-          placeholder="8"
-        />
-        <BaseInput
-          v-model.number="config.intervalMinutes"
-          label="间隔(分钟)"
-          inline-label
-          type="number"
-          controls="vertical"
-          min="1"
-          max="1440"
-          placeholder="2"
-        />
-      </div>
+      <BaseSwitch v-model="config.enabled" label="启用微信掉线重登" />
+      <p class="mt-3 text-xs text-gray-500">在线时仅续期微信授权。掉线后每 5 分钟尝试重登，直到恢复或需要重新扫码。</p>
     </div>
   </span></div>
 </template>

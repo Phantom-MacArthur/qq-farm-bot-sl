@@ -226,6 +226,12 @@ test('worker unified scheduler checks mystery shop at due time and stops after d
         '../services/email': { configureEmailClaim: noop },
         '../services/farm': { refreshFarmCheckLoop: noop },
         '../services/friend': { refreshFriendCheckLoop: noop },
+        '../services/solar-calendar-auto': {
+            SOLAR_CALENDAR_AUTOMATION_KEYS: require('../dist/services/solar-calendar-auto').SOLAR_CALENDAR_AUTOMATION_KEYS,
+        },
+        '../services/yishuhuanfu-auto': {
+            YISHU_AUTOMATION_KEYS: require('../dist/services/yishuhuanfu-auto').YISHU_AUTOMATION_KEYS,
+        },
         '../services/mystery-shop-auto': {
             isMysteryShopWatchEnabled: isMysteryShopWatchEnabled,
             mysteryShopConfigChanged,

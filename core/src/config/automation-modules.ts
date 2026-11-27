@@ -1,4 +1,5 @@
 import type { AutomationConfig } from '../types/config';
+import { YISHU_DEFAULT_SELL_AFTER_TIME, YISHU_MIN_PRICE, YISHU_SCAN_LIMIT, YISHU_SCAN_MINUTES } from './yishuhuanfu';
 
 export const FARM_DAILY_DEFAULTS = {
     farm_illustrated: false,
@@ -17,6 +18,26 @@ export const MUGE_REWARD_DEFAULTS = {
 };
 export type MugeRewardKey = keyof typeof MUGE_REWARD_DEFAULTS;
 export const MUGE_REWARD_KEYS = Object.keys(MUGE_REWARD_DEFAULTS) as MugeRewardKey[];
+
+export const ACTIVITY_AUTOMATION_DEFAULTS = {
+    solar_calendar_claim_events: false,
+    solar_calendar_claim_seasons: false,
+    solar_calendar_answer_quiz: false,
+    yishu_claim_seed: true,
+    yishu_share: true,
+    yishu_auto_sell: true,
+    yishu_claim_commission: true,
+    yishu_plant: true,
+    yishu_harvest: true,
+    yishu_use_unshared_price: false,
+    yishu_sell_mode: '' as AutomationConfig['yishu_sell_mode'],
+    yishu_sell_fallback_own: false,
+    yishu_scan_friend_limit: YISHU_SCAN_LIMIT,
+    yishu_scan_interval_minutes: YISHU_SCAN_MINUTES,
+    yishu_sell_min_count: 1,
+    yishu_sell_min_price: YISHU_MIN_PRICE,
+    yishu_sell_after_time: YISHU_DEFAULT_SELL_AFTER_TIME,
+};
 
 export const AUTOMATION_MODULE_DEFAULTS = {
     planting_enabled: true,
@@ -44,6 +65,9 @@ const MODULE_ACTIONS: Record<keyof typeof AUTOMATION_MODULE_DEFAULTS, BooleanAct
         'task', 'mall_coupon_gift_buy', 'mystery_shop_auto_buy', 'mystery_shop_arrival_notify', 'mystery_shop_purchase_notify',
         ...Object.keys(FARM_DAILY_DEFAULTS) as Array<keyof typeof FARM_DAILY_DEFAULTS>,
         ...MUGE_REWARD_KEYS,
+        'solar_calendar_claim_events', 'solar_calendar_claim_seasons', 'solar_calendar_answer_quiz',
+        'yishu_claim_seed', 'yishu_share', 'yishu_auto_sell', 'yishu_claim_commission',
+        'yishu_plant', 'yishu_harvest',
         'ranch_task', 'ranch_illustrated', 'ranch_share', 'ranch_daily_benefit', 'ranch_coupon_gift_buy',
         'ranch_market_organic', 'ranch_market_organic_poop', 'ranch_market_organic_pinecone',
     ],
@@ -55,6 +79,7 @@ export function effectiveAutomation(automation: AutomationConfig): AutomationCon
         if (automation[gate] !== false) continue;
         for (const action of MODULE_ACTIONS[gate]) result[action] = false;
     }
+    if (automation.activity_enabled === false) result.yishu_sell_mode = 'off';
     if (automation.fertilizer_enabled === false) result.fertilizer = 'none';
     if (result.ranch_friend_patrol === false) {
         for (const action of RANCH_FRIEND_ACTIONS) result[action] = false;

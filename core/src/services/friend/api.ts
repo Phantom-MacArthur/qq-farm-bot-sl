@@ -62,7 +62,20 @@ async function fetchAllFriends(forceSync: boolean, priority: 'low' | 'normal'): 
 
     const body: Uint8Array = types.GetAllFriendsRequest.encode(types.GetAllFriendsRequest.create({ global_scene_id: 1 })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.friendpb.FriendService', 'GetAll', body, { priority });
-    return types.GetAllFriendsReply.decode(replyBody);
+    const reply = types.GetAllFriendsReply.decode(replyBody);
+    const accountId = String(process.env.FARM_ACCOUNT_ID || '');
+    if (accountId && Array.isArray(reply.game_friends)) {
+        const gids = [...new Set<string>(reply.game_friends.map((friend: any) => String(friend.gid || '')))]
+            .filter(gid => /^[1-9]\d*$/.test(gid)).sort();
+        try {
+            const { readFriendRosterGids, writeFriendRosterGids } = require('../../models/store/gid-cache');
+            const cached = readFriendRosterGids(accountId);
+            if (!cached || cached.length !== gids.length || gids.some((gid, index) => gid !== cached[index])) {
+                writeFriendRosterGids(accountId, gids);
+            }
+        } catch { /* Friend lookups also work when the roster cache is unavailable. */ }
+    }
+    return reply;
 }
 
 export async function getAllFriends(forceSync: boolean = false, priority: 'low' | 'normal' = 'normal'): Promise<any> {

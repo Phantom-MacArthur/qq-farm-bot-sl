@@ -55,6 +55,7 @@ let qqPollController: AbortController | undefined
 let qqPollInFlight: Promise<void> | undefined
 let qqPollKey = ''
 let qqPendingCode = ''
+let qqPendingUin = ''
 let qrNameSubmitTimer: ReturnType<typeof setTimeout> | undefined
 
 // ===== 抓包 Code 登录（移植自 B 项目，对接 SL 后端 /api/capture/*） =====
@@ -326,12 +327,15 @@ function clearQrNameSubmitTimer() {
   }
 }
 
-async function addQrAccount(platform: 'wx' | 'qq', code: string, nickname: string) {
+async function addQrAccount(platform: 'wx' | 'qq', code: string, nickname: string, uin = '') {
   const name = form.name.trim() || nickname
-  if (platform === 'wx')
+  if (platform === 'wx') {
     wxPendingCode = code
-  else
+  }
+  else {
     qqPendingCode = code
+    qqPendingUin = uin
+  }
 
   if (!name) {
     if (platform === 'wx') {
@@ -367,9 +371,15 @@ async function submitPendingQrAccount(platform: 'wx' | 'qq') {
   }
 
   const payload: any = { name, code, platform, loginType: 'manual' }
-  if (platform === 'wx' && wxPendingSessionId && wxPendingWxid) {
-    payload.wxSessionId = wxPendingSessionId
-    payload.wxid = wxPendingWxid
+  if (platform === 'qq' && qqPendingUin)
+    payload.uin = qqPendingUin
+  if (platform === 'wx') {
+    if (props.editData?.id)
+      payload.id = String(props.editData.id)
+    if (wxPendingSessionId && wxPendingWxid) {
+      payload.wxSessionId = wxPendingSessionId
+      payload.wxid = wxPendingWxid
+    }
   }
   const saved = await addAccount(payload, !!props.editData)
   if (!saved && props.show && activeLoginTab.value === `${platform}_qr`) {
@@ -595,7 +605,11 @@ async function startWxLogin() {
   const flowVersion = wxFlowVersion
   wxLoading.value = true
   try {
-    const response = await api.post('/api/wx-login/tasks', { app_id: 'wx5306c5978fdb76e4' })
+    const accountId = String(props.editData?.id ?? '')
+    const response = await api.post('/api/wx-login/tasks', {
+      app_id: 'wx5306c5978fdb76e4',
+      ...(accountId ? { account_id: accountId } : {}),
+    })
     const task = response.data?.data
     const taskId = String(task?.task_id || '')
     if (!taskId)
@@ -645,6 +659,7 @@ function resetQqLogin() {
   qqQrUrl.value = ''
   qqLoading.value = false
   qqPendingCode = ''
+  qqPendingUin = ''
   clearQrNameSubmitTimer()
 }
 
@@ -673,7 +688,7 @@ async function getQqCodeAndAdd(taskId: string, flowVersion: number) {
     const nickname = String(payload?.data?.nickname || '').trim()
     if (!code)
       throw new Error('未获取到登录 Code')
-    await addQrAccount('qq', code, nickname)
+    await addQrAccount('qq', code, nickname, String(payload?.data?.uin || '').trim())
   }
   catch (error: any) {
     if (isQqFlowActive(taskId, flowVersion))

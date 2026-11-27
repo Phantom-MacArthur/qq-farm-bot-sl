@@ -36,6 +36,9 @@ let ownRecheckUsed = false;
 const completedPhases = new Set<string>();
 const completedSteps = new Set<string>();
 const pendingBookKinds = new Set<'normal' | 'giant'>();
+const BOOK_CHECK_INTERVAL_MS = 5 * 60_000;
+let nextBookCheckAt = 0;
+let nextBookAttemptAt = 0;
 let shedCheckPending = true;
 let shedNotifyRevision = 0;
 const PATROL_SLICE_MS = 5000;
@@ -120,10 +123,8 @@ function noteRanchFacilities(facilities: any[]): boolean {
 
 function noteBookReward(kind: 'normal' | 'giant', available: boolean): boolean {
     if (pendingBookKinds.has(kind) === available) return false;
-    if (available) {
-        pendingBookKinds.add(kind);
-        wakeRanchCheck('ranch_illustrated');
-    } else pendingBookKinds.delete(kind);
+    if (available) pendingBookKinds.add(kind);
+    else pendingBookKinds.delete(kind);
     return true;
 }
 
@@ -168,10 +169,14 @@ function ownRoutinePending(auto: RanchAutomationConfig): boolean {
         'ranch_market_organic', 'ranch_friend_patrol', ...RANCH_MARKET_SWITCH_KEYS,
     ].includes(key) && auto[key]);
     return !!(cycleStartedAt || work || auto.ranch_activate_shed && shedCheckPending
-        || auto.ranch_illustrated && pendingBookKinds.size > 0
         || auto.ranch_task && due(daily.getTaskRoutineState()) || auto.ranch_share && due(daily.getShareRoutineState())
         || auto.ranch_daily_benefit && due(daily.getBenefitRoutineState())
         || isRanchMarketEnabled(auto) && marketCheckPending);
+}
+
+function ranchBookAt(auto: RanchAutomationConfig): number {
+    if (!auto.ranch_illustrated || cycleStartedAt) return Infinity;
+    return Math.max(nextBookAttemptAt, retryAt, pendingBookKinds.size > 0 ? 0 : nextBookCheckAt);
 }
 
 function getRoutineState() {
@@ -184,9 +189,10 @@ function getRoutineState() {
     const quotaDates = quiet ? [] : enabledActions.map(action => interactions.getInteractionQuotaResetAt(action));
     const friendAt = quotaDates.includes(0) ? nextFriendPatrolAt : Infinity;
     const deferredAt = nextDeferredSteal()?.readyAt ?? Infinity;
+    const bookAt = ranchBookAt(auto);
     return {
-        doneToday: Math.min(ownAt, friendAt, deferredAt) === Infinity,
-        nextCheckAt: Math.min(ownAt, friendAt, deferredAt, quietRecheckAt, ...quotaDates.filter(at => at > 0)),
+        doneToday: Math.min(ownAt, friendAt, deferredAt) === Infinity && bookAt > Date.now(),
+        nextCheckAt: Math.min(ownAt, friendAt, deferredAt, bookAt, quietRecheckAt, ...quotaDates.filter(at => at > 0)),
     };
 }
 
@@ -319,7 +325,10 @@ async function runFriendPatrol(options: RoutineOptions): Promise<void> {
 async function run(options: RoutineOptions = {}): Promise<void> {
     if (!isUnlocked()) return;
     const auto: RanchAutomationConfig = getAutomation();
-    if (!ownRoutinePending(auto) || Date.now() < nextCheckAt) {
+    const now = Date.now();
+    const ownDue = ownRoutinePending(auto) && now >= nextCheckAt;
+    const bookOnly = !ownDue && now >= ranchBookAt(auto);
+    if (!ownDue && !bookOnly) {
         const deferred = nextDeferredSteal();
         if (deferred && deferred.readyAt <= Date.now()) {
             const { gid, name } = deferred;
@@ -346,12 +355,18 @@ async function run(options: RoutineOptions = {}): Promise<void> {
         if (Date.now() >= nextFriendPatrolAt && FRIEND_ACTIONS.some(canInteract)) await runFriendPatrol(options);
         return;
     }
-    if (!cycleStartedAt) cycleStartedAt = Date.now();
-    nextCheckAt = cycleStartedAt + require('../../config/ranch-automation').getRanchPatrolIntervalMs(auto);
+    if (!bookOnly) {
+        if (!cycleStartedAt) cycleStartedAt = now;
+        nextCheckAt = cycleStartedAt + require('../../config/ranch-automation').getRanchPatrolIntervalMs(auto);
+    }
     const shedNotifyAtStart = shedNotifyRevision;
+    const defer = () => {
+        if (bookOnly) nextBookAttemptAt = Date.now() + SCENE_REENTRY_MS;
+        else nextCheckAt = Date.now() + SCENE_REENTRY_MS;
+    };
     try {
         if (options.canContinue?.() === false || Date.now() >= (options.farmDeadline?.() ?? Infinity)) {
-            nextCheckAt = Date.now() + SCENE_REENTRY_MS;
+            defer();
             return;
         }
         await inScene(async (cells: any) => {
@@ -375,7 +390,7 @@ async function run(options: RoutineOptions = {}): Promise<void> {
                 completedPhases.add(name);
             }
             checkpoint();
-            let raw = await loadRaw(cells);
+            let raw = bookOnly ? null : await loadRaw(cells);
             const available = (id: number) => {
                 const funds = balance(raw.bag, id);
                 return BigInt(funds.total) - BigInt(funds.locked) - BigInt(reservations.forCurrentAccount().reserved(`item:${id}`));
@@ -415,7 +430,7 @@ async function run(options: RoutineOptions = {}): Promise<void> {
                 }
             };
             // 已完成的产出可以提前复查，随后先给本轮的其他待办一次执行机会。
-            updateDeadline(!ownRecheckUsed);
+            if (!bookOnly) updateDeadline(!ownRecheckUsed);
             const affordable = (good: any, wanted: number) => {
                 const money = available(good.price.id);
                 const count = money > 0n ? money / BigInt(good.price.count) : 0n;
@@ -465,8 +480,10 @@ async function run(options: RoutineOptions = {}): Promise<void> {
                     } else {
                         log('牧场', `${quote.label}${result.notice ? `：${result.notice}` : '完成'}`, { module: 'ranch', event: `ranch_${action}`, result: 'ok' });
                     }
-                    raw = await loadRaw();
-                    updateDeadline();
+                    if (!bookOnly) {
+                        raw = await loadRaw();
+                        updateDeadline();
+                    }
                     return true;
                 } catch (error: any) {
                     // 状态或余额变化交给下一次巡查重新报价；已发出但结果未知的写入由持久账本保护。
@@ -482,6 +499,33 @@ async function run(options: RoutineOptions = {}): Promise<void> {
                     }
                     throw error;
                 }
+            }
+
+            async function checkBooks(): Promise<void> {
+                if (enabled('ranch_illustrated') && Date.now() >= nextBookCheckAt) {
+                    nextBookCheckAt = Date.now() + BOOK_CHECK_INTERVAL_MS;
+                    pendingBookKinds.add('normal');
+                    pendingBookKinds.add('giant');
+                }
+                for (const kind of ['normal', 'giant'] as const) {
+                    if (!enabled('ranch_illustrated') || !pendingBookKinds.delete(kind)) continue;
+                    completedSteps.delete(`claimIllustrated:${JSON.stringify({ kind })}`);
+                    try {
+                        await act('ranch_illustrated', 'claimIllustrated', { kind });
+                    } catch (cause: any) {
+                        if (cause.outcomeUnknown || cause.code === 'RANCH_RESULT_UNKNOWN') pendingBookKinds.delete(kind);
+                        else pendingBookKinds.add(kind);
+                        throw cause;
+                    }
+                }
+            }
+
+            if (bookOnly) {
+                await checkBooks();
+                if (cycleChanged && enabled('ranch_task')) daily.markTasksChanged();
+                defer();
+                resetCycle();
+                return;
             }
 
             await phase('harvest', async () => {
@@ -557,17 +601,7 @@ async function run(options: RoutineOptions = {}): Promise<void> {
             });
 
             // 成熟动物腾栏后，在补栏前核对一次。让路时保留尚未核对的图鉴。
-            for (const kind of ['normal', 'giant'] as const) {
-                if (!enabled('ranch_illustrated') || !pendingBookKinds.delete(kind)) continue;
-                completedSteps.delete(`claimIllustrated:${JSON.stringify({ kind })}`);
-                try {
-                    await act('ranch_illustrated', 'claimIllustrated', { kind });
-                } catch (cause: any) {
-                    if (cause.outcomeUnknown || cause.code === 'RANCH_RESULT_UNKNOWN') pendingBookKinds.delete(kind);
-                    else pendingBookKinds.add(kind);
-                    throw cause;
-                }
-            }
+            await checkBooks();
 
             if (enabled('ranch_buy')) {
                 if (auto.ranch_strategy === 'illustrated') {
@@ -743,20 +777,26 @@ async function run(options: RoutineOptions = {}): Promise<void> {
             }
             await claimDailyRewards();
             lastCycleEndAt = Date.now();
-            const bookDue = enabled('ranch_illustrated') && pendingBookKinds.size > 0;
             const shedDue = enabled('ranch_activate_shed') && shedCheckPending && shedNotifyAtStart !== shedNotifyRevision;
             const nextRoutine = Math.min(nextCheckAt, nextActionAt, cycleChanged ? lastCycleEndAt + 30_000 : Infinity);
-            nextCheckAt = Math.max(lastCycleEndAt + SCENE_REENTRY_MS, bookDue || shedDue ? lastCycleEndAt : nextRoutine);
+            nextCheckAt = Math.max(lastCycleEndAt + SCENE_REENTRY_MS, shedDue ? lastCycleEndAt : nextRoutine);
+            nextBookAttemptAt = lastCycleEndAt + SCENE_REENTRY_MS;
             retryAt = 0;
             resetCycle();
         });
     } catch (error: any) {
         if (error.code === 'RANCH_PATROL_YIELD') {
-            nextCheckAt = Date.now() + SCENE_REENTRY_MS;
+            defer();
+            if (bookOnly) resetCycle();
             return;
         }
         resetCycle();
         if (error.code === 'RANCH_AUTOMATION_DISABLED') return;
+        if (bookOnly) {
+            nextBookAttemptAt = Date.now() + BOOK_CHECK_INTERVAL_MS;
+            log('牧场', `图鉴复查失败：${error.message}`, { module: 'ranch', event: 'ranch_illustrated', result: 'error' });
+            return;
+        }
         nextCheckAt = Date.now() + Math.max(require('../../config/ranch-automation').getRanchPatrolIntervalMs(auto), 10 * 60_000);
         retryAt = nextCheckAt;
         log('牧场', `日常牧场巡查失败：${error.message}`, { module: 'ranch', event: 'ranch_automation', result: 'error' });
@@ -776,6 +816,8 @@ module.exports = {
         nextFriendPatrolAt = 0;
         resetFriendCycle();
         shedCheckPending = true;
+        nextBookCheckAt = 0;
+        nextBookAttemptAt = 0;
         shedNotifyRevision++;
         retryAt = 0;
         resetCycle();

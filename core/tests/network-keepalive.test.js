@@ -5,6 +5,8 @@ const {
     CONFIG,
     DEFAULT_CLIENT_VERSION,
     DEFAULT_CLIENT_VERSION_UPDATED_AT,
+    DEFAULT_WX_CLIENT_VERSION,
+    DEFAULT_WX_CLIENT_VERSION_UPDATED_AT,
     resolveClientVersion,
     resolveClientVersionUpdatedAt,
 } = require('../dist/config/config');
@@ -63,9 +65,11 @@ test('heartbeat request body reproduces the official capture byte for byte', asy
     });
 });
 
-test('default client version has a release timestamp', () => {
-    assert.equal(DEFAULT_CLIENT_VERSION, '1.15.1.4_20261001');
-    assert.equal(DEFAULT_CLIENT_VERSION_UPDATED_AT, 1792637519008);
+test('default QQ and WeChat client versions carry the current release timestamp', () => {
+    assert.equal(DEFAULT_CLIENT_VERSION, '1.17.1.10_20261117');
+    assert.equal(DEFAULT_CLIENT_VERSION_UPDATED_AT, 1795596035361);
+    assert.equal(DEFAULT_WX_CLIENT_VERSION, '1.17.1.10_20261117');
+    assert.equal(DEFAULT_WX_CLIENT_VERSION_UPDATED_AT, 1795596035361);
 });
 
 test('newer timestamp wins when resolving the client version', () => {
@@ -131,11 +135,12 @@ test('invalid TSDK initialization credentials are rejected', () => {
 });
 
 test('heartbeat policy tolerates transient stalls but terminates a stale connection', () => {
-    assert.equal(MAX_HEARTBEAT_MISSES, 3);
+    assert.equal(MAX_HEARTBEAT_MISSES, 5);
     assert.equal(HEARTBEAT_STALE_AFTER_MS, 30000);
     assert.equal(shouldTerminateForHeartbeat(2, 120000), false);
-    assert.equal(shouldTerminateForHeartbeat(3, 30000), false);
-    assert.equal(shouldTerminateForHeartbeat(3, 30001), true);
+    assert.equal(shouldTerminateForHeartbeat(4, 120000), false);
+    assert.equal(shouldTerminateForHeartbeat(5, 30000), false);
+    assert.equal(shouldTerminateForHeartbeat(5, 30001), true);
     assert.equal(shouldTerminateForHeartbeat(8, 1000), false);
 });
 

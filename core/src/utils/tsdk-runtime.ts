@@ -146,10 +146,10 @@ class TsdkRuntime {
         this.hostProfile = resolveTsdkHostProfile(options.platform ?? CONFIG.platform);
     }
 
-    private warnOnce(key: string, message: string): void {
+    private logOnce(key: string, message: string, write = logWarn): void {
         if (this.warned.has(key)) return;
         this.warned.add(key);
-        logWarn('ACE', message, { event: 'tsdk_host_limitation', feature: key, ...this.getDiagnostics() });
+        write('ACE', message, { event: 'tsdk_host_limitation', feature: key, ...this.getDiagnostics() });
     }
 
     private recordUnsupportedAceVm(ptr: number): number {
@@ -174,7 +174,7 @@ class TsdkRuntime {
             // Diagnostics must not turn an unsupported call into a WASM trap.
             this.lastUnsupportedAceVmTaskReadFailed = true;
         }
-        this.warnOnce('acevm', '服务端触发 ACEVM 检查，但当前宿主未执行该任务，返回失败状态；请保留掉线诊断');
+        this.logOnce('acevm', '服务端触发 ACEVM 检查，但当前宿主未执行该任务，返回失败状态；请保留掉线诊断');
         return 0;
     }
 
@@ -257,7 +257,7 @@ class TsdkRuntime {
                         fs.writeFileSync(target, this.readCString(dataPtr), this.readCString(encodingPtr) || 'utf8');
                         return 1;
                     } catch (e: any) {
-                        this.warnOnce('write-file', `TSDK 文件写入失败: ${e.message}`);
+                        this.logOnce('write-file', `TSDK 文件写入失败: ${e.message}`);
                         return 0;
                     }
                 },
@@ -267,7 +267,7 @@ class TsdkRuntime {
                 },
                 d: (ptr: number, capacity: number) => this.writeCString(TSDK_BUILDS[this.hostProfile.platform].version, ptr, capacity),
                 e: (ptr: number) => this.recordUnsupportedAceVm(ptr),
-                f: () => this.warnOnce('sensors', 'Node.js 环境不提供触摸和陀螺仪数据'),
+                f: () => this.logOnce('sensors', 'Node.js 环境不提供触摸和陀螺仪数据'),
                 g: (filePtr: number, outputPtr: number, capacity: number, encodingPtr: number) => {
                     try {
                         const data = fs.readFileSync(this.resolveDataPath(this.readCString(filePtr)), this.readCString(encodingPtr) || 'utf8');
@@ -296,9 +296,9 @@ class TsdkRuntime {
                 m: (ptr: number, capacity: number) => this.writeCString(this.hostProfile.appId, ptr, capacity),
                 n: (ptr: number, capacity: number) => this.writeCString(this.hostProfile.appId, ptr, capacity),
                 // The WeChat import also writes environment-probe results; a missing probe must not be reported as passed.
-                o: () => this.warnOnce('integrity-functions', this.hostProfile.platform === 'wx'
-                    ? 'Node.js 环境不提供微信小游戏环境探测接口'
-                    : 'Node.js 环境不提供小游戏函数完整性列表'),
+                o: () => this.hostProfile.platform === 'wx'
+                    ? this.logOnce('integrity-functions', 'Node.js 环境不提供微信小游戏环境探测接口', log)
+                    : this.logOnce('integrity-functions', 'Node.js 环境不提供小游戏函数完整性列表'),
                 p: (filePtr: number) => {
                     try {
                         const stat = fs.statSync(this.resolveDataPath(this.readCString(filePtr)));
@@ -341,11 +341,11 @@ class TsdkRuntime {
                             headers: report.headers || {},
                             timeout: 5000,
                         }, (response: any) => response.resume());
-                        request.on('error', (e: any) => this.warnOnce('tqos', `TSDK TQOS 上报失败: ${e.message}`));
+                        request.on('error', (e: any) => this.logOnce('tqos', `TSDK TQOS 上报失败: ${e.message}`));
                         request.end(typeof report.message === 'string' ? report.message : JSON.stringify(report.message ?? {}));
                         return 0;
                     } catch (e: any) {
-                        this.warnOnce('tqos', `TSDK TQOS 数据无效: ${e.message}`);
+                        this.logOnce('tqos', `TSDK TQOS 数据无效: ${e.message}`);
                         return 0;
                     }
                 },

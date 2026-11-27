@@ -123,13 +123,12 @@ api.interceptors.response.use((response) => {
 
   const toast = useToastStore()
   const appUpdate = useAppUpdateStore()
-  const isLoginRequest = String(error.config?.url || '').includes('/api/login')
   const transient = isTransientNetworkError(error)
   if (error.response && Number(error.response.status) < 500)
     appUpdate.notifyBackendReachable()
-  if (transient && !isLoginRequest)
+  if (transient)
     appUpdate.notifyBackendUnavailable()
-  const suppressTransientToast = transient && !isLoginRequest && appUpdate.reconnecting
+  const suppressTransientToast = transient && appUpdate.reconnecting
 
   const normalizedMessage = getApiErrorMessage(error, '')
   if (normalizedMessage) {

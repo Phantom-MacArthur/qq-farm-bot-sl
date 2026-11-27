@@ -14,10 +14,11 @@ test('QQ and WeChat versions can be configured independently', () => {
     try {
         CONFIG.clientVersion = '';
         CONFIG.wxClientVersion = '';
-        assert.equal(DEFAULT_WX_CLIENT_VERSION, '1.15.1.4_20261001');
-        for (const platform of ['qq', 'wx', 'wechat']) {
+        CONFIG.platform = 'qq';
+        assert.equal(getClientVersion(), DEFAULT_CLIENT_VERSION);
+        for (const platform of ['wx', 'wechat']) {
             CONFIG.platform = platform;
-            assert.equal(getClientVersion(), DEFAULT_CLIENT_VERSION);
+            assert.equal(getClientVersion(), DEFAULT_WX_CLIENT_VERSION);
         }
         CONFIG.clientVersion = 'custom-version';
         CONFIG.platform = 'wx';
@@ -224,7 +225,7 @@ test('session summaries retain heartbeat outcomes and isolate a late completion 
         }) },
         '../services/ace': { stopAceRuntime() {}, getAceDiagnostics: () => ({ replies: 7 }) },
         './crypto-wasm': { getDiagnostics: () => ({ ready: true }) },
-        './utils': { toLong: Number, toNum: Number, log: (...args) => logs.push(args), logWarn() {}, syncServerTime() {} },
+        './utils': { toLong: Number, toNum: Number, log: (...args) => logs.push(args), logWarn: (...args) => logs.push(args), syncServerTime() {} },
     };
     const sandbox = {
         require: name => overrides[name] || realRequire(name), module: { exports: {} }, exports: {},
@@ -257,6 +258,9 @@ test('session summaries retain heartbeat outcomes and isolate a late completion 
     await heartbeat();
     assert.deepEqual(counts(), { attempts: 3, replies: 2, failures: 1 });
     assert.equal(network.snapshot().heartbeatMissCount, 0);
+    const recovered = logs.find(([, , meta]) => meta?.event === 'heartbeat_recovered');
+    assert.equal(recovered?.[2]?.misses, 1);
+    assert.ok(recovered?.[1]?.includes('连续 1/5 次未响应后重新收到回包'), recovered?.[1]);
     let finish;
     network.setSender(() => new Promise(resolve => { finish = resolve; }));
     const pending = heartbeat();

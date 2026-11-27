@@ -7,7 +7,7 @@ import CommerceItemImage from '@/components/commerce/CommerceItemImage.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 
-const props = defineProps<{ kind: 'farm' | 'ranch', accountId: string, connected: boolean }>()
+const props = defineProps<{ kind: 'farm' | 'ranch', accountId: string, connected: boolean, asFallback?: boolean }>()
 interface Target {
   id: number
   name: string
@@ -28,7 +28,10 @@ const completionOptions = [
   { label: '已点亮', value: 'completed' },
 ]
 const show = ref(false)
-const strategyHelp = '每种先安排一份，优先使用背包，缺货时按商店条件购买；已有同类时等待收获，以服务端点亮状态为准。剩余空位按第二策略正常安排，不限制图鉴点亮状态。'
+const strategyHelp = computed(() => {
+  const explanation = '每种先安排一份，优先使用背包，缺货时按商店条件购买；已有同类时等待收获，以服务端点亮状态为准。'
+  return explanation + (props.asFallback ? '剩余空地用买得起的最低价种子补种。' : '剩余空位按第二策略正常安排。')
+})
 const missing = computed(() => targets.value.filter(item => !item.unlocked))
 const activeCount = computed(() => missing.value.filter(item => item.active).length)
 const visible = computed(() => targets.value.filter(item => completionFilter.value === 'all'
