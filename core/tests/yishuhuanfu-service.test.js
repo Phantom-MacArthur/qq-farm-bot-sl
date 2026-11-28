@@ -219,6 +219,14 @@ test('yishuhuanfu requires a known own quote only when selling to the own shop',
     );
 });
 
+test('yishuhuanfu does not send a queued seed claim after the activity ends', async () => {
+    const harness = createHarness({
+        onBeforeSell: () => { harness.built.now = Number(harness.built.reply.group.children[0].activity.end_time); },
+    });
+    await assert.rejects(harness.service.claimYishuHuanfuSeeds(), { code: 'YSHF_INACTIVE' });
+    assert.deepEqual(harness.operateRequest(), []);
+});
+
 test('yishuhuanfu claim seed sends cmd 91 and locks the day', async () => {
     const harness = createHarness({
         operateReply: () => ({ yshf_claim_seed: { grant: { item_id: '20307', count: '28' } } }),
@@ -637,11 +645,34 @@ test('closed shops lose their cached quote and known refusals are scoped to shop
 
     refusal = Object.assign(new Error('玩家未注册'), { code: 1000012 });
     assert.ok(!(await h.tickQuotes(200, 10000)).shops.some(shop => shop.gid === '900001'));
-    assert.deepEqual(h.operateRequest().at(-1).expectedErrorCodes, [1000012, 1034001]);
+    assert.deepEqual(h.operateRequest().at(-1).expectedErrorCodes, [1000012, 1034001, 1034184]);
     refusal = Object.assign(new Error('活动未开始'), { code: 1034001 });
     await assert.rejects(h.service.queryYishuHuanfuShop('900001'), { code: 'YSHF_SHOP_CLOSED' });
+
+    refusal = undefined;
+    assert.ok((await h.tickQuotes(200, 10000)).shops.some(shop => shop.gid === '900001'));
+    refusal = Object.assign(new Error('分享链接已失效，请重新联系店主分享'), { code: 1034184 });
+    const expired = await h.tickQuotes(200, 10000);
+    assert.ok(!expired.shops.some(shop => shop.gid === '900001'));
+    assert.equal(expired.failed, 1);
+    assert.equal(expired.shareExpiredCount, 1);
+    h.service.setYishuOnlineShopAccounts([{ gid: '900001' }]);
+    assert.ok(h.service.scanYishuHuanfuFriendShops().shops.some(shop => shop.gid === '900001' && shop.quotePending && shop.quoteShareExpired));
+    await assert.rejects(h.service.queryYishuHuanfuShop('900001'), error => {
+        const { handleActivityApiError } = require('../dist/controllers/admin/activity-center/error-handler');
+        const response = handleActivityApiError({ json: body => body }, error);
+        assert.equal(error.code, 'YSHF_SHOP_SHARE_EXPIRED');
+        assert.equal(response.errorCode, error.code);
+        assert.equal(response.error, '铺子的分享链接已失效，请联系店主重新分享');
+        return true;
+    });
     await assert.rejects(h.service.queryYishuHuanfuCatalog(), error => error === refusal);
     assert.equal(h.operateRequest().at(-1).expectedErrorCodes, undefined);
+
+    h.built.now += 86400;
+    const nextDay = h.service.scanYishuHuanfuFriendShops();
+    assert.equal(nextDay.shareExpiredCount, 0);
+    assert.ok(nextDay.shops.some(shop => shop.gid === '900001' && shop.quotePending && !shop.quoteShareExpired));
 });
 
 test('yishuhuanfu sell updates the quoted quota without discarding cached prices', async () => {

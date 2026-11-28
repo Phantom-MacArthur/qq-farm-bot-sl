@@ -91,6 +91,18 @@ function safeImage(url: string) {
   return url && url.startsWith('http://') ? url.replace('http://', 'https://') : url
 }
 
+const failedCropImages = ref(new Set<string>())
+watch([() => land.value.plantImage, () => land.value.seedImage], () => failedCropImages.value.clear())
+const cropImage = computed(() => {
+  const images = [land.value.plantImage, land.value.seedImage].map(url => safeImage(String(url || '')))
+  return images.find(url => url && !failedCropImages.value.has(url)) || ''
+})
+
+function markCropImageFailed(event: Event) {
+  const src = (event.currentTarget as HTMLImageElement | null)?.getAttribute('src')
+  if (src) failedCropImages.value.add(src)
+}
+
 const seasonProgress = computed(() => {
   if (!hasCrop.value || isFollower.value) return [0]
   const total = Number(land.value.totalSeason) === 2 ? 2 : 1
@@ -470,10 +482,10 @@ const ariaLabel = computed(() => {
         :aria-expanded="cropDetailsOpen"
         @click.stop="toggleCropDetails"
       >
-        <img v-if="land.seedImage" :src="safeImage(land.seedImage)" alt="" loading="lazy" referrerpolicy="no-referrer">
+        <img v-if="cropImage" :key="cropImage" :src="cropImage" alt="" loading="lazy" referrerpolicy="no-referrer" @error="markCropImageFailed">
         <span v-else class="plot__placeholder i-carbon-sprout" />
       </button>
-      <img v-else-if="land.seedImage" :src="safeImage(land.seedImage)" alt="" loading="lazy" referrerpolicy="no-referrer">
+      <img v-else-if="cropImage" :key="cropImage" :src="cropImage" alt="" loading="lazy" referrerpolicy="no-referrer" @error="markCropImageFailed">
       <span v-else class="plot__placeholder i-carbon-sprout" />
     </div>
 

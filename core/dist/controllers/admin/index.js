@@ -21,7 +21,6 @@ const { mountSystemUpdateRoutes } = require('./system-update-routes');
 const { readWebBuildInfo } = require('./web-version');
 const { mountWxLoginRoutes } = require('./wx-login-routes');
 const { mountQqLoginRoutes } = require('./qq-login-routes');
-const { mountQqBotPushRoutes } = require('./qq-bot-push-routes');
 const { mountCaptureRoutes } = require('./capture-routes');
 const { mountActivityUpdateRoutes } = require('./activity-update-routes');
 const { setupSocketIO, emitRealtimeStatus: _emitStatus, emitRealtimeLog: _emitLog, emitRealtimeAccountLog: _emitAccountLog, } = require('./socket');
@@ -126,7 +125,6 @@ function startAdminServer(dataProvider) {
     mountSystemRoutes(app, ctx);
     mountWxLoginRoutes(app, ctx);
     mountQqLoginRoutes(app, ctx);
-    mountQqBotPushRoutes(app);
     mountFarmRoutes(app, ctx);
     mountFriendRoutes(app, ctx);
     mountAccountRoutes(app, ctx);

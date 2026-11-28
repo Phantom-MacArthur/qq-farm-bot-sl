@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import { emitFarmReward } from './farm-activity-events';
 
 function historyPath(accountId = process.env.FARM_ACCOUNT_ID) {
     if (!accountId) return null;
@@ -20,6 +21,7 @@ export function getFarmRewardHistory(accountId?: string): any[] {
 }
 
 export function recordFarmReward(key: string, rewards: any[], name?: string) {
+    emitFarmReward(name || (key === 'daily_share' ? '每日分享礼包' : '奖励'), rewards);
     const file = historyPath();
     if (!file) return;
     try {

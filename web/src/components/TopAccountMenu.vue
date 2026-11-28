@@ -2,17 +2,20 @@
 import type { Account } from '@/stores/account'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, useId, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import api, { getApiErrorMessage } from '@/api'
 import AccountCareerModal from '@/components/AccountCareerModal.vue'
 import AccountModal from '@/components/AccountModal.vue'
 import RemarkModal from '@/components/RemarkModal.vue'
 import { useAccountPresence, useReconnectRefresh } from '@/composables/useReconnectRefresh'
+import { isRanchRoute } from '@/router/menu'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
 import { useStatusStore } from '@/stores/status'
 
 // 仿 origin 的 TopAccountMenu：头像 + 昵称 + 平台角标的触发器，
 // 下拉内切换账号、改备注、添加账号、跳转设置管理账号。
 const accountStore = useAccountStore()
+const route = useRoute()
 const statusStore = useStatusStore()
 const { accounts, currentAccount } = storeToRefs(accountStore)
 const { status } = storeToRefs(statusStore)
@@ -402,7 +405,7 @@ function openCareer() {
             <span>添加账号</span>
           </button>
           <router-link
-            to="/settings"
+            :to="{ name: 'Settings', query: isRanchRoute(route) ? { space: 'ranch' } : {} }"
             class="w-full flex items-center gap-2 px-4 py-2 text-sm transition-colors hover:bg-[var(--ui-surface-soft)]"
             :style="{ color: 'var(--ui-primary)' }"
             @click="closeDropdown"

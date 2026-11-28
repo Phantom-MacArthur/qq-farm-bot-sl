@@ -1,5 +1,5 @@
 import type { AUTOMATION_MODULE_DEFAULTS, FARM_DAILY_DEFAULTS, MugeRewardKey } from '../config/automation-modules';
-import type { MysteryNotificationMessages, NotificationTypes } from '../config/notification-types';
+import type { FarmActivityEvent, MysteryNotificationMessages, NotificationTypes } from '../config/notification-types';
 import type { RanchAutomationConfig } from '../config/ranch-automation';
 export {};
 export type PlantingStrategy = 'preferred' | 'level' | 'max_exp' | 'max_fert_exp' | 'max_profit' | 'max_fert_profit' | 'bag_priority' | 'illustrated';
@@ -49,7 +49,7 @@ export interface AutomationConfig extends RanchAutomationConfig, Record<keyof ty
     yishu_harvest: boolean;
     yishu_use_unshared_price: boolean;
     /** 空值保留旧版 yishu_auto_sell 的保存值。 */
-    yishu_sell_mode: '' | 'off' | 'scan' | 'auto';
+    yishu_sell_mode: '' | 'off' | 'manual' | 'scan' | 'auto';
     /** 小铺收购提成（好友把蜜薯卖进你的铺子产生）到账后自动领。 */
     yishu_claim_commission: boolean;
     /** 好友铺子当天都收满时，把剩下的卖给自己铺子（不浪费已收获的蜜薯）。 */
@@ -129,6 +129,7 @@ export interface OfflineReminder {
     msg: string;
     notificationTypes?: Partial<NotificationTypes>;
     mysteryMessages?: Partial<MysteryNotificationMessages>;
+    farmActivityEvents?: FarmActivityEvent[];
 }
 export interface UIConfig {
     theme: 'light' | 'dark';
@@ -194,29 +195,6 @@ export interface UserDefaultPlan {
     config: Record<string, any>;
     updatedAt: number;
 }
-export interface QqBotPushUser {
-    openid: string;
-    nickname: string;
-    avatar: string;
-    lastSeenAt: number;
-}
-export interface QqBotPushConfig {
-    channelEnabled: boolean;
-    enabled: boolean;
-    appId: string;
-    appSecret: string;
-    openid: string;
-    eventKeys: string[];
-    batchWindowSec: number;
-    dailyLimit: number;
-    minuteLimit: number;
-    includeIcons: boolean;
-    includeAvatars: boolean;
-    showAccount: boolean;
-    offlineNotify: boolean;
-    accountRoutes?: Record<string, string[]>;
-    discoveredUsers?: QqBotPushUser[];
-}
 export interface GlobalConfig {
     accountConfigs: Record<string, AccountConfig>;
     defaultAccountConfig: AccountConfig;
@@ -229,7 +207,6 @@ export interface GlobalConfig {
     pushNotifications?: {
         notificationTypes?: Partial<NotificationTypes>;
     };
-    qqBotPush?: QqBotPushConfig;
     systemConfig: SystemConfig | null;
     userDefaultPlan: UserDefaultPlan | null;
 }

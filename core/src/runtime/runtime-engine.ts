@@ -4,7 +4,7 @@ const path = require('node:path');
 const { Worker } = require('node:worker_threads');
 const store = require('../models/store');
 const { updateRuntimeConfig, getRuntimeConfig, getDefaultSystemConfig } = require('../config/config');
-const { sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage } = require('../services/push');
+const { sendNotification } = require('../services/push');
 const { createDataProvider } = require('./data-provider');
 const { createReloginReminderService } = require('./relogin-reminder');
 const { createRuntimeState } = require('./runtime-state');
@@ -12,7 +12,6 @@ const { createWorkerManager } = require('./worker-manager');
 const { startWxKeepAlive, stopWxKeepAlive, applyWxKeepAliveConfig, notifyAccountOffline, cancelPendingRelogin } = require('../services/wx-keepalive');
 const { ensureFreshGameCode } = require('../services/wx-credential');
 const { recordAutoRefreshSuccess, recordAutoRefreshFailure } = require('../services/preflight-stats');
-const { createQqBotPushService } = require('../services/qq-bot-push');
 
 const { listHostedSessions, findAccountSession } = require('../session/ipc');
 
@@ -59,13 +58,10 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         buildDefaultStatus,
         filterLogs,
     } = runtimeState;
-    const qqBotPush = createQqBotPushService({ store, log });
 
     const reloginReminder = createReloginReminderService({
         store,
-        sendPushooMessage,
-        sendWxPusherMessage,
-        sendWxPusherWechatMessage,
+        sendNotification,
         log,
     });
 
@@ -89,10 +85,7 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         addAccountLog,
         normalizeStatusForPanel,
         buildConfigSnapshotForAccount,
-        triggerOfflineReminder: (payload: any) => {
-            void triggerOfflineReminder(payload);
-            void qqBotPush.sendOfflineNotification(payload);
-        },
+        triggerOfflineReminder,
         sendConfiguredPush,
         addOrUpdateAccount: store.addOrUpdateAccount,
         getAccount: findAccount,
@@ -105,7 +98,6 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         onWorkerLog: (entry: any, accountId: string, accountName?: string) => {
             runtimeEvents.emit('worker_log', { entry, accountId, accountName });
             if (onLog) onLog(entry, accountId, accountName);
-            qqBotPush.enqueueLog(entry, accountName, accountId);
         },
         onAccountOffline: (accountId: string, _accountName: string, reason: string) => {
             notifyAccountOffline(accountId, reason);
@@ -220,7 +212,6 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
         }
 
         startAccountKeepAlive();
-        qqBotPush.start();
 
         if (processRef.env.FARM_SESSION_SOCKET) {
             const sessions = await listHostedSessions();
@@ -236,7 +227,6 @@ function createRuntimeEngine(options: RuntimeEngineOptions = {}) {
 
     function stopAllAccounts(): void {
         cancelAllStoredCodeRetries();
-        qqBotPush.stop();
         stopWxKeepAlive();
         for (const accountId of Object.keys(workers)) {
             stopWorker(accountId);

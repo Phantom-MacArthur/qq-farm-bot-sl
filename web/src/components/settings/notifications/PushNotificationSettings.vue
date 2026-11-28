@@ -11,7 +11,6 @@ import { useSettingStore } from '@/stores/setting'
 import { useToastStore } from '@/stores/toast'
 import NotificationFields from './NotificationFields.vue'
 import OfflineReminderCard from './OfflineReminderCard.vue'
-import QqBotPushSettings from './QqBotPushSettings.vue'
 
 const { currentAccountId } = storeToRefs(useAccountStore())
 const settingStore = useSettingStore()
@@ -82,9 +81,9 @@ function save() {
 
 function testNotification() {
   return run('test', async (config, accountId) => {
-    const { data } = await api.post('/api/settings/offline-reminder/test', config, { headers: { 'x-account-id': accountId } })
+    const { data } = await api.post('/api/settings/offline-reminder/test', config, { headers: { 'x-account-id': accountId }, timeout: 70_000 })
     return data?.ok ? { ok: true } : { ok: false, error: getApiErrorMessage(data, '发送测试通知失败') }
-  }, '三类测试通知均发送成功')
+  }, '全部测试通知已发送')
 }
 
 function saveDefault() {
@@ -123,12 +122,16 @@ function applyDefault() {
     <template #body>
       <div v-if="draft" class="space-y-3">
         <OfflineReminderCard v-model:config="draft" :disabled="!!pending" />
-        <NotificationFields v-model:types="draft.notificationTypes" v-model:messages="messages" :disabled="!!pending" />
+        <NotificationFields
+          v-model:types="draft.notificationTypes"
+          v-model:messages="messages"
+          v-model:farm-activity-events="draft.farmActivityEvents"
+          :disabled="!!pending"
+        />
       </div>
       <p v-else-if="!currentAccountId" class="text-sm text-gray-500" role="status">请先选择账号</p>
       <p v-else-if="loading" class="text-sm text-gray-500" role="status">读取中…</p>
       <BaseButton v-else variant="secondary" size="sm" @click="settingStore.fetchSettings(currentAccountId)">重新读取</BaseButton>
-      <QqBotPushSettings />
     </template>
   </SettingsPanel>
 

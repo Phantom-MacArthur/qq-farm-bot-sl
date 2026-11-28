@@ -155,7 +155,7 @@ function createDataProvider(options: DataProviderOptions) {
             return { cleared: before - after, accountId };
         },
 
-        getLands: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getLands', true),
+        getLands: (accountRef: string, includeCareer = true) => callWorkerApi(resolveAccountRefId(accountRef), 'getLands', true, includeCareer),
         // 拉取种子商店目录（worker 侧顺带写入购买价校准缓存）；propagateErrors=true 使商店拉取失败真正抛出，供手动校准顺延下一个账号并如实报错
         refreshSeedShopCatalog: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSeeds', true),
         getIllustratedSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedSnapshot'),
@@ -225,6 +225,7 @@ function createDataProvider(options: DataProviderOptions) {
             callWorkerApi(resolveAccountRefId(accountRef), 'getPetProtectLogs')
         ),
         getDailyGifts: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyGiftOverview', true),
+        getDailyCompletion: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyCompletion'),
         getActivityDirectorySnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityDirectorySnapshot'),
         getRanchActivityDirectorySnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchActivityDirectorySnapshot'),
         getActivityCenterSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityCenterSnapshot'),

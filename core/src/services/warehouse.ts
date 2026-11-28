@@ -1,4 +1,5 @@
 import type { SellConditionContext } from '../config/sell-conditions';
+import { farmActivityEvents } from './farm-activity-events';
 
 export {};
 /**
@@ -69,7 +70,15 @@ function toSellItem(item: any): any {
     return payload;
 }
 
-async function sellItems(items: any[]): Promise<any> {
+function describeSoldItems(items: any[]): string {
+    return items.map(item => `${getItemById(toNum(item.id))?.name || getFruitName(toNum(item.id))} ×${toNum(item.count)}`).join('、');
+}
+
+function confirmedSoldItems(reply: any): any[] {
+    return (reply.sell_items || []).filter((item: any) => toNum(item.id) > 0 && toNum(item.count) > 0);
+}
+
+async function sellItems(items: any[], notify: boolean = true): Promise<any> {
     const requested: any[] = Array.isArray(items) ? items : [];
     if (requested.length === 0) throw new Error('没有可出售的物品');
     const baseContext: SellConditionContext = await getSellConditionContext();
@@ -93,7 +102,12 @@ async function sellItems(items: any[]): Promise<any> {
     const payload: any[] = requested.map(toSellItem);
     const body: Uint8Array = types.SellRequest.encode(types.SellRequest.create({ items: payload })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'Sell', body);
-    return types.SellReply.decode(replyBody);
+    const reply = types.SellReply.decode(replyBody);
+    if (notify) {
+        const soldItems = confirmedSoldItems(reply);
+        if (soldItems.length) farmActivityEvents.emit('activity', 'sale', `出售完成：${describeSoldItems(soldItems)}`);
+    }
+    return reply;
 }
 
 async function useItem(itemId: number, count: number = 1, landIds: number[] = [], uid: number = 0): Promise<any> {
@@ -718,10 +732,12 @@ async function sellAllFruits(): Promise<void> {
         const goldBefore: number = totalsBefore.gold;
         let serverGoldTotal: number = 0;
         let knownGold: number = goldBefore;
+        const soldItems: any[] = [];
         for (let i = 0; i < toSell.length; i += SELL_BATCH_SIZE) {
             const batch: any[] = toSell.slice(i, i + SELL_BATCH_SIZE);
             try {
-                const reply: any = await sellItems(batch);
+                const reply: any = await sellItems(batch, false);
+                soldItems.push(...confirmedSoldItems(reply));
                 const inferred: { gain: number; nextKnownGold: number } = deriveGoldGainFromSellReply(reply, knownGold);
                 const gained: number = Math.max(0, toNum(inferred.gain));
                 knownGold = inferred.nextKnownGold;
@@ -731,7 +747,8 @@ async function sellAllFruits(): Promise<void> {
                 logWarn('仓库', `批量出售失败，改为逐个重试: ${batchErr.message}`);
                 for (const it of batch) {
                     try {
-                        const singleReply: any = await sellItems([it]);
+                        const singleReply: any = await sellItems([it], false);
+                        soldItems.push(...confirmedSoldItems(singleReply));
                         const inferred: { gain: number; nextKnownGold: number } = deriveGoldGainFromSellReply(singleReply, knownGold);
                         const gained: number = Math.max(0, toNum(inferred.gain));
                         knownGold = inferred.nextKnownGold;
@@ -778,6 +795,10 @@ async function sellAllFruits(): Promise<void> {
         }
 
         const totalGoldEarned: number = Math.max(serverGoldTotal, totalGoldDelta, bagDelta);
+        if (soldItems.length) {
+            const gain = totalGoldEarned > 0 ? `，获得 ${totalGoldEarned} 金币` : '';
+            farmActivityEvents.emit('activity', 'sale', `出售完成：${describeSoldItems(soldItems)}${gain}`);
+        }
         if (totalGoldDelta <= 0 && totalGoldEarned > 0) {
             // 某些情况下 ItemNotify 丢失，使用出售回包做金币兜底同步
             const state: any = getUserState();
@@ -792,9 +813,6 @@ async function sellAllFruits(): Promise<void> {
             result: totalGoldEarned > 0 ? 'ok' : 'unknown_gain',
             count: toSell.length,
             gold: totalGoldEarned,
-            // QQ 机器人推送用：取首个出售物品，供图标查表
-            itemId: toSell.length > 0 ? toNum(toSell[0].id) : 0,
-            itemName: toSell.length > 0 ? getFruitName(toNum(toSell[0].id)) : '',
             totalsBefore,
             totalsAfter,
             totalsDeltaGold,

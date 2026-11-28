@@ -1,3 +1,4 @@
+import { emitFarmReward } from './farm-activity-events';
 export {};
 
 const {
@@ -176,6 +177,7 @@ function claimIllustratedRewards(type: number, automation?: { canContinue: () =>
         if (!decoded.claimed_level_ids?.length) throw new Error('领取结果未确认，请刷新图鉴后查看');
         const result = { rewards: (decoded.total_rewards || []).map(rewardDto).filter(Boolean), claimedLevels: decoded.claimed_level_ids };
         if (automation) return result;
+        emitFarmReward(type === 1 ? '作物图鉴奖励' : '超变图鉴奖励', result.rewards);
         if (pendingSnapshot) await pendingSnapshot.catch(() => {});
         try { return { ...result, snapshot: await getIllustratedSnapshot() }; }
         catch { return { ...result, snapshot: null, refreshRequired: true }; }

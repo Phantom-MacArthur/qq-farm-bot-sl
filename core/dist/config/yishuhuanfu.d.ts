@@ -7,7 +7,7 @@ export declare const YISHU_SELL_CUTOFF: number;
 export declare const YISHU_DEFAULT_SELL_AFTER_TIME = "12:00";
 export declare const YISHU_START: number;
 export declare const YISHU_END: number;
-export type YishuSellMode = 'off' | 'scan' | 'auto';
+export type YishuSellMode = 'off' | 'manual' | 'scan' | 'auto';
 export declare function normalizeYishuMinPrice(value: unknown): number;
 export declare function yishuSellMode(input: {
     yishu_sell_mode?: unknown;
@@ -25,6 +25,11 @@ export declare function latestYishuSellSlot(seconds: number, afterTime?: string)
 export declare function isYishuSaleTime(seconds: number, slot: number, afterTime?: string): boolean;
 export declare function estimateYishuMaturity(plantedAt: number, growthSeconds: number, reductionBasisPoints: number): number | null;
 export declare function yishuPlantDeadline(seconds: number, end?: number): number;
-export declare function observeYishuActivity(active: boolean, end: number): void;
+export declare function observeYishuActivity(active: boolean, end: number, start: number): void;
+export declare function getYishuAutomationWindow(): {
+    start: number;
+    end: number;
+};
+export declare function isYishuAutomationInWindow(seconds: number): boolean;
 export declare function getYishuActivityEnd(seconds: number): number;
 //# sourceMappingURL=yishuhuanfu.d.ts.map

@@ -625,7 +625,8 @@ async function getAvailableSeeds(propagateErrors = false) {
         return av - bv;
     });
 }
-async function getLandsDetail(propagateErrors = false) {
+async function getLandsDetail(propagateErrors = false, includeCareer = true) {
+    const ownGid = toNum(getUserState().gid);
     let lands = [];
     let socialEvents = [];
     try {
@@ -638,6 +639,7 @@ async function getLandsDetail(propagateErrors = false) {
                 friendMode: false,
                 landsMap,
                 nowSec,
+                ownGid,
             }));
         }
     }
@@ -650,7 +652,7 @@ async function getLandsDetail(propagateErrors = false) {
     return {
         lands,
         socialEvents,
-        career: await getCareerInfoOrNull(getUserState().gid, propagateErrors),
+        ...(includeCareer ? { career: await getCareerInfoOrNull(ownGid, propagateErrors) } : {}),
     };
 }
 /**
@@ -1495,7 +1497,7 @@ async function fertilizeOwnLand(landIdInput, fertilizerTypeInput) {
     const nowSec = getServerTimeSec();
     const landsMap = updatedRaw ? buildLandMap([updatedRaw]) : new Map();
     const updatedLand = updatedRaw
-        ? buildLandDetail(updatedRaw, { friendMode: false, landsMap, nowSec })
+        ? buildLandDetail(updatedRaw, { friendMode: false, landsMap, nowSec, ownGid: toNum(getUserState().gid) })
         : null;
     const fertilizerRemainingSec = toNum(reply?.fertilizer?.count);
     recordOperation('fertilize', 1);

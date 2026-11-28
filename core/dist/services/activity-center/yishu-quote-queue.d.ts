@@ -10,6 +10,7 @@ export interface YishuQuoteRow extends YishuQuoteTarget {
     own?: boolean;
     unlimited?: boolean;
     quotePending?: boolean;
+    quoteShareExpired?: boolean;
     price: string;
     bonus: string;
     totalPrice: string;
@@ -42,6 +43,7 @@ export declare function createYishuQuoteQueue(deps: {
             own?: boolean;
             unlimited?: boolean;
             quotePending?: boolean;
+            quoteShareExpired?: boolean;
             price: string;
             bonus: string;
             totalPrice: string;
@@ -59,6 +61,7 @@ export declare function createYishuQuoteQueue(deps: {
             quota: string;
             quotaCap: string;
             quotaUsed: string;
+            quoteShareExpired: boolean;
             canSell: any;
             sharedToday: boolean;
             quotedAt: number;
@@ -79,6 +82,7 @@ export declare function createYishuQuoteQueue(deps: {
             own?: boolean;
             unlimited?: boolean;
             quotePending?: boolean;
+            quoteShareExpired?: boolean;
             price: string;
             bonus: string;
             totalPrice: string;
@@ -96,6 +100,7 @@ export declare function createYishuQuoteQueue(deps: {
         failed: number;
         candidateCount: number;
         friendCount: number;
+        shareExpiredCount: number;
         pendingCount: number;
         panelFriendCount: number;
         panelScannedCount: number;
@@ -106,7 +111,7 @@ export declare function createYishuQuoteQueue(deps: {
         friendListError: string;
         message: string;
     };
-    refreshZeroQuotes: () => {
+    refreshQuotes: (fullRound?: boolean) => {
         shops: ({
             gid: string;
             name: string;
@@ -117,6 +122,7 @@ export declare function createYishuQuoteQueue(deps: {
             own?: boolean;
             unlimited?: boolean;
             quotePending?: boolean;
+            quoteShareExpired?: boolean;
             price: string;
             bonus: string;
             totalPrice: string;
@@ -134,6 +140,7 @@ export declare function createYishuQuoteQueue(deps: {
             quota: string;
             quotaCap: string;
             quotaUsed: string;
+            quoteShareExpired: boolean;
             canSell: any;
             sharedToday: boolean;
             quotedAt: number;
@@ -154,6 +161,7 @@ export declare function createYishuQuoteQueue(deps: {
             own?: boolean;
             unlimited?: boolean;
             quotePending?: boolean;
+            quoteShareExpired?: boolean;
             price: string;
             bonus: string;
             totalPrice: string;
@@ -171,6 +179,7 @@ export declare function createYishuQuoteQueue(deps: {
         failed: number;
         candidateCount: number;
         friendCount: number;
+        shareExpiredCount: number;
         pendingCount: number;
         panelFriendCount: number;
         panelScannedCount: number;
@@ -185,6 +194,7 @@ export declare function createYishuQuoteQueue(deps: {
         limit: number;
         intervalMs: number;
         enabled: () => boolean;
+        manualEnabled?: () => boolean;
         ready: () => boolean;
     }) => Promise<void>;
     updateQuota: (saleDay: string, gid: string, quota: string) => void;

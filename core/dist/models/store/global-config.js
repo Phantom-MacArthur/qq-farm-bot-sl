@@ -1,7 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const notification_types_1 = require("../../config/notification-types");
-const qq_bot_push_1 = require("../../config/qq-bot-push");
 const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, DEFAULT_AUTO_CODE_REFRESH: DEFAULT_OFFLINE_RECOVERY, normalizeAutoCodeRefresh: normalizeOfflineRecovery, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
 const sharedState = require('./shared-state');
 const { getSavedAutomation } = require('./account-config');
@@ -58,8 +57,8 @@ function normalizeOfflineReminder(input) {
             channelCredentials[key].wxPusherUid = wxPusherUid;
         }
     }
-    const notificationTypes = {};
-    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase']) {
+    const notificationTypes = { farmActivity: false };
+    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase', 'farmActivity']) {
         const value = src.notificationTypes?.[key];
         if (typeof value === 'boolean')
             notificationTypes[key] = value;
@@ -74,6 +73,7 @@ function normalizeOfflineReminder(input) {
         title,
         msg,
         notificationTypes,
+        farmActivityEvents: (0, notification_types_1.normalizeFarmActivityEvents)(src.farmActivityEvents),
         mysteryMessages: {
             mysteryArrival: typeof src.mysteryMessages?.mysteryArrival === 'string' ? src.mysteryMessages.mysteryArrival.trim() : '神秘商人到访',
             mysteryPurchase: typeof src.mysteryMessages?.mysteryPurchase === 'string' ? src.mysteryMessages.mysteryPurchase.trim() : '神秘商人到访',
@@ -92,14 +92,6 @@ function saveGlobalConfig(changes = {}) {
 }
 function getUI() {
     return { ...globalConfig.ui };
-}
-function getQqBotPush() {
-    return (0, qq_bot_push_1.normalizeQqBotPushConfig)(globalConfig.qqBotPush);
-}
-function setQqBotPush(update) {
-    const next = (0, qq_bot_push_1.normalizeQqBotPushConfig)({ ...getQqBotPush(), ...update });
-    saveGlobalConfig({ qqBotPush: next });
-    return next;
 }
 function setUITheme(theme) {
     const t = String(theme || '').toLowerCase();
@@ -328,8 +320,6 @@ if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
 }
 module.exports = {
     saveGlobalConfig,
-    getQqBotPush,
-    setQqBotPush,
     getUI,
     setUITheme,
     getLoginSettings,

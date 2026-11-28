@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const farm_activity_events_1 = require("./farm-activity-events");
 const { getItemById, getItemImageById, getPlantBySeedId, getPlantByFruitId, getPlantNameBySeedId, getIllustratedTypeByParam, getIllustratedSortByParam, getIllustratedBuffsByLevel, getIllustratedBuffs, getAllSeeds, } = require('../config/gameConfig');
 const { getAvailableSeeds } = require('./farm');
 const protobuf = require('protobufjs');
@@ -163,6 +164,7 @@ function claimIllustratedRewards(type, automation) {
         const result = { rewards: (decoded.total_rewards || []).map(rewardDto).filter(Boolean), claimedLevels: decoded.claimed_level_ids };
         if (automation)
             return result;
+        (0, farm_activity_events_1.emitFarmReward)(type === 1 ? '作物图鉴奖励' : '超变图鉴奖励', result.rewards);
         if (pendingSnapshot)
             await pendingSnapshot.catch(() => { });
         try {

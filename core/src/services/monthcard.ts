@@ -1,4 +1,4 @@
-export {};
+import { beginDailyCheck, isDailyComplete, recordDailyMark } from './daily-completion';
 /**
  * 月卡礼包
  */
@@ -65,17 +65,25 @@ async function claimMonthCardReward(goodsId: number): Promise<any> {
 
 async function performDailyMonthCardGift(force: boolean = false): Promise<boolean> {
     const now: number = Date.now();
+    if (isDailyComplete('farm_month_card_gift')) return false;
     if (!force && isDoneToday()) return false;
     if (!force && now - lastCheckAt < CHECK_COOLDOWN_MS) return false;
     lastCheckAt = now;
+    const check = beginDailyCheck('farm_month_card_gift');
 
     try {
         const rep: any = await getMonthCardInfos();
         const infos: any[] = Array.isArray(rep && rep.infos) ? rep.infos : [];
-        const claimable: any[] = infos.filter((x: any) => x && x.can_claim && Number(x.goods_id || 0) > 0);
+        const knownClaimed = (id: unknown) => isDailyComplete('farm_month_card_gift', String(id));
+        const finishCards = () => {
+            if (infos.length && infos.every(info => Number(info?.goods_id) > 0 && knownClaimed(info.goods_id))) {
+                recordDailyMark(check, 'completed');
+            }
+        };
+        const claimable: any[] = infos.filter((x: any) => x && x.can_claim && Number(x.goods_id || 0) > 0 && !knownClaimed(x.goods_id));
         // 服务器对没买月卡的账号也会返回月卡条目（can_claim=false），条目存在不代表已开通；
         // 只有能领或今天领过才能确认有卡，否则无法区分「未开通」和「已在游戏内领过」。
-        lastHasCard = infos.length === 0 ? false : (claimable.length > 0 || isClaimedToday() ? true : null);
+        lastHasCard = infos.length === 0 ? false : (claimable.length > 0 || isClaimedToday() || infos.some(info => knownClaimed(info?.goods_id)) ? true : null);
         lastHasClaimable = claimable.length > 0;
         if (claimable.length > 0) lastRewards = describeRewardItems(claimable.map((x: any) => x.reward));
         else if (!isClaimedToday()) lastRewards = [];
@@ -90,6 +98,7 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
             return false;
         }
         if (!claimable.length) {
+            finishCards();
             markDoneToday();
             lastResult = 'none';
             log('月卡', '今日暂无可领取月卡礼包', {
@@ -107,6 +116,7 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
                 const items: any[] = Array.isArray(ret && ret.items) ? ret.items : [];
                 recordFarmReward(DAILY_KEY, describeRewardItems(items), '月卡礼包');
                 claimedItems.push(...items);
+                recordDailyMark(check, 'completed', { item: String(info.goods_id) });
                 const reward: string = getRewardSummary(items);
                 log('月卡', reward ? `领取成功 → ${reward}` : '领取成功', {
                     module: 'task',
@@ -124,11 +134,12 @@ async function performDailyMonthCardGift(force: boolean = false): Promise<boolea
                 });
             }
         }
+        finishCards();
         if (claimed > 0) {
             lastClaimAt = Date.now();
-            markDoneToday();
+            if (claimed === claimable.length) markDoneToday();
             claimedDateKey = getSystemDateKey();
-            lastHasClaimable = false;
+            lastHasClaimable = claimed < claimable.length;
             if (claimedItems.length > 0) lastRewards = describeRewardItems(claimedItems);
             lastResult = 'ok';
             return true;
@@ -155,7 +166,7 @@ module.exports = {
     performDailyMonthCardGift,
     getMonthCardDailyState: () => ({
         key: DAILY_KEY,
-        doneToday: isClaimedToday(),
+        doneToday: isClaimedToday() || isDailyComplete('farm_month_card_gift'),
         checkedToday: isDoneToday(),
         lastCheckAt,
         lastClaimAt,

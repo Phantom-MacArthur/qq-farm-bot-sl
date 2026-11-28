@@ -24,7 +24,7 @@ export function evaluateWebBuildChange(input: EvaluateWebBuildInput): WebBuildDe
 export function isTransientNetworkError(error: any): boolean {
   if (!error || typeof error !== 'object')
     return false
-  if (error.code === 'ERR_CANCELED')
+  if (['ERR_CANCELED', 'ECONNABORTED', 'ETIMEDOUT'].includes(error.code))
     return false
   const status = Number(error?.response?.status || 0)
   if (status === 502 || status === 503 || status === 504)

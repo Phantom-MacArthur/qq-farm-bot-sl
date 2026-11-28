@@ -405,7 +405,7 @@ function normalizeAutomationValue(key, value, current) {
     if (key === 'yishu_sell_mode') {
         if (value === 'confirm')
             return 'scan';
-        return ['', 'off', 'scan', 'auto'].includes(String(value)) ? String(value) : current;
+        return ['', 'off', 'manual', 'scan', 'auto'].includes(String(value)) ? String(value) : current;
     }
     if (Object.hasOwn(automation_modules_1.ACTIVITY_AUTOMATION_DEFAULTS, key))
         return value === true;
@@ -582,9 +582,6 @@ function loadGlobalConfig() {
             }
             if (data.pushNotifications && typeof data.pushNotifications === 'object') {
                 globalConfig.pushNotifications = data.pushNotifications;
-            }
-            if (data.qqBotPush && typeof data.qqBotPush === 'object') {
-                globalConfig.qqBotPush = data.qqBotPush;
             }
             if (data.offlineReminderDefault && typeof data.offlineReminderDefault === 'object') {
                 globalConfig.offlineReminderDefault = data.offlineReminderDefault;

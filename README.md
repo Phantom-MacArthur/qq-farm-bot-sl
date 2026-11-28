@@ -160,9 +160,9 @@ bash ./stop.sh
 
 首次启动会安装构建依赖并打包前端、后端和会话宿主。默认只显示当前步骤、进度和耗时。需要查看编译器的完整输出时，在命令后加 `--verbose` 或 `-v`。再次启动可复用现有发布包。如果从旧版单进程脚本迁移，请先在旧版本运行一次原有的 `bash stop.sh`，升级后启动服务并登录账号。从这次登录开始，会话由独立宿主管理。
 
-拉取源码后，`bash ./start.sh` 会在需要时构建。也可以从仓库根目录执行 `pnpm install --frozen-lockfile`，然后运行 `pnpm run build` 构建前后端。只构建面板时执行 `pnpm run build:web`。`web/dist/` 和 `core/client.js` 由构建生成，Git 会忽略它们。`core/dist/` 的后端预编译产物随源码提交。
+在构建机的仓库根目录执行 `pnpm install --frozen-lockfile` 和 `pnpm run build`。发布时，将同一版本的 `core/client.js`、`core/dist/`、`web/dist/` 和 `packages/session-contract/dist/` 随源码一起提交。只改面板时可用 `pnpm run build:web` 更新前端产物。
 
-需要在另一台机器编译时，部署端须先收到与源码版本匹配的构建产物，才能用 `bash ./start.sh --prebuilt` 跳过编译。该模式启动前检查 `web/dist/index.html`、`core/client.js` 和 `core/dist/runtime/runtime-engine.js` 是否存在。
+部署机拉取包含这些产物的提交后，首次启动用 `bash ./start.sh --prebuilt`，在线切换用 `bash ./update.sh all --skip-build`。这两种方式复用 Git 带来的构建产物，仍需要 Node.js、pnpm 和运行依赖。`packages/session-contract/dist/index.js` 是启动工具使用的基础组件，随源码提交后，首次启动也可以跳过它的编译。
 
 前端类型检查已与生产构建拆分，需要单独检查时执行 `pnpm typecheck:web`。
 
@@ -408,11 +408,13 @@ pnpm -C core exec tsx ../tools/audit-capture-compatibility.js <capture-dir>
 
 专题说明统一收录在 [`docs/`](docs/README.md)：
 
+- [新活动自研手册](docs/new-activity-playbook.md)
 - [工具脚本](docs/tools.md)
 - [网络并发模型](docs/network-concurrency.md)
 - [TSDK Node.js 运行约定](docs/tsdk-runtime.md)
 - [配置存储、迁移与缓存](docs/config-storage.md)
 - [2026-10-22 游戏版本与资源对齐](docs/game-update-20261022.md)
+- [图鉴、变异宝典与藏品](docs/collections-20261101.md)
 - [雨落成诗活动协议与实现](docs/weather-activity.md)
 - [以薯换福命令号、状态槽与自动任务](docs/yishuhuanfu-20261125.md)
 - [SL 以薯换福设计方案](docs/yishuhuanfu-sl-design.md)
@@ -427,5 +429,3 @@ pnpm -C core exec tsx ../tools/audit-capture-compatibility.js <capture-dir>
 <div align="center">
   <p>如果觉得项目有用，欢迎点一个 Star。</p>
 </div>
-
-- [图鉴、变异宝典与藏品](docs/collections-20261101.md)

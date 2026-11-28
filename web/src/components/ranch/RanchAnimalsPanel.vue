@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import RanchCareerPanel from '@/components/ranch/RanchCareerPanel.vue'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -375,7 +374,6 @@ function target(animal: any) {
 
         <div class="panel-scroll-body">
         <RanchGate @retry="refresh">
-          <RanchCareerPanel v-if="state?.career" :career="state.career" />
         <div class="ranch-summary">
           <div class="ranch-summary__states">
             <span v-for="item in summary" :key="item.key" class="ranch-state" :class="`ranch-state--${item.key}`">

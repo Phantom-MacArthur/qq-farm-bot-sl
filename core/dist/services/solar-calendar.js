@@ -4,6 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const solar_calendar_json_1 = __importDefault(require("../activity-data/solar-calendar.json"));
+const farm_activity_events_1 = require("./farm-activity-events");
 const { sendMsgAsync } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { toNum } = require('../utils/utils');
@@ -90,6 +91,8 @@ async function perform(action, input) {
     if (!updated || toNum(updated.id) !== id)
         throw new Error('操作回包不完整，请刷新确认结果，勿重复提交');
     const result = { rewards: rewards(reply.rewards), correct: action === 'answer' ? !!reply.correct : undefined };
+    if (result.correct !== false)
+        (0, farm_activity_events_1.emitFarmReward)('节令日历奖励', result.rewards);
     try {
         return { ...result, calendar: await getSolarCalendar() };
     }

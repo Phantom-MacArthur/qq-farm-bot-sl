@@ -198,6 +198,7 @@ test('Worker 登录立即检查邮箱，同日不再轮询，仅跨日重跑日�
         '../models/store': { getAutomation: () => automation, applyConfigSnapshot: value => value },
         '../services/email': email,
         '../services/status': { setRecordGoldExpHook: noop },
+        '../services/farm-activity-events': { farmActivityEvents: { on: noop } },
         '../services/automation-lock': { runExclusiveAutomationTask: (_name, run) => Promise.resolve().then(run) },
         '../services/scheduler': { createScheduler: () => ({ clear: noop, setIntervalTask: (_name, ms, fn) => {
             assert.equal(ms, 30000);
@@ -208,6 +209,7 @@ test('Worker 登录立即检查邮箱，同日不再轮询，仅跨日重跑日�
         '../services/monthcard': { performDailyMonthCardGift: noop },
         '../services/mall': { buyFreeGifts: noop },
         '../services/qqvip': { performDailyVipGift: noop },
+        '../utils/network': { networkEvents: { on: noop } },
         '../utils/utils': { ...h.utils, setLogHook: noop },
     };
     const worker = vm.runInNewContext(`${fs.readFileSync(filename, 'utf8')}\n;({

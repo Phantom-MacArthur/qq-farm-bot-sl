@@ -3,6 +3,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { createRequire } = require('node:module');
+const { runInNewContext } = require('node:vm');
 
 const { createYishuAutomation, isYishuAutomationEnabled, nextYishuCheck } = require('../dist/services/yishuhuanfu-auto');
 const { estimateYishuLand } = require('../dist/services/farm/yishuhuanfu-plan');
@@ -11,6 +13,83 @@ const { appendYishuHistory, beginYishuOrder, pendingYishuOrder, readYishuHistory
 
 const at = time => Date.parse('2026-11-26T' + time + ':00+08:00') / 1000;
 const end = Date.parse('2026-12-10T00:00:00+08:00') / 1000;
+
+test('报价和轮询采用服务端给出的活动时段，到结束时刻立即停止', (t) => {
+    const { observeYishuActivity, isYishuAutomationInWindow, confirmedYishuQuoteDay, YISHU_START, YISHU_END } = require('../dist/config/yishuhuanfu');
+    t.after(() => observeYishuActivity(false, YISHU_END, YISHU_START));
+    observeYishuActivity(true, at('13:00'), at('12:00'));
+    assert.equal(isYishuAutomationInWindow(at('11:59')), false);
+    assert.equal(isYishuAutomationInWindow(at('12:00')), true);
+    assert.equal(isYishuAutomationInWindow(at('13:00')), false);
+    assert.equal(confirmedYishuQuoteDay({ ms: at('12:59') * 1000, nowMs: at('13:00') * 1000 }), '');
+});
+
+function timerHarness() {
+    const filename = require.resolve('../dist/services/yishuhuanfu-auto');
+    const load = createRequire(filename);
+    const exports = {};
+    const tasks = new Map();
+    const warnings = [];
+    let now = end - 31 * 60;
+    let checkTimers;
+    const automation = { yishu_sell_mode: 'auto' };
+    const quoteEnabled = [];
+    runInNewContext(fs.readFileSync(filename, 'utf8'), {
+        exports,
+        require(name) {
+            if (name === '../utils/utils') return { getServerTimeSec: () => now, logWarn: (_, message) => warnings.push(message) };
+            if (name === '../models/store') return { getAutomation: () => automation };
+            if (name === './automation-lock') {
+                return { isAutomationTaskRunning: () => false, runExclusiveAutomationTask: (_, run) => run() };
+            }
+            if (name === './activity-center') {
+                return { tickYishuHuanfuFriendShops: options => quoteEnabled.push([options.enabled(), options.manualEnabled()]) };
+            }
+            return load(name);
+        },
+        setInterval(callback) {
+            checkTimers = callback;
+            return { unref() {} };
+        },
+    }, { filename });
+    const scheduler = {
+        has: key => tasks.has(key),
+        clear: key => tasks.delete(key),
+        setTimeoutTask: (key, delay, run) => tasks.set(key, { delay, run }),
+        setIntervalTask: (key, delay, run) => tasks.set(key, { delay, run }),
+    };
+    exports.startYishuTimer(scheduler, () => true);
+    return { tasks, warnings, checkTimers, setTime: seconds => { now = seconds; }, automation, quoteEnabled };
+}
+
+test('看门狗恢复应有的计划任务，活动结束前已无下一轮时不补跑', () => {
+    const { tasks, warnings, checkTimers, setTime } = timerHarness();
+    assert.equal(tasks.get('yishu_next').delay, 60_000);
+    tasks.delete('yishu_next');
+    checkTimers();
+    assert.equal(tasks.get('yishu_next').delay, 60_000);
+    assert.equal(warnings.length, 1);
+
+    for (const minute of [5, 4, 1, 0]) {
+        setTime(end - minute * 60);
+        tasks.delete('yishu_next');
+        tasks.delete('yishu_start');
+        checkTimers();
+        assert.equal(tasks.has('yishu_next'), false);
+        assert.equal(tasks.has('yishu_start'), false);
+    }
+    assert.equal(warnings.length, 1);
+});
+
+test('四种卖薯模式实时控制手动询价和后台询价', async () => {
+    const { tasks, automation, quoteEnabled } = timerHarness();
+    const tick = tasks.get('yishu_quotes').run;
+    for (const mode of ['off', 'manual', 'scan', 'auto']) {
+        automation.yishu_sell_mode = mode;
+        await tick();
+    }
+    assert.deepEqual(quoteEnabled, [[false, false], [false, true], [true, true], [true, true]]);
+});
 
 function quote(gid, totalPrice, quota, extra = {}) {
     return { gid, totalPrice: String(totalPrice), quota: String(quota), sharedToday: true, ...extra };
@@ -60,6 +139,7 @@ function harness(opts = {}) {
             return 1;
         },
         getServerTimeSec: () => now,
+        getDailyStatus: opts.getDailyStatus,
         log() {},
         delay: async () => {},
     });
@@ -101,6 +181,8 @@ test('旧版已关卖薯的账号沿用保存值，空配置默认按策略卖',
     assert.equal(yishuSellMode({ yishu_auto_sell: true, yishu_sell_mode: 'confirm' }), 'scan');
     assert.equal(yishuSellMode({}), 'auto');
     assert.equal(isYishuAutomationEnabled({ yishu_sell_mode: 'off', yishu_auto_sell: true }), false);
+    assert.equal(isYishuAutomationEnabled({ yishu_sell_mode: 'manual', yishu_auto_sell: true }), false);
+    assert.equal(isYishuAutomationEnabled({ yishu_sell_mode: 'manual', yishu_plant: true }), true);
     assert.equal(isYishuAutomationEnabled({ activity_enabled: false, yishu_plant: true }), false);
 });
 
@@ -116,6 +198,17 @@ test('领种和分享遵循当日状态，只在服务端有可领提成时领�
     assert.equal(h.calls.filter(([action]) => action === 'seed').length, 1);
     assert.equal(h.calls.filter(([action]) => action === 'share').length, 1);
     assert.equal(h.calls.filter(([action]) => action === 'commission').length, 1);
+});
+
+test('仅领种和分享时，已完成就跳过活动查询，待确认时只查询不重发', async () => {
+    let status = 'completed';
+    const h = harness({ mode: 'off', settings: { yishu_claim_seed: true, yishu_share: true },
+        snapshot: { daily: { seedClaimed: false, shared: false } }, getDailyStatus: () => status });
+    await h.run();
+    assert.deepEqual(h.calls, []);
+    status = 'pending_confirmation';
+    await h.run();
+    assert.deepEqual(h.calls, [['read']]);
 });
 
 test('最早出售时间前从缓存读取报价，卖薯任务不直接查网关', async () => {

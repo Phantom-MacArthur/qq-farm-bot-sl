@@ -123,10 +123,10 @@ function confirmSettings() {
     <div class="flex flex-wrap gap-2">
       <div v-for="activity in [calendarSettings, yishuSettings, ...activeActivities]" :key="activity.id" class="inline-flex items-center gap-1">
         <BaseButton variant="secondary" size="sm" :to="router.resolve(activity.to).fullPath">
-          {{ activity.name }}
+          <span class="font-normal">{{ activity.name }}</span>
         </BaseButton>
         <BaseButton variant="ghost" size="sm" :aria-label="`${activity.name}自动化设置`" @click="openSettings(activity)">
-          设置
+          <span class="font-normal">设置</span>
         </BaseButton>
       </div>
     </div>

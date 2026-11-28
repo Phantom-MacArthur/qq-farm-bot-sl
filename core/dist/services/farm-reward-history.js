@@ -8,6 +8,7 @@ exports.recordFarmReward = recordFarmReward;
 const node_crypto_1 = require("node:crypto");
 const node_fs_1 = require("node:fs");
 const node_path_1 = __importDefault(require("node:path"));
+const farm_activity_events_1 = require("./farm-activity-events");
 function historyPath(accountId = process.env.FARM_ACCOUNT_ID) {
     if (!accountId)
         return null;
@@ -27,6 +28,7 @@ function getFarmRewardHistory(accountId) {
     }
 }
 function recordFarmReward(key, rewards, name) {
+    (0, farm_activity_events_1.emitFarmReward)(name || (key === 'daily_share' ? '每日分享礼包' : '奖励'), rewards);
     const file = historyPath();
     if (!file)
         return;

@@ -710,7 +710,8 @@ async function getAvailableSeeds(propagateErrors: boolean = false): Promise<any[
     });
 }
 
-async function getLandsDetail(propagateErrors: boolean = false): Promise<{ lands: any[]; socialEvents: any[]; career: any }> {
+async function getLandsDetail(propagateErrors = false, includeCareer = true): Promise<{ lands: any[]; socialEvents: any[]; career?: any }> {
+    const ownGid = toNum(getUserState().gid);
     let lands: any[] = [];
     let socialEvents: any[] = [];
     try {
@@ -723,6 +724,7 @@ async function getLandsDetail(propagateErrors: boolean = false): Promise<{ lands
                 friendMode: false,
                 landsMap,
                 nowSec,
+                ownGid,
             }));
         }
     } catch (e) {
@@ -734,7 +736,7 @@ async function getLandsDetail(propagateErrors: boolean = false): Promise<{ lands
     return {
         lands,
         socialEvents,
-        career: await getCareerInfoOrNull(getUserState().gid, propagateErrors),
+        ...(includeCareer ? { career: await getCareerInfoOrNull(ownGid, propagateErrors) } : {}),
     };
 }
 
@@ -1589,7 +1591,7 @@ async function fertilizeOwnLand(landIdInput: unknown, fertilizerTypeInput: unkno
     const nowSec = getServerTimeSec();
     const landsMap = updatedRaw ? buildLandMap([updatedRaw]) : new Map();
     const updatedLand = updatedRaw
-        ? buildLandDetail(updatedRaw, { friendMode: false, landsMap, nowSec })
+        ? buildLandDetail(updatedRaw, { friendMode: false, landsMap, nowSec, ownGid: toNum(getUserState().gid) })
         : null;
     const fertilizerRemainingSec = toNum(reply?.fertilizer?.count);
 

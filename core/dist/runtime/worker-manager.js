@@ -12,6 +12,12 @@ const STORED_CODE_RETRY_WINDOW_MS = 10 * 60_000;
 // 好友现场天气需要逐个 Enter/Leave，单批最多 5 位好友；
 // 好友列表只读缓存或拉一次名单，给的余量少一些。
 const API_CALL_TIMEOUTS_MS = {
+    getLands: 60000,
+    getSelfInteractionItems: 60000,
+    useSelfInteractionItemBatch: 120000,
+    doFarmOp: 120000,
+    fertilizeOwnLand: 60000,
+    fertilizeAllOwnLands: 120000,
     getPetDiary: 90000,
     operatePetDiary: 180000,
     getPetDiaryRecords: 30000,
@@ -611,14 +617,15 @@ function createWorkerManager(options) {
         return new Promise((resolve, reject) => {
             const id = worker.reqId++;
             worker.requests.set(id, { resolve, reject });
-            const timeoutMs = API_CALL_TIMEOUTS_MS[method] || DEFAULT_API_CALL_TIMEOUT_MS;
+            const timeoutMs = method === 'doFarmOp' && args[0] === 'all'
+                ? 600000 : API_CALL_TIMEOUTS_MS[method] || DEFAULT_API_CALL_TIMEOUT_MS;
             managerScheduler.setTimeoutTask(`api_timeout_${accountId}_${id}`, timeoutMs, () => {
                 if (worker.requests.has(id)) {
                     worker.requests.delete(id);
                     reject(new Error('API Timeout'));
                 }
             });
-            worker.process.send({ type: 'api_call', id, method, args });
+            worker.process.send({ type: 'api_call', id, method, args, deadlineAt: Date.now() + timeoutMs });
         });
     }
     return {

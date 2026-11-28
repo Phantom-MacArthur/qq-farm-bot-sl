@@ -1,8 +1,7 @@
 import type { LegacyAutoCodeRefreshConfig } from '../../types/config';
 import type { NotificationTypes } from '../../config/notification-types';
-import type { CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, QqBotPushConfig, SystemConfig, UIConfig } from '../../types/config';
-import { normalizeNotificationTypes } from '../../config/notification-types';
-import { normalizeQqBotPushConfig } from '../../config/qq-bot-push';
+import type { CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
+import { normalizeFarmActivityEvents, normalizeNotificationTypes } from '../../config/notification-types';
 export {};
 
 const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, DEFAULT_AUTO_CODE_REFRESH: DEFAULT_OFFLINE_RECOVERY, normalizeAutoCodeRefresh: normalizeOfflineRecovery, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
@@ -76,8 +75,8 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
             channelCredentials[key]!.wxPusherUid = wxPusherUid;
         }
     }
-    const notificationTypes: Partial<NotificationTypes> = {};
-    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase'] as const) {
+    const notificationTypes: Partial<NotificationTypes> = { farmActivity: false };
+    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase', 'farmActivity'] as const) {
         const value = src.notificationTypes?.[key];
         if (typeof value === 'boolean') notificationTypes[key] = value;
     }
@@ -91,6 +90,7 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
         title,
         msg,
         notificationTypes,
+        farmActivityEvents: normalizeFarmActivityEvents(src.farmActivityEvents),
         mysteryMessages: {
             mysteryArrival: typeof src.mysteryMessages?.mysteryArrival === 'string' ? src.mysteryMessages.mysteryArrival.trim() : '神秘商人到访',
             mysteryPurchase: typeof src.mysteryMessages?.mysteryPurchase === 'string' ? src.mysteryMessages.mysteryPurchase.trim() : '神秘商人到访',
@@ -111,16 +111,6 @@ function saveGlobalConfig(changes: Partial<GlobalConfig> = {}): void {
 
 function getUI(): UIConfig {
     return { ...globalConfig.ui };
-}
-
-function getQqBotPush(): QqBotPushConfig {
-    return normalizeQqBotPushConfig(globalConfig.qqBotPush);
-}
-
-function setQqBotPush(update: Partial<QqBotPushConfig>): QqBotPushConfig {
-    const next = normalizeQqBotPushConfig({ ...getQqBotPush(), ...update });
-    saveGlobalConfig({ qqBotPush: next });
-    return next;
 }
 
 function setUITheme(theme: unknown): UIConfig {
@@ -374,8 +364,6 @@ if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
 
 module.exports = {
     saveGlobalConfig,
-    getQqBotPush,
-    setQqBotPush,
     getUI,
     setUITheme,
     getLoginSettings,

@@ -1,5 +1,7 @@
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const vm = require('node:vm');
 const test = require('node:test');
 
 const {
@@ -72,7 +74,7 @@ test('pushes use the triggering account channel and worker scheduling uses its n
     const sent = [];
     const reminder = createReloginReminderService({
         store,
-        sendPushooMessage: async ({ channel, token, title, content }) => {
+        sendNotification: async ({ channel, token, title, content }) => {
             sent.push({ channel, token, title, content });
             return { ok: true };
         },
@@ -104,4 +106,68 @@ test('pushes use the triggering account channel and worker scheduling uses its n
         mystery_shop_arrival_notify: false,
         mystery_shop_purchase_notify: true,
     });
+});
+
+test('farm activity is opt-in and only sends the selected events over the account channel', async () => {
+    const accounts = {
+        legacy: { channel: 'qmsg', token: 'mock-legacy' },
+        empty: { channel: 'qmsg', token: 'mock-empty', notificationTypes: { farmActivity: true }, farmActivityEvents: [] },
+        a: { channel: 'qmsg', token: 'mock-a', notificationTypes: { farmActivity: true }, farmActivityEvents: ['cropHarvest', 'reward'], farmActivityMessage: '提醒' },
+        b: { channel: 'bark', token: 'mock-b', notificationTypes: { farmActivity: true }, farmActivityEvents: ['animalHarvest', 'sale'] },
+    };
+    const sent = [];
+    const reminder = createReloginReminderService({
+        store: {
+            getOfflineReminder: id => accounts[id],
+            getAccounts: () => ({ accounts: [{ id: 'a', nick: '账号昵称', name: '账号备注' }, { id: 'b', name: '备用备注' }] }),
+        },
+        sendNotification: async ({ channel, token, title, content }) => {
+            sent.push({ channel, token, title, content });
+            return { ok: true };
+        },
+        log: () => {},
+    });
+    const events = [['cropHarvest', '收获作物'], ['animalHarvest', '收获动物'], ['sale', '出售成功'], ['reward', '领取奖励']];
+    for (const [activity, title] of events) {
+        for (const accountId of Object.keys(accounts)) {
+            await reminder.sendConfiguredPush({ accountId, accountName: accountId, candidates: [{ type: 'farmActivity', activity, title, content: '详情' }] });
+        }
+    }
+    assert.deepEqual(sent, [
+        { channel: 'qmsg', token: 'mock-a', title: '账号昵称', content: '详情' },
+        { channel: 'bark', token: 'mock-b', title: '备用备注', content: '详情' },
+        { channel: 'bark', token: 'mock-b', title: '备用备注', content: '详情' },
+        { channel: 'qmsg', token: 'mock-a', title: '账号昵称', content: '详情' },
+    ]);
+});
+
+test('concurrent sends share one-second slots across channels and continue after a failure', async () => {
+    const filename = require.resolve('../dist/services/push');
+    const module = { exports: {} };
+    const calls = [];
+    let now = 0;
+    const deps = {
+        'node:timers/promises': { setTimeout: async ms => { now += ms; } },
+        'axios': { default: { post: async (_url, body) => {
+            calls.push({ title: body.summary, at: now });
+            return { data: { code: 1000 } };
+        } } },
+        'pushoo': { default: async (_channel, { title }) => {
+            calls.push({ title, at: now });
+            if (title === 'failed') throw new Error('transport failed');
+            return { code: 'ok' };
+        } },
+    };
+    vm.runInNewContext(fs.readFileSync(filename, 'utf8'), {
+        module, exports: module.exports, performance: { now: () => now },
+        require: name => deps[name] ?? require(name),
+    }, { filename });
+    const { sendNotification } = module.exports;
+    const results = await Promise.allSettled([
+        sendNotification({ channel: 'qmsg', token: 'mock', title: 'failed', content: 'test' }),
+        sendNotification({ channel: 'wxpusher', token: 'SPT_mock', title: 'live', content: 'event' }),
+        sendNotification({ channel: 'bark', token: 'mock', title: 'test', content: 'test' }),
+    ]);
+    assert.deepEqual(results.map(item => item.status), ['rejected', 'fulfilled', 'fulfilled']);
+    assert.deepEqual(calls, [{ title: 'failed', at: 0 }, { title: 'live', at: 1000 }, { title: 'test', at: 2000 }]);
 });

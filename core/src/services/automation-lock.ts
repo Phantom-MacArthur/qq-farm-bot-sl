@@ -9,12 +9,12 @@ interface AutomationLockStore {
 
 const storage = new AsyncLocalStorage<AutomationLockStore>();
 const queuedTasks: Array<() => Promise<void>> = [];
-const interactiveReads: Array<() => Promise<void>> = [];
+const interactiveTasks: Array<() => Promise<void>> = [];
 let running = false;
 
 function runNextTask(): void {
     if (running) return;
-    const task = interactiveReads.shift() ?? queuedTasks.shift();
+    const task = interactiveTasks.shift() ?? queuedTasks.shift();
     if (!task) return;
     running = true;
     void Promise.resolve().then(task);
@@ -23,7 +23,7 @@ function runNextTask(): void {
 function runExclusiveAutomationTask<T>(
     taskName: string,
     taskFn: () => T | PromiseLike<T>,
-    options: { detached?: boolean; interactiveRead?: boolean } = {},
+    options: { detached?: boolean; interactiveRead?: boolean; interactive?: boolean } = {},
 ): Promise<T> {
     const store: AutomationLockStore | undefined = storage.getStore();
     if (!options.detached && store && store.exclusive && store.active) return Promise.resolve(taskFn());
@@ -42,7 +42,7 @@ function runExclusiveAutomationTask<T>(
                 runNextTask();
             }
         });
-        (options.interactiveRead ? interactiveReads : queuedTasks).push(task);
+        (options.interactive || options.interactiveRead ? interactiveTasks : queuedTasks).push(task);
         runNextTask();
     });
 }

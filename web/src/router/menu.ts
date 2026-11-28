@@ -1,3 +1,5 @@
+import type { RouteLocationNormalized } from 'vue-router'
+
 export interface MenuItem {
   path: string
   name: string
@@ -8,6 +10,7 @@ export interface MenuItem {
     fullBleed?: boolean
     gameSpace?: 'ranch'
     ranchSection?: 'ranch' | 'illustrated' | 'mall' | 'friends' | 'activity'
+    settingsPage?: 'account' | 'system'
   }
 }
 
@@ -25,6 +28,7 @@ const accountSettingsMenuItem: MenuItem = {
   label: '账号设置',
   icon: 'i-carbon-settings',
   component: () => import('@/views/Settings.vue'),
+  meta: { settingsPage: 'account' },
 }
 
 const systemSettingsMenuItem: MenuItem = {
@@ -33,7 +37,10 @@ const systemSettingsMenuItem: MenuItem = {
   label: '系统设置',
   icon: 'i-carbon-settings-services',
   component: () => import('@/views/SystemSettings.vue'),
+  meta: { settingsPage: 'system' },
 }
+
+export const settingsMenuRoutes = [accountSettingsMenuItem, systemSettingsMenuItem]
 
 export const menuRoutes: MenuItem[] = [
   overviewMenuItem,
@@ -45,50 +52,49 @@ export const menuRoutes: MenuItem[] = [
     component: () => import('@/views/Farm.vue'),
   },
   {
-    path: 'pets',
+    path: 'farm/pets',
     name: 'pets',
     label: '宠物',
     icon: 'i-carbon-dog-walker',
     component: () => import('@/views/Pets.vue'),
   },
   {
-    path: 'illustrated',
+    path: 'farm/illustrated',
     name: 'illustrated',
     label: '图鉴',
     icon: 'i-carbon-book',
     component: () => import('@/views/Illustrated.vue'),
   },
   {
-    path: 'activity',
+    path: 'farm/activity',
     name: 'activity-center',
     label: '活动',
     icon: 'i-carbon-events',
     component: () => import('@/views/ActivityCenter.vue'),
   },
   {
-    path: 'friends',
+    path: 'farm/friends',
     name: 'friends',
     label: '好友',
     icon: 'i-carbon-user-multiple',
     component: () => import('@/views/Friends.vue'),
   },
   {
-    path: 'solar-calendar',
+    path: 'farm/solar-calendar',
     name: 'solar-calendar',
     label: '节令日历',
     icon: 'i-carbon-calendar',
     component: () => import('@/views/SolarCalendar.vue'),
   },
   {
-    path: 'game-mall',
+    path: 'farm/game-mall',
     name: 'game-mall',
     // 页内已经按页签分成特惠/礼包/道具/神秘商人/SVIP 五个子商城，导航项只是入口，不再叫“游戏商城”。
     label: '商城',
     icon: 'i-carbon-shopping-cart',
     component: () => import('@/views/GameMall.vue'),
   },
-  accountSettingsMenuItem,
-  systemSettingsMenuItem,
+  ...settingsMenuRoutes,
 ]
 
 export const ranchMenuRoutes: MenuItem[] = [
@@ -100,6 +106,11 @@ export const ranchMenuRoutes: MenuItem[] = [
 ]
 
 export const allMenuRoutes = [...menuRoutes, ...ranchMenuRoutes]
+
+export function isRanchRoute(route: Pick<RouteLocationNormalized, 'meta' | 'query'>) {
+  return route.meta.gameSpace === 'ranch' || (Boolean(route.meta.settingsPage) && route.query.space === 'ranch')
+}
+
 export function getSpaceMenu(inRanch: boolean) {
-  return inRanch ? [overviewMenuItem, ...ranchMenuRoutes, accountSettingsMenuItem, systemSettingsMenuItem] : menuRoutes
+  return inRanch ? [overviewMenuItem, ...ranchMenuRoutes, ...settingsMenuRoutes] : menuRoutes
 }

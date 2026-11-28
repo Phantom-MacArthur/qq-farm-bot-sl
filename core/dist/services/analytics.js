@@ -5,8 +5,6 @@ Object.defineProperty(exports, "__esModule", { value: true });
  */
 const { getAllPlants, getFruitPrice, getSeedPrice, getItemImageById, getItemById } = require('../config/gameConfig');
 const { getCalibratedSeedPrice } = require('./seed-price-cache');
-// 无效作物黑名单（成熟仅 2 秒的白萝卜等调试条目）
-const { isInvalidSeedId } = require('../config/invalid-plants');
 function parseGrowTime(growPhases) {
     if (!growPhases)
         return 0;
@@ -41,12 +39,8 @@ function formatTime(seconds) {
 }
 function getPlantRankings(sortBy = 'exp') {
     const plants = getAllPlants();
-    // 筛选普通作物，排除无效作物（如成熟仅 2 秒的白萝卜）。
-    const normalPlants = plants.filter((p) => {
-        return !isInvalidSeedId(p.seed_id)
-            && p.seed_id > 0
-            && p.grow_phases;
-    });
+    // getAllPlants 已过滤无效作物，收益分析只需要有种子和生长数据的条目。
+    const normalPlants = plants.filter(p => p.seed_id > 0 && p.grow_phases);
     const results = [];
     for (const plant of normalPlants) {
         const baseGrowTime = parseGrowTime(plant.grow_phases);

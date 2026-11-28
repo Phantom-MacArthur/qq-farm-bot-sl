@@ -10,8 +10,9 @@ export const YISHU_END = Date.parse('2026-12-10T00:00:00+08:00') / 1000;
 const DAY_SECONDS = 86_400;
 const BEIJING_OFFSET = 8 * 3600;
 let observedActivityEnd = 0;
+let observedWindow: { start: number; end: number } | undefined;
 
-export type YishuSellMode = 'off' | 'scan' | 'auto';
+export type YishuSellMode = 'off' | 'manual' | 'scan' | 'auto';
 
 export function normalizeYishuMinPrice(value: unknown): number {
     if (typeof value !== 'number' && (typeof value !== 'string' || !value.trim())) return YISHU_MIN_PRICE;
@@ -22,7 +23,7 @@ export function normalizeYishuMinPrice(value: unknown): number {
 export function yishuSellMode(input: { yishu_sell_mode?: unknown; yishu_auto_sell?: boolean }): YishuSellMode {
     const mode = input.yishu_sell_mode;
     if (mode === 'confirm') return 'scan';
-    if (mode === 'off' || mode === 'scan' || mode === 'auto') return mode;
+    if (mode === 'off' || mode === 'manual' || mode === 'scan' || mode === 'auto') return mode;
     return input.yishu_auto_sell === false ? 'off' : 'auto';
 }
 
@@ -38,7 +39,7 @@ export function confirmedYishuQuoteDay(sample: { ms: number; nowMs: number } | n
     if (!sample || !Number.isFinite(sample.ms) || !Number.isFinite(sample.nowMs)) return '';
     const confirmed = sample.ms / 1000;
     const now = sample.nowMs / 1000;
-    if (confirmed < YISHU_START || now >= YISHU_END) return '';
+    if (!isYishuAutomationInWindow(confirmed) || !isYishuAutomationInWindow(now)) return '';
     // 零点到了但还没有新一天的服务端授时，先暂停使用报价，等服务端确认再切桶。
     const day = yishuDate(confirmed);
     return yishuDate(now) === day ? day : '';
@@ -78,8 +79,20 @@ export function yishuPlantDeadline(seconds: number, end = YISHU_END): number {
     return Math.min(yishuDayStart(seconds) + YISHU_PLANT_CUTOFF * 60, end);
 }
 
-export function observeYishuActivity(active: boolean, end: number): void {
+export function observeYishuActivity(active: boolean, end: number, start: number): void {
+    if (Number.isFinite(start) && Number.isFinite(end) && start > 0 && end > start) {
+        observedWindow = { start, end };
+    }
     observedActivityEnd = active && Number.isFinite(end) && end > 0 ? end : 0;
+}
+
+export function getYishuAutomationWindow() {
+    return observedWindow ?? { start: YISHU_START, end: YISHU_END };
+}
+
+export function isYishuAutomationInWindow(seconds: number): boolean {
+    const { start, end } = getYishuAutomationWindow();
+    return seconds >= start && seconds < end;
 }
 
 export function getYishuActivityEnd(seconds: number): number {

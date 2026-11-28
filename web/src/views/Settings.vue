@@ -79,18 +79,19 @@ function getInitialSettingsTab(): SettingsTab {
 const activeTab = ref<SettingsTab>(getInitialSettingsTab())
 
 watch(activeTab, (newTab) => {
-  if (route.name !== 'Settings')
+  if (route.meta.settingsPage !== 'account')
     return
   localStorage.setItem('settings-active-tab', newTab)
   if (String(route.query.tab || '') !== newTab) {
     router.replace({
       query: { ...route.query, tab: newTab },
+      hash: route.hash,
     })
   }
 })
 
 watch(() => route.query.tab, (value) => {
-  if (route.name !== 'Settings')
+  if (route.meta.settingsPage !== 'account')
     return
   const nextTab = normalizeSettingsTab(String(value || ''))
   if (nextTab && nextTab !== activeTab.value)

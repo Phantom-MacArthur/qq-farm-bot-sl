@@ -103,6 +103,22 @@ test('farm successful operation remains successful when its follow-up refresh fa
   assert.equal(store.farmOperationPending, false)
 })
 
+test('farm submits one selected-land operation and refreshes the snapshot without delaying its result', async t => {
+  const refresh = deferred()
+  const posts = []
+  const { store } = harness(t, 'farm', {
+    post: async (url, payload) => { posts.push({ url, payload }); return ok({ hadWork: true }) },
+    get: () => refresh.promise,
+  })
+  const result = await store.operate('a', 'clear', [1, 3])
+  assert.equal(result.hadWork, true)
+  assert.deepEqual(posts, [{ url: '/api/farm/operate', payload: { opType: 'clear', landId: [1, 3] } }])
+  assert.equal(store.refreshing, true)
+  refresh.resolve(ok({ lands: [{ id: 1 }] }))
+  await store.fetchLands('a')
+  assert.equal(store.lands[0].id, 1)
+})
+
 test('ranch caches same-account views separately and shows cache during refresh', async t => {
   const reads = []
   const { store } = harness(t, 'ranch', { get: () => { const d = deferred(); reads.push(d); return d.promise } })

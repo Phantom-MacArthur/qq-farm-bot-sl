@@ -20,7 +20,7 @@ import { useAccountOffline } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore, type YishuHuanfuFriendShopDto } from '@/stores/activity-center'
 import { useSettingStore } from '@/stores/setting'
-import { yishuAutomationDraft } from '@/utils/account-feature-modules'
+import { yishuAutomationDraft, yishuSellMode } from '@/utils/account-feature-modules'
 import { useActivityClock } from './useActivityClock'
 import YishuHuanfuFarmStatus from './YishuHuanfuFarmStatus.vue'
 import YishuHuanfuHistory from './YishuHuanfuHistory.vue'
@@ -32,6 +32,12 @@ const activityStore = useActivityCenterStore()
 const settingsStore = useSettingStore()
 const offline = useAccountOffline()
 const { currentAccountId } = storeToRefs(accountStore)
+const quoteMode = computed(() => {
+  if (settingsStore.loadedAccountId !== currentAccountId.value)
+    return null
+  const automation = settingsStore.settings.automation
+  return automation.activity_enabled === false ? 'off' : yishuSellMode(automation)
+})
 const {
   yishuHuanfu,
   loading,
@@ -198,7 +204,7 @@ async function refreshActivity() {
       farmRefreshVersion.value++
       await Promise.allSettled([
         activityStore.loadYishuHuanfuCatalog(id),
-        activityStore.loadYishuHuanfuShop(id),
+        quoteMode.value && quoteMode.value !== 'off' ? activityStore.loadYishuHuanfuShop(id) : undefined,
         loadHistory(),
       ])
     }
@@ -219,14 +225,15 @@ function loadCatalog() {
 
 function loadShopQuota() {
   const id = accountId()
-  if (!id || offline.value || !yishuHuanfu.value || yishuHuanfu.value.shop.quota !== null)
+  if (!id || offline.value || !yishuHuanfu.value || yishuHuanfu.value.shop.quota !== null
+    || !['scan', 'auto'].includes(quoteMode.value ?? ''))
     return
   activityStore.loadYishuHuanfuShop(id)
 }
 
 // 账号切换、或详情首次到位时补一次；已有值时不重复请求。
 watch(
-  () => [currentAccountId.value, yishuHuanfu.value?.activityId, yishuHuanfu.value?.catalogLoaded, yishuHuanfu.value?.shop.quota],
+  () => [currentAccountId.value, quoteMode.value, yishuHuanfu.value?.activityId, yishuHuanfu.value?.catalogLoaded, yishuHuanfu.value?.shop.quota],
   () => {
     loadCatalog()
     loadShopQuota()
@@ -527,6 +534,7 @@ onBeforeUnmount(() => {
               :friend-shops="compareShops"
               :friend-shops-loading="yishuHuanfuFriendShopsLoading"
               :manual-pending="yishuHuanfuManualPending"
+              :quote-mode="quoteMode"
               :friend-scan-note="yishuHuanfuFriendScanNote"
               @sell="openSale"
               @exchange="(index, count) => activityStore.exchangeYishuHuanfuGoods(accountId(), index, count)"

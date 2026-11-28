@@ -55,8 +55,6 @@ module.exports = {
     getAutoCodeRefresh: globalConfig.getAutoCodeRefresh,
     setAutoCodeRefresh: globalConfig.setAutoCodeRefresh,
     getOfflineReminder: globalConfig.getOfflineReminder,
-    getQqBotPush: globalConfig.getQqBotPush,
-    setQqBotPush: globalConfig.setQqBotPush,
     setOfflineReminder: globalConfig.setOfflineReminder,
     getOfflineReminderDefault: globalConfig.getOfflineReminderDefault,
     setOfflineReminderDefault: globalConfig.setOfflineReminderDefault,

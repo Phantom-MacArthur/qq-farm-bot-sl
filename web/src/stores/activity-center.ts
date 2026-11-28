@@ -449,6 +449,7 @@ export interface YishuHuanfuFriendShopDto {
   quotedAt?: number
   quoteDay?: string
   quotePending?: boolean
+  quoteShareExpired?: boolean
   sharedToday?: boolean
 }
 
@@ -474,6 +475,7 @@ export interface YishuHuanfuFriendScanDto {
   ownShop: YishuHuanfuFriendShopDto | null
   scanned: number
   failed: number
+  shareExpiredCount?: number
   friendCount: number
   panelFriendCount: number
   candidateCount: number
@@ -2667,26 +2669,32 @@ export const useActivityCenterStore = defineStore('activity-center', () => {
           quotedAt: finiteNumber(entry.quotedAt) || undefined,
           sharedToday: bool(entry.sharedToday),
           quotePending: bool(entry.quotePending),
+          quoteShareExpired: bool(entry.quoteShareExpired),
         }
       })
       yishuHuanfuFriendScanAt.value = finiteNumber(first(payload.scannedAt, payload.scanned_at)) || 0
       yishuHuanfuFriendQuoteDay.value = typeof payload.day === 'string' ? payload.day : null
       yishuHuanfuManualPending.value = finiteNumber(payload.manualPending) || 0
       const failed = finiteNumber(first(payload.failed)) || 0
+      const shareExpiredCount = finiteNumber(payload.shareExpiredCount) || 0
+      const otherFailed = Math.max(0, failed - shareExpiredCount)
       const friendListError = text(payload.friendListError, payload.friend_list_error)
       const panelScannedCount = yishuHuanfuFriendShops.value.filter(shop => shop.via === 'panel').length
       const pendingCount = finiteNumber(first(payload.pendingCount, payload.pending_count)) || 0
       const candidateCount = finiteNumber(payload.candidateCount) || 0
       const scannedCount = yishuHuanfuFriendShops.value.filter(shop => !shop.quotePending).length
-      yishuHuanfuFriendScanNote.value = friendListError
-        || (yishuHuanfuManualPending.value ? `正在刷新，剩余 ${yishuHuanfuManualPending.value} 家` : '')
+      const scanProgress = friendListError
         || text(payload.message)
+        || (yishuHuanfuManualPending.value ? `正在刷新，剩余 ${yishuHuanfuManualPending.value} 家` : '')
         || (candidateCount || yishuHuanfuFriendShops.value.length
           ? `已查 ${scannedCount} / ${candidateCount || yishuHuanfuFriendShops.value.length} 家`
             + (panelScannedCount ? ` · 其他账号好友 ${panelScannedCount} 家` : '')
             + (pendingCount ? ` · 待查 ${pendingCount} 家` : '')
-            + (failed ? ` · 查询失败 ${failed} 家` : '')
+            + (otherFailed ? ` · 查询失败 ${otherFailed} 家` : '')
           : '暂无报价')
+      yishuHuanfuFriendScanNote.value = shareExpiredCount
+        ? `${scanProgress} · ${shareExpiredCount} 家分享链接已失效`
+        : scanProgress
       const day = yishuHuanfuFriendQuoteDay.value
       if (day) {
         yishuQuoteCache.set(requestedAccountId, {

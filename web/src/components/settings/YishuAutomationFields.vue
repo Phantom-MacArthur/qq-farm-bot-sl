@@ -42,8 +42,8 @@ const startTimeId = useId()
             :max="200"
             :input-props="{ 'aria-label': '每批查价上限', 'aria-describedby': scanLimitNoteId, 'inputmode': 'numeric' }"
           />
-          <BaseInput v-model.number="settings.yishu_scan_interval_minutes" label="比价间隔（分钟）" type="number" :min="5" :max="720" />
-          <BaseInput v-if="settings.yishu_sell_mode !== 'scan'" v-model.number="settings.yishu_sell_min_count" label="起卖数量" type="number" :min="1" :max="10000" />
+          <BaseInput v-if="settings.yishu_sell_mode !== 'manual'" v-model.number="settings.yishu_scan_interval_minutes" label="比价间隔（分钟）" type="number" :min="5" :max="720" />
+          <BaseInput v-if="settings.yishu_sell_mode === 'auto'" v-model.number="settings.yishu_sell_min_count" label="起卖数量" type="number" :min="1" :max="10000" />
           <div v-if="settings.yishu_sell_mode === 'auto'" class="base-field">
             <label :id="startTimeId" class="base-field__label">最早出售时间</label>
             <NTimePicker
@@ -56,7 +56,7 @@ const startTimeId = useId()
             />
           </div>
           <BaseInput
-            v-if="settings.yishu_sell_mode !== 'scan'"
+            v-if="settings.yishu_sell_mode === 'auto'"
             v-model.number="settings.yishu_sell_min_price"
             label="最低收购报价"
             type="number"
@@ -68,9 +68,10 @@ const startTimeId = useId()
         </div>
         <p :id="scanLimitNoteId" class="yishu-field-note">
           <span class="i-carbon-information" aria-hidden="true" />
-          <span>后台每 10 秒查一家，每轮最多查询设定的家数。报价按当天累积，手动比价每 3 秒刷新一家零基础价或零加成的铺子。</span>
+          <span v-if="settings.yishu_sell_mode === 'manual'">在活动页点击「开始询价」后，每 3 秒查一家，每轮最多查询设定的家数。</span>
+          <span v-else>后台每 10 秒查一家，每轮最多查询设定的家数。报价按当天累积，手动比价每 3 秒刷新一家零基础价或零加成的铺子。</span>
         </p>
-        <template v-if="settings.yishu_sell_mode !== 'scan'">
+        <template v-if="settings.yishu_sell_mode === 'auto'">
           <p class="yishu-field-note">
             <span class="i-carbon-time" aria-hidden="true" />
             <span>从设定的北京时间起每半小时检查一次。自家和其他铺子按达到最低报价的价格顺序出售，23:55 停发新单。</span>

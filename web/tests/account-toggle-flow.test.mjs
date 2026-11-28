@@ -72,8 +72,9 @@ test('switching the selected account drops previous HTTP and socket logs before 
 
 function makePresenceHarness(t) {
   const messages = []
+  let backendUnavailable = 0
   const apiModule = loadSource('../src/api/index.ts', {
-    '@/stores/app-update': { useAppUpdateStore: () => ({ reconnecting: false, notifyBackendReachable() {}, notifyBackendUnavailable() {}, observeBuildId() {} }) },
+    '@/stores/app-update': { useAppUpdateStore: () => ({ reconnecting: false, notifyBackendReachable() {}, notifyBackendUnavailable() { backendUnavailable++ }, observeBuildId() {} }) },
     '@/utils/panel-update': loadSource('../src/utils/panel-update.ts'),
     '@vueuse/core': { useStorage: (_key, defaultValue) => vue.ref(defaultValue) },
     '@/stores/toast': { useToastStore: () => ({ error: message => messages.push(message) }) },
@@ -93,8 +94,21 @@ function makePresenceHarness(t) {
     status.status = { accountId: id, connection: { connected: true } }
     apiModule.confirmAccountConnection(id, true, response)
   }
-  return { account, status, api: apiModule.default, presence, messages, connect, refreshes: () => refreshes }
+  return { account, status, api: apiModule.default, presence, messages, connect, refreshes: () => refreshes, backendUnavailable: () => backendUnavailable }
 }
+
+test('a farm request timing out does not mark the backend or the account offline', async t => {
+  const { account, api, presence, connect, backendUnavailable } = makePresenceHarness(t)
+  account.currentAccountId = 'a'
+  connect('a')
+  const timeout = Object.assign(new Error('timeout of 10000ms exceeded'), { code: 'ECONNABORTED', request: {} })
+  await assert.rejects(api.post('/api/farm/operate', { opType: 'all' }, {
+    skipErrorToast: true,
+    adapter: async () => { throw timeout },
+  }), /timeout/)
+  assert.equal(backendUnavailable(), 0)
+  assert.equal(presence.value, 'online')
+})
 
 test('account offline responses replace the toast and reconnect refreshes the current page once', async (t) => {
   const { account, status, api, presence, messages, connect, refreshes } = makePresenceHarness(t)

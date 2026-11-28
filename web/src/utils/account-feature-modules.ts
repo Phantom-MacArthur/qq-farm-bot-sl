@@ -43,9 +43,10 @@ export const YISHU_AUTOMATION_DEFAULTS = {
 }
 
 export const YISHU_SELL_MODES = [
-  { value: 'off', label: '关闭卖薯与后台比价' },
-  { value: 'scan', label: '仅比价' },
-  { value: 'auto', label: '按策略自动卖' },
+  { value: 'off', label: '不询价也不卖薯' },
+  { value: 'manual', label: '仅询价' },
+  { value: 'scan', label: '询价但不卖薯' },
+  { value: 'auto', label: '自动询价并卖薯' },
 ] as const
 
 export function yishuSellMode(automation: Record<string, any>) {

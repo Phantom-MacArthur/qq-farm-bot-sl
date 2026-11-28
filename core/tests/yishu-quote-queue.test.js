@@ -26,9 +26,9 @@ function harness(list, getPrice = () => ({ price: '200', bonus: '40' })) {
         save: (day, rows) => { cachedDays.set(day, rows); },
     };
     let queue = createYishuQuoteQueue(deps);
-    return { get queue() { return queue; }, cachedDays, requests, async tick(at, limit = 200) {
+    return { get queue() { return queue; }, cachedDays, requests, async tick(at, limit = 200, enabled = true, manualEnabled = true) {
         time = at;
-        await queue.tick({ limit, intervalMs: 30 * 60_000, enabled: () => true, ready: () => true });
+        await queue.tick({ limit, intervalMs: 30 * 60_000, enabled: () => enabled, manualEnabled: () => manualEnabled, ready: () => true });
     }, setDay(next) { day = next; }, nextDay() { day = '2026-11-28'; }, restart() { queue = createYishuQuoteQueue(deps); } };
 }
 
@@ -58,8 +58,8 @@ test('background compares one shop per ten seconds and keeps more than sixty quo
 test('manual refresh only queues already queried zero components, with three-second spacing', async () => {
     const h = harness(targets(4), gid => ({ price: gid === '1' ? '0' : '200', bonus: gid === '2' ? '0' : '40' }));
     for (let index = 0; index < 3; index++) await h.tick(index * 10000);
-    assert.equal(h.queue.refreshZeroQuotes().manualPending, 2);
-    assert.equal(h.queue.refreshZeroQuotes().manualPending, 2);
+    assert.equal(h.queue.refreshQuotes().manualPending, 2);
+    assert.equal(h.queue.refreshQuotes().manualPending, 2);
     await h.tick(22999);
     assert.equal(h.requests.length, 3);
     await h.tick(23000);
@@ -74,10 +74,42 @@ test('manual refresh only queues already queried zero components, with three-sec
     assert.equal(h.requests.at(-1).gid, '4');
 });
 
+test('disabled background quotes leave manual refresh available and resume when enabled', async () => {
+    const h = harness(targets(2), () => ({ price: '200', bonus: '0' }));
+    await h.tick(0);
+    h.queue.setOnlineTargets([{ gid: '3', via: 'account' }]);
+    await h.tick(10000, 200, false);
+    assert.deepEqual(h.requests.map(request => request.gid), ['1']);
+    assert.equal(h.queue.refreshQuotes().manualPending, 1);
+    await h.tick(11000, 200, false);
+    await h.tick(21000, 200, false);
+    assert.deepEqual(h.requests.map(request => request.gid), ['1', '1']);
+    await h.tick(22000);
+    assert.equal(h.requests.at(-1).gid, '3');
+});
+
+test('manual mode starts from an empty cache only after a click and off mode clears the rest', async () => {
+    const h = harness(targets(3));
+    await h.tick(0, 2, false);
+    assert.deepEqual(h.requests, []);
+    assert.equal(h.queue.refreshQuotes(true).manualPending, 1);
+    assert.equal(h.queue.refreshQuotes(true).manualPending, 1);
+    await h.tick(1000, 2, false);
+    assert.equal(h.queue.snapshot().manualPending, 1);
+    await h.tick(3999, 2, false);
+    await h.tick(4000, 2, false);
+    await h.tick(14000, 2, false);
+    assert.deepEqual(h.requests, [{ at: 1000, gid: '1' }, { at: 4000, gid: '2' }]);
+    h.queue.refreshQuotes(true);
+    await h.tick(15000, 2, false, false);
+    assert.equal(h.queue.snapshot().manualPending, 0);
+    assert.equal(h.requests.length, 2);
+});
+
 test('an unconfirmed date only pauses access and a confirmed rollover cannot go backwards after restart', async () => {
     const h = harness(targets(1), () => ({ price: '230', bonus: '0' }));
     await h.tick(0);
-    assert.equal(h.queue.refreshZeroQuotes().manualPending, 1);
+    assert.equal(h.queue.refreshQuotes().manualPending, 1);
     h.setDay('');
     assert.equal(h.queue.snapshot().scanned, 0);
     assert.equal(h.queue.snapshot().manualPending, 0);

@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const farm_activity_events_1 = require("./farm-activity-events");
 /**
  * 仓库系统 - 自动出售果实
  * 协议说明：BagReply 使用 item_bag（ItemBag），item_bag.items 才是背包物品列表
@@ -66,7 +67,13 @@ function toSellItem(item) {
         payload.uid = toLong(uidNum);
     return payload;
 }
-async function sellItems(items) {
+function describeSoldItems(items) {
+    return items.map(item => `${getItemById(toNum(item.id))?.name || getFruitName(toNum(item.id))} ×${toNum(item.count)}`).join('、');
+}
+function confirmedSoldItems(reply) {
+    return (reply.sell_items || []).filter((item) => toNum(item.id) > 0 && toNum(item.count) > 0);
+}
+async function sellItems(items, notify = true) {
     const requested = Array.isArray(items) ? items : [];
     if (requested.length === 0)
         throw new Error('没有可出售的物品');
@@ -94,7 +101,13 @@ async function sellItems(items) {
     const payload = requested.map(toSellItem);
     const body = types.SellRequest.encode(types.SellRequest.create({ items: payload })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'Sell', body);
-    return types.SellReply.decode(replyBody);
+    const reply = types.SellReply.decode(replyBody);
+    if (notify) {
+        const soldItems = confirmedSoldItems(reply);
+        if (soldItems.length)
+            farm_activity_events_1.farmActivityEvents.emit('activity', 'sale', `出售完成：${describeSoldItems(soldItems)}`);
+    }
+    return reply;
 }
 async function useItem(itemId, count = 1, landIds = [], uid = 0) {
     if (landIds.length > 0)
@@ -707,10 +720,12 @@ async function sellAllFruits() {
         const goldBefore = totalsBefore.gold;
         let serverGoldTotal = 0;
         let knownGold = goldBefore;
+        const soldItems = [];
         for (let i = 0; i < toSell.length; i += SELL_BATCH_SIZE) {
             const batch = toSell.slice(i, i + SELL_BATCH_SIZE);
             try {
-                const reply = await sellItems(batch);
+                const reply = await sellItems(batch, false);
+                soldItems.push(...confirmedSoldItems(reply));
                 const inferred = deriveGoldGainFromSellReply(reply, knownGold);
                 const gained = Math.max(0, toNum(inferred.gain));
                 knownGold = inferred.nextKnownGold;
@@ -722,7 +737,8 @@ async function sellAllFruits() {
                 logWarn('仓库', `批量出售失败，改为逐个重试: ${batchErr.message}`);
                 for (const it of batch) {
                     try {
-                        const singleReply = await sellItems([it]);
+                        const singleReply = await sellItems([it], false);
+                        soldItems.push(...confirmedSoldItems(singleReply));
                         const inferred = deriveGoldGainFromSellReply(singleReply, knownGold);
                         const gained = Math.max(0, toNum(inferred.gain));
                         knownGold = inferred.nextKnownGold;
@@ -772,6 +788,10 @@ async function sellAllFruits() {
             catch { }
         }
         const totalGoldEarned = Math.max(serverGoldTotal, totalGoldDelta, bagDelta);
+        if (soldItems.length) {
+            const gain = totalGoldEarned > 0 ? `，获得 ${totalGoldEarned} 金币` : '';
+            farm_activity_events_1.farmActivityEvents.emit('activity', 'sale', `出售完成：${describeSoldItems(soldItems)}${gain}`);
+        }
         if (totalGoldDelta <= 0 && totalGoldEarned > 0) {
             // 某些情况下 ItemNotify 丢失，使用出售回包做金币兜底同步
             const state = getUserState();
@@ -786,9 +806,6 @@ async function sellAllFruits() {
             result: totalGoldEarned > 0 ? 'ok' : 'unknown_gain',
             count: toSell.length,
             gold: totalGoldEarned,
-            // QQ 机器人推送用：取首个出售物品，供图标查表
-            itemId: toSell.length > 0 ? toNum(toSell[0].id) : 0,
-            itemName: toSell.length > 0 ? getFruitName(toNum(toSell[0].id)) : '',
             totalsBefore,
             totalsAfter,
             totalsDeltaGold,

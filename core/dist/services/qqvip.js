@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const daily_completion_1 = require("./daily-completion");
 /**
  * QQ 会员每日礼包
  */
@@ -96,11 +97,14 @@ async function claimQQVipRewards(rewardTypes) {
 }
 async function performDailyVipGift(force = false) {
     const now = Date.now();
+    if ((0, daily_completion_1.isDailyComplete)('farm_vip_gift'))
+        return false;
     if (!force && isDoneToday())
         return false;
     if (!force && now - lastCheckAt < CHECK_COOLDOWN_MS)
         return false;
     lastCheckAt = now;
+    const check = (0, daily_completion_1.beginDailyCheck)('farm_vip_gift');
     // A forced recheck must not leave an earlier "done" flag hiding a failure.
     doneDateKey = '';
     lastError = '';
@@ -129,12 +133,19 @@ async function performDailyVipGift(force = false) {
         return false;
     }
     const rewardStatuses = Array.isArray(status.reward_statuses) ? status.reward_statuses : [];
+    const dailyTypes = new Set(rewardStatuses.filter(item => item?.is_enable === true && toNum(item.type) === 1 && toNum(item.reward_type) > 0)
+        .map(item => toNum(item.reward_type)));
+    if (status.claimed_today === true && status.can_claim !== true) {
+        for (const type of dailyTypes)
+            (0, daily_completion_1.recordDailyMark)(check, 'completed', { item: `reward:${type}` });
+    }
     const rewardTypes = [...new Set(rewardStatuses
             .filter((item) => item?.is_enable === true
             && (toNum(item.type) === 1 ? status.can_claim === true : status.rewards_can_claim === true))
             .map((item) => toNum(item.reward_type))
-            .filter((rewardType) => Number.isSafeInteger(rewardType) && rewardType > 0))];
-    const mallCanClaim = status.mall_free_can_claim === true;
+            .filter((rewardType) => Number.isSafeInteger(rewardType) && rewardType > 0
+            && (!dailyTypes.has(rewardType) || !(0, daily_completion_1.isDailyComplete)('farm_vip_gift', `reward:${rewardType}`))))];
+    const mallCanClaim = status.mall_free_can_claim === true && !(0, daily_completion_1.isDailyComplete)('farm_vip_gift', 'svip_mall');
     lastHasGift = rewardStatuses.some((item) => item?.is_enable === true) || mallCanClaim;
     lastCanClaim = rewardTypes.length > 0 || mallCanClaim;
     // 展示用：已启用奖励的物品清单（领取前后都有）
@@ -149,6 +160,10 @@ async function performDailyVipGift(force = false) {
     if (rewardTypes.length > 0) {
         try {
             const rep = await claimQQVipRewards(rewardTypes);
+            for (const type of rewardTypes) {
+                if (dailyTypes.has(type))
+                    (0, daily_completion_1.recordDailyMark)(check, 'completed', { item: `reward:${type}` });
+            }
             const items = Array.isArray(rep?.items) ? rep.items : [];
             recordFarmReward('vip_daily_gift', describeRewardItems(items), '会员礼包');
             const reward = getRewardSummary(items);
@@ -191,6 +206,11 @@ async function performDailyVipGift(force = false) {
         lastError = errors.join('；');
     }
     else {
+        if (dailyTypes.size > 0 && [...dailyTypes].every(type => (0, daily_completion_1.isDailyComplete)('farm_vip_gift', `reward:${type}`))
+            && !rewardStatuses.some(item => item?.is_enable === true && toNum(item.type) !== 1)
+            && (!status.mall_free_can_claim || (0, daily_completion_1.isDailyComplete)('farm_vip_gift', 'svip_mall'))) {
+            (0, daily_completion_1.recordDailyMark)(check, 'completed');
+        }
         markDoneToday();
         lastCanClaim = false;
         lastResult = claimed || alreadyClaimed ? 'ok' : 'none';
@@ -203,13 +223,29 @@ async function performDailyVipGift(force = false) {
 async function claimSvipMallFreeGift(status) {
     if (status.is_qq_vip !== true || status.mall_free_can_claim !== true)
         return false;
+    if ((0, daily_completion_1.isDailyComplete)('farm_vip_gift', 'svip_mall'))
+        return false;
+    const check = (0, daily_completion_1.beginDailyCheck)('farm_vip_gift');
     const mall = require('./mall');
     const reply = await mall.getMallListBySlotType(4);
-    const goods = (reply.goods_list || []).filter((v) => v.is_free === true && v.is_available === true
-        && toNum(v.price?.count) === 0 && !v.ad_only && !v.share?.share_only
-        && !v.is_owned && (!v.purchase_limit || toNum(v.purchase_limit.limit_count) <= 0 || toNum(v.purchase_limit.bought_count) < toNum(v.purchase_limit.limit_count)));
-    for (const product of goods)
-        await mall.purchaseMallGoods(toNum(product.goods_id), 1, 4, { id: toNum(product.price?.id), count: 0 });
+    const catalog = (reply.goods_list || []).filter((v) => v.is_free === true && toNum(v.price?.count) === 0 && !v.ad_only && !v.share?.share_only);
+    const complete = (product) => (0, daily_completion_1.isDailyComplete)('farm_vip_gift', `mall:${product.goods_id}`);
+    const exhausted = (limit, delta = 0) => toNum(limit?.limit_type) === 1 && toNum(limit.limit_count) > 0
+        && toNum(limit.bought_count) + delta >= toNum(limit.limit_count);
+    for (const product of catalog) {
+        if (exhausted(product.purchase_limit))
+            (0, daily_completion_1.recordDailyMark)(check, 'completed', { item: `mall:${product.goods_id}` });
+    }
+    const goods = catalog.filter((v) => v.is_available === true && !v.is_owned && !complete(v)
+        && (!v.purchase_limit || toNum(v.purchase_limit.limit_count) <= 0 || toNum(v.purchase_limit.bought_count) < toNum(v.purchase_limit.limit_count)));
+    for (const product of goods) {
+        const receipt = await mall.purchaseMallGoods(toNum(product.goods_id), 1, 4, { id: toNum(product.price?.id), count: 0 });
+        if (exhausted(receipt?.purchase_limit) || exhausted(product.purchase_limit, 1)) {
+            (0, daily_completion_1.recordDailyMark)(check, 'completed', { item: `mall:${product.goods_id}` });
+        }
+    }
+    if (catalog.length && catalog.every(complete))
+        (0, daily_completion_1.recordDailyMark)(check, 'completed', { item: 'svip_mall' });
     return goods.length > 0;
 }
 module.exports = {
@@ -219,7 +255,7 @@ module.exports = {
     performDailyVipGift,
     getVipDailyState: () => ({
         key: DAILY_KEY,
-        doneToday: isDoneToday(),
+        doneToday: isDoneToday() || (0, daily_completion_1.isDailyComplete)('farm_vip_gift'),
         lastCheckAt,
         lastClaimAt,
         result: lastResult,

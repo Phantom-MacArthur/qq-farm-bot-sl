@@ -1,4 +1,4 @@
-export {};
+import { isDailyComplete } from '../daily-completion';
 
 /**
  * 牧场每日礼包与任务的自动领取。
@@ -124,7 +124,7 @@ async function claimBenefit(): Promise<void> {
     const now = Date.now();
     try {
         const outcome = await dailyBenefit.claim();
-        benefit = { ...benefit, doneToday: true, lastAt: outcome.claimed && !outcome.skipped ? now : 0, nextCheckAt: 0, result: outcome.claimed ? 'ok' : 'none', lastError: '' };
+        benefit = { ...benefit, doneToday: outcome.claimed, lastAt: outcome.claimed && !outcome.skipped ? now : 0, nextCheckAt: outcome.claimed ? 0 : now + RETRY_MS, result: outcome.claimed ? 'ok' : 'none', lastError: '' };
         if (!outcome.skipped) log('牧场', `每日福利已领取：${rewardText(outcome.rewards)}`, { module: 'ranch', event: 'ranch_daily_benefit', result: 'ok' });
     } catch (error: any) {
         const unknown = isUnknown(error);
@@ -135,7 +135,7 @@ async function claimBenefit(): Promise<void> {
 
 function getBenefitRoutineState(): { doneToday: boolean, nextCheckAt: number } {
     benefit = today(benefit);
-    return { doneToday: benefit.doneToday || !isUnlocked() || !!dailyBenefit.getCachedState()?.claimed, nextCheckAt: benefit.nextCheckAt };
+    return { doneToday: benefit.doneToday || !isUnlocked() || isDailyComplete('ranch_daily_benefit') || !!dailyBenefit.getCachedState()?.claimed, nextCheckAt: benefit.nextCheckAt };
 }
 
 /** 供每日例程判断是否到期：分享以游戏端领取标记为准，任务按复查间隔。 */
@@ -158,7 +158,7 @@ function getOverview(taskEnabled: boolean, shareEnabled = true, benefitEnabled =
     return {
         unlocked,
         gifts: [
-            { key: 'mall_free_gifts', label: '每日福利', enabled: benefitEnabled, doneToday: !!dailyBenefit.getCachedState()?.claimed || benefit.doneToday && benefit.result !== 'error', lastAt: benefit.lastAt, result: ['error', 'none'].includes(benefit.result) ? benefit.result : '', lastError: benefit.lastError },
+            { key: 'mall_free_gifts', label: '每日福利', enabled: benefitEnabled, doneToday: isDailyComplete('ranch_daily_benefit') || !!dailyBenefit.getCachedState()?.claimed || benefit.doneToday && benefit.result !== 'error', lastAt: benefit.lastAt, result: ['error', 'none'].includes(benefit.result) ? benefit.result : '', lastError: benefit.lastError },
             { key: 'task_claim', label: '每日任务', enabled: taskEnabled, lastAt: tasks.lastAt, result: tasks.result === 'error' ? 'error' : '', lastError: tasks.lastError },
             { key: 'daily_share', label: '分享礼包', enabled: shareEnabled, mode: 'auto_claim', doneToday: shareClaimed() || (share.doneToday && !['error', 'locked'].includes(share.result)), lastAt: share.lastAt,
                 result: share.result === 'error' ? 'error' : '', lastError: share.lastError },

@@ -205,7 +205,6 @@ function createRuntimeState(options: RuntimeStateOptions) {
                 const TAG_MODULE: Record<string, string> = {
                     '农场': 'farm', '好友': 'friend', '仓库': 'warehouse',
                     '牧场': 'ranch', '任务': 'task', '系统': 'system', '错误': 'system',
-                    'QQ机器人': 'qqbot',
                 };
                 const tagModule = TAG_MODULE[tag] || '';
                 const modules = moduleName.split(',').map(s => s.trim()).filter(Boolean);

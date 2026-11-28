@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const daily_completion_1 = require("./daily-completion");
 /**
  * 每日分享礼包
  */
-const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
+const { getDailyShareInfo, sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, getSystemDateKey } = require('../utils/utils');
 const { describeRewardItems } = require('../utils/reward-items');
@@ -43,12 +44,13 @@ async function reportShare() {
     const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', body);
     types.ReportShareReply.decode(replyBody);
 }
-async function claimShareReward() {
+async function claimShareReward(onSent) {
     const body = types.ClaimShareRewardRequest.encode(types.ClaimShareRewardRequest.create({
         field_1: true,
     })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ClaimShareReward', body, {
         expectedErrorCodes: [SHARE_REWARD_ALREADY_CLAIMED],
+        onSent,
     });
     return types.ClaimShareRewardReply.decode(replyBody);
 }
@@ -61,11 +63,19 @@ async function reportActivityShare(source, scene) {
 }
 async function checkDailyShareStatus(force = false) {
     const now = Date.now();
-    if (claimedDateKey === getSystemDateKey())
+    if (claimedDateKey === getSystemDateKey() || (0, daily_completion_1.isDailyComplete)('farm_daily_share'))
         return false;
     if (!force && now - lastCheckAt < CHECK_COOLDOWN_MS)
         return false;
     lastCheckAt = now;
+    const check = (0, daily_completion_1.beginDailyCheck)('farm_daily_share');
+    const recorded = getDailyShareInfo?.(1);
+    if (check && recorded?.dateKey === check.dateKey && recorded.claimed === true) {
+        (0, daily_completion_1.recordDailyMark)(check, 'completed');
+        return false;
+    }
+    if ((0, daily_completion_1.getDailyMark)('farm_daily_share')?.status === 'pending_confirmation')
+        return false;
     try {
         const reply = await checkCanShare();
         canShare = !!(reply && reply.can_share);
@@ -81,9 +91,10 @@ async function checkDailyShareStatus(force = false) {
             return true;
         }
         await reportShare();
-        const claimReply = await claimShareReward();
+        const claimReply = await claimShareReward(() => (0, daily_completion_1.recordDailyMark)(check, 'pending_confirmation'));
         const items = Array.isArray(claimReply?.items) ? claimReply.items : [];
         claimedDateKey = checkedDateKey;
+        (0, daily_completion_1.recordDailyMark)(check, 'completed');
         lastClaimAt = Date.now();
         lastRewards = describeRewardItems(items);
         recordFarmReward('daily_share', lastRewards);
@@ -99,6 +110,7 @@ async function checkDailyShareStatus(force = false) {
     catch (e) {
         if (isAlreadyClaimedError(e)) {
             claimedDateKey = getSystemDateKey();
+            (0, daily_completion_1.recordDailyMark)(check, 'completed');
             checkedDateKey = claimedDateKey;
             lastClaimAt = Date.now();
             checkStatus = 'already_claimed';
@@ -109,6 +121,8 @@ async function checkDailyShareStatus(force = false) {
             });
             return true;
         }
+        if (/^\d+$/.test(String(e?.code || '')))
+            (0, daily_completion_1.recordDailyMark)(check, 'clear_pending');
         canShare = null;
         checkStatus = 'check_failed';
         log('分享', `状态检查失败: ${e.message}`, {
@@ -129,7 +143,7 @@ module.exports = {
         checkedToday: isCheckedToday(),
         checkStatus,
         canShare,
-        doneToday: claimedDateKey === getSystemDateKey(),
+        doneToday: claimedDateKey === getSystemDateKey() || (0, daily_completion_1.isDailyComplete)('farm_daily_share'),
         lastCheckAt,
         lastClaimAt,
         rewards: claimedDateKey === getSystemDateKey() ? lastRewards : [],

@@ -133,6 +133,13 @@ export interface OfflineChannelCredential {
   wxPusherUid: string
 }
 
+export const FARM_ACTIVITY_OPTIONS = [
+  { value: 'cropHarvest', label: '收获作物' },
+  { value: 'animalHarvest', label: '收获动物' },
+  { value: 'sale', label: '出售成功' },
+  { value: 'reward', label: '领取奖励' },
+] as const
+
 export interface OfflineConfig {
   channel: string
   endpoint: string
@@ -142,8 +149,9 @@ export interface OfflineConfig {
   channelCredentials: Record<string, OfflineChannelCredential>
   title: string
   msg: string
-  notificationTypes: { offline: boolean, mysteryArrival: boolean, mysteryPurchase: boolean }
+  notificationTypes: { offline: boolean, mysteryArrival: boolean, mysteryPurchase: boolean, farmActivity: boolean }
   mysteryMessages: { mysteryArrival: string, mysteryPurchase: string }
+  farmActivityEvents: typeof FARM_ACTIVITY_OPTIONS[number]['value'][]
 }
 
 export interface UIConfig {
@@ -258,8 +266,9 @@ function createDefaultSettings(): SettingsState {
       },
       title: '',
       msg: '账号下线',
-      notificationTypes: { offline: true, mysteryArrival: false, mysteryPurchase: false },
+      notificationTypes: { offline: true, mysteryArrival: false, mysteryPurchase: false, farmActivity: false },
       mysteryMessages: { mysteryArrival: '神秘商人到访', mysteryPurchase: '神秘商人到访' },
+      farmActivityEvents: FARM_ACTIVITY_OPTIONS.map(option => option.value),
     },
     stealDelaySeconds: 0,
     plantDelaySeconds: 0,
@@ -331,6 +340,7 @@ export const useSettingStore = defineStore('setting', () => {
         ...(cloneValue(data.offlineReminder) || {}),
         notificationTypes: { ...defaults.offlineReminder.notificationTypes, ...data.offlineReminder?.notificationTypes },
         mysteryMessages: { ...defaults.offlineReminder.mysteryMessages, ...data.offlineReminder?.mysteryMessages },
+        farmActivityEvents: cloneValue(data.offlineReminder?.farmActivityEvents ?? defaults.offlineReminder.farmActivityEvents),
         channelCredentials: {
           ...defaults.offlineReminder.channelCredentials,
           ...((cloneValue(data.offlineReminder) || {}).channelCredentials || {}),

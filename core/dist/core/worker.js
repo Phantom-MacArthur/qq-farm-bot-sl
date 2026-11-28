@@ -1,12 +1,15 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const fertilizer_strategy_1 = require("../config/fertilizer-strategy");
+const notification_types_1 = require("../config/notification-types");
+const yishuhuanfu_1 = require("../config/yishuhuanfu");
+const farm_activity_events_1 = require("../services/farm-activity-events");
 /**
  * 子进程 Worker - 负责运行单个账号的挂机逻辑
  */
 const { parentPort, workerData } = require('node:worker_threads');
 const { CONFIG, updateRuntimeConfig } = require('../config/config');
-const { getLevelExpProgress, loadConfigs, getItemImageById, getAllPlants, getAllItems, getSeedImageBySeedId } = require('../config/gameConfig');
+const { getLevelExpProgress, loadConfigs } = require('../config/gameConfig');
 const { getAutomation, getPreferredSeed, getConfigSnapshot, applyConfigSnapshot } = require('../models/store');
 const { checkAndClaimEmails, configureEmailClaim, getEmailDailyState } = require('../services/email');
 const { checkFarm, startFarmCheckLoop, stopFarmCheckLoop, refreshFarmCheckLoop, getLandsDetail, getAvailableSeeds, purchaseSeed, runFarmOperation, runFertilizerByConfig, fertilizeOwnLand, getAllLands } = require('../services/farm');
@@ -72,86 +75,16 @@ function exitWorker(code = 0) {
     }
     process.exit(code);
 }
-// 名字 -> 游戏物品图路径 的查表（懒加载，只在首次用到时构建）
-let nameIconMap = null;
-function buildNameIconMap() {
-    if (nameIconMap)
-        return nameIconMap;
-    const map = new Map();
+farm_activity_events_1.farmActivityEvents.on('activity', (activity, content) => {
     try {
-        for (const p of getAllPlants()) {
-            const seedId = toNum(p?.seed_id || 0);
-            const image = seedId > 0 ? getSeedImageBySeedId(seedId) : '';
-            const name = String(p?.name || '').trim();
-            if (name && image && !map.has(name))
-                map.set(name, image);
-        }
+        sendToMaster({ type: 'push_notify', candidates: [{ type: 'farmActivity', activity, title: notification_types_1.FARM_ACTIVITY_LABELS[activity], content }] });
     }
-    catch { }
-    try {
-        for (const item of getAllItems()) {
-            const image = getItemImageById(toNum(item?.id || 0));
-            const name = String(item?.name || '').trim();
-            if (name && image && !map.has(name))
-                map.set(name, image);
-        }
-    }
-    catch { }
-    nameIconMap = map;
-    return map;
-}
-// 根据名字/物品ID解析事件图标路径
-function resolveEventIconPath(meta) {
-    // 1) 有 itemId 直接查
-    const itemId = toNum(meta.itemId || 0);
-    if (itemId) {
-        try {
-            const p = getItemImageById(itemId);
-            if (p)
-                return p;
-        }
-        catch { }
-    }
-    // 2) 按名字查表（收获作物/出售等只有名字的事件）
-    const name = String(meta.itemName || meta.plantName || meta.name || '').trim();
-    if (name) {
-        const p = buildNameIconMap().get(name);
-        if (p)
-            return p;
-    }
-    return '';
-}
-// 为 QQ 机器人推送补充真实资源：好友头像 + 事件图标（游戏物品图）
-function enrichPushMeta(meta) {
-    if (!meta || typeof meta !== 'object')
-        return meta;
-    const event = String(meta.event || '');
-    // 只对推送关注的事件做额外查表，避免给所有日志增加开销
-    const pushEvents = ['sell_success', 'sell_done', '照顾好友', '领取任务', 'ranch_task_claim',
-        'ranch_steal', 'ranch_cleanFriend', '收获作物', '施肥后收获作物', '神秘商人自动购买'];
-    if (!pushEvents.includes(event))
-        return meta;
-    const enriched = { ...meta };
-    // 好友头像：优先按 friendGid，其次按 friendName 从缓存匹配
-    const gid = toNum(meta.friendGid || 0);
-    const friendName = String(meta.friendName || meta.nickname || '').trim();
-    if (gid || friendName) {
-        try {
-            const cached = getFriendsListCacheOnly();
-            const match = (gid && cached.find((f) => toNum(f.gid) === gid))
-                || (friendName && cached.find((f) => String(f.name || '') === friendName));
-            if (match && match.avatarUrl) {
-                enriched.avatarUrl = String(match.avatarUrl).trim();
-            }
-        }
-        catch { }
-    }
-    // 事件图标：优先 itemId，其次按名字查表（收获作物/出售等）
-    const iconPath = resolveEventIconPath(enriched);
-    if (iconPath)
-        enriched.iconPath = iconPath;
-    return enriched;
-}
+    catch { /* Losing the notification transport cannot invalidate a confirmed game action. */ }
+});
+networkEvents.on('farmHarvested', ({ count }) => {
+    if (count > 0)
+        farm_activity_events_1.farmActivityEvents.emit('activity', 'cropHarvest', `收获完成 ${count} 块土地`);
+});
 // 捕获日志发送给主进程
 setLogHook((tag, msg, isWarn, meta) => {
     sendToMaster({
@@ -161,7 +94,7 @@ setLogHook((tag, msg, isWarn, meta) => {
             tag,
             msg,
             isWarn,
-            meta: enrichPushMeta(meta || {}),
+            meta: meta || {},
         }
     });
 });
@@ -1217,9 +1150,12 @@ function onKickout(payload) {
     sendToMaster({ type: 'account_kicked', reason, reasonCode, diagnostics });
     setTimeout(exitWorker, 300, 0);
 }
+const interactiveFarmMethods = new Set([
+    'getLands', 'doFarmOp', 'fertilizeOwnLand', 'fertilizeAllOwnLands', 'useSelfInteractionItemBatch',
+]);
 // 处理来自 Admin 面板的直接调用请求 (如: 购买种子、开关设置等)
 async function handleApiCall(msg) {
-    const { id, method, args } = msg;
+    const { id, method, args, deadlineAt } = msg;
     let result = null;
     let error = null;
     try {
@@ -1251,9 +1187,12 @@ async function handleApiCall(msg) {
             else if (method === 'getRanchActivityDirectorySnapshot') {
                 result = await require('../services/activity-center').getRanchActivityDirectorySnapshot();
             }
-            else if (method === 'scanYishuHuanfuFriendShops' || method === 'refreshYishuHuanfuFriendShops') {
+            else if (method === 'scanYishuHuanfuFriendShops') {
                 // 读取行情缓存和登记手动刷新都不发送网关请求。
-                result = require('../services/activity-center')[method]();
+                result = require('../services/activity-center').scanYishuHuanfuFriendShops();
+            }
+            else if (method === 'refreshYishuHuanfuFriendShops') {
+                result = require('../services/activity-center').refreshYishuHuanfuFriendShops((0, yishuhuanfu_1.yishuSellMode)(getAutomation()));
             }
             else if (method === 'getBag') {
                 // 只有不带场景 ID 的背包 RPC 需要等待当前场景任务结束。
@@ -1265,8 +1204,11 @@ async function handleApiCall(msg) {
             }
             else
                 await runExclusiveAutomationTask(`api:${method}`, async () => {
-                    if (!loginReady || shutdownStarted)
-                        throw new Error('账号未连接');
+                    if (interactiveFarmMethods.has(method) && Date.now() >= deadlineAt)
+                        throw new Error('API Timeout');
+                    if (!loginReady || shutdownStarted || getWs()?.readyState !== 1) {
+                        throw Object.assign(new Error('账号未连接'), { code: shutdownStarted ? shutdownOfflineCode : 'GAME_OFFLINE' });
+                    }
                     switch (method) {
                         case 'getRanchState':
                             // 打包版的 fork 使用 JSON IPC，会把缺省的好友 GID 编码成 null。
@@ -1324,7 +1266,7 @@ async function handleApiCall(msg) {
                             result = getSchedulerRegistrySnapshot();
                             break;
                         case 'getLands':
-                            result = await getLandsDetail(args[0] === true);
+                            result = await getLandsDetail(args[0] === true, args[1] !== false);
                             break;
                         case 'getIllustratedSnapshot':
                             result = await require('../services/illustrated').getIllustratedSnapshot();
@@ -1490,6 +1432,9 @@ async function handleApiCall(msg) {
                         case 'getDailyGiftOverview':
                             result = await getDailyGiftOverview(args[0] === true);
                             break;
+                        case 'getDailyCompletion':
+                            result = require('../services/daily-completion').getDailyCompletionSnapshot();
+                            break;
                         case 'getActivityCenterSnapshot':
                             result = await require('../services/activity-center').getActivityCenterSnapshot();
                             break;
@@ -1652,7 +1597,8 @@ async function handleApiCall(msg) {
                         default:
                             error = 'Unknown method';
                     }
-                }, { interactiveRead: method === 'getRanchState' && (args[0] === 'dashboard' || args[0] === 'bag') });
+                }, { interactive: interactiveFarmMethods.has(method)
+                        || (method === 'getRanchState' && (args[0] === 'dashboard' || args[0] === 'bag')) });
         }
     }
     catch (e) {

@@ -151,6 +151,14 @@ test('Yishu draft migrates the former confirmation mode to quote-only mode', () 
   assert.equal(yishuAutomationDraft({ yishu_sell_mode: 'auto' }).yishu_sell_mode, 'auto')
 })
 
+test('Yishu preserves all four modes in the activity settings payload', () => {
+  for (const mode of ['off', 'manual', 'scan', 'auto']) {
+    const payload = getModuleAutomation('activity', yishuAutomationDraft({ yishu_sell_mode: mode }))
+    assert.equal(payload.yishu_sell_mode, mode)
+    assert.equal(wereActivityRewardSettingsSaved({ yishu_sell_mode: mode }, payload), true)
+  }
+})
+
 test('a backend must echo the requested reward settings before the activity draft closes', () => {
   const changes = { muge_claim_friends: true, muge_claim_handbook: false, farm_illustrated: true }
   assert.equal(wereActivityRewardSettingsSaved(changes, { task: true, ...changes }), true)

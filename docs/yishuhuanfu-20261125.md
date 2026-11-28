@@ -39,8 +39,7 @@ message YshfShopQueryReply {
   取默认 `false`，读值分不清「明确 0」和「没下发」，所以先用 `hasOwnProperty` 判存在；
   只有明确 false 才拦下，新错误码 `YSHF_SHOP_CLOSED`。
 - 剩余额度读 `quote.quota`（=官方 `remain_quota`），每天上限 8000；`8000 - quota` 是已用量。
-- 自家铺子不占好友额度：比价表这一行 `unlimited = true`，界面显示「还可收 不限」，
-  「卖自己」按钮只受 `can_sell` 约束；好友行要 `can_sell !== false` 且 `quota > 0` 才能卖。
+- 自家铺子不占好友额度，比价表显示「不限量」。好友铺子需要 `can_sell !== false` 且 `quota > 0` 才能卖。
 
 分享是两步：先 cmd 98，再 `gamepb.sharepb.ShareService.CheckCanShare` →
 `ReportShare{field_1:28, field_4:2017}`，暴击加成要第二步才真正落地。第二步失败不阻断主流程，
@@ -48,51 +47,22 @@ message YshfShopQueryReply {
 
 ## 自动任务
 
-`core/src/services/yishuhuanfu-auto.ts` 挂在 worker scheduler 上，10 分钟一轮（相位 4 分钟，
-与节令 19、神秘商人 37、牧歌 11 错开），首跑 260s；整个任务串进 `automation-lock` 的同一把全局锁。
-
-一轮只读一次活动状态，然后：
-
-1. **领种子**：服务端 `seed_claimed` 为真就跳过，否则发一次 cmd 91；
-2. **分享**：`share_claimed` 为真就跳过，否则发一次 cmd 98 + 分享上报；
-3. **卖薯**（开关独立）：背包蜜薯达到「起卖数量」才进入比价；
-4. **领提成**：`130.11 > 0` 且 `claimable` 才发一次 cmd 99，没有可领就跳过。
-
-跳过原因按服务端日期去重，一天只记一行，不会把日志刷满。写操作回包未确认（数量/金额对不上）
-就中止本轮，绝不重试猜结果。自动任务调用写接口时传 `withSnapshot:false`，不回建整份活动中心快照
-（那是 7 个活动的读，代价远高于一次写）。
+`core/src/services/yishuhuanfu-auto.ts` 按活动开放时间调度。领种和首次分享会检查按账号和游戏日保存的完成状态。结果待确认时，后续巡查核对活动状态。提成在服务端显示有待领金额且可领取时领取。
 
 ### 卖薯的比价与风控
 
-比价就是 cmd 92 逐个查好友铺子（只读、不占对方额度），按 `totalPrice` 降序排：
+比价用 cmd 92 单独读取各家报价，候选包括面板账号及已同步的好友。定时比价每 10 秒查一家，其「重新比价」按钮仅刷新基础价或加成为 0 的已查铺子。「仅询价」模式下，「开始询价」会手动查一批候选铺子。手动比价每 3 秒查一家，报价按游戏日保存。
 
-- **好友数上限**（默认 20，可 1–50）：单轮最多扫这么多家；
-- **比价间隔**（默认 30 分钟，可 5–720）：间隔内复用上一轮的排序结果，不重复扫；
-- **贪心换铺**：最高价那家额度够就一次卖完；不够就吃满它的剩余额度，再换第二高，依次往下；
-- **单轮上限**：最多切 3 家铺子，笔间隔 1200ms，剩下的留到下一轮；
-- **兜底**：好友都收满时默认把剩下的卖给自己铺子（可关）。
-
-「额度不足 / 铺子查不到」只换下一家，不算失败；回包金额不符这类错误直接停手。
+自动出售达到起卖数量后，按总价从高到低处理达到最低报价且有额度的铺子。自家及其他在线账号也参与排序。出售前会核对目标报价和额度，成交结果待确认时暂停本轮。未售库存由游戏日终结算。
 
 ## 配置项
 
-`automation` 里的开关（默认全开）：
-
-- `yishu_claim_seed`、`yishu_share`、`yishu_claim_commission`、`yishu_auto_sell`；
-- `yishu_sell_fallback_own`（默认 true）；
-- `yishu_scan_friend_limit`（20）、`yishu_scan_interval_minutes`（30）、`yishu_sell_min_count`（1）。
-
-数值项在 `normalizeAutomationValue` 里显式夹取，否则会被通用的 `!!value` 折成 `true`（与
-`fertilizer_smart_seconds` 同一个坑）。设置页在「牧歌初启」与「神秘商人」之间新增以薯换福卡片。
+- 默认每批查价上限 200 家，批次间隔 30 分钟，起卖数量 1 个，最低报价 450 福气币。
+- 默认北京时间 12:00 开始自动出售，每半小时检查一轮，23:55 停止发出新订单。账号可以自选最早出售时间。
+- 「不询价也不卖薯」停用好友比价及自动出售。「仅询价」由玩家点击「开始询价」后查一批好友铺子。「询价但不卖薯」定时查价。「自动询价并卖薯」定时查价并按策略出售。领种、分享和领提成有独立开关。
 
 ## 验证
 
 - 固定抓包数值：144 = 111 + 33、165 = 99 + 66、记录 `total=4320 / commission=86`、`130.11=86`、
   cmd 99 回包 `32156`；
-- `core/tests/yishuhuanfu-proto.test.js`、`yishuhuanfu-service.test.js`、`yishuhuanfu-auto.test.js`
-  共 48 项；自动任务侧钉死「已领过不再写」「按价换铺」「单轮最多 3 家」「比价节流」「余额阈值」；
-- 全量 core 429 项 / 通过 420 / 失败 9（既有 9 项不变），前端 26 项通过；`typecheck:web`、
-  `build:core`、`build:web` 通过。
-
-自动化部分只有离线的桩调用验证，尚未在实服跑满一天；实服观察点在日志 `event=以薯换福自动`：
-领种子/分享每天各一次成功、卖薯按价格降序且不超过 3 家、提成到账后一轮内被领掉。
+- `core/tests/yishuhuanfu-proto.test.js`、`yishuhuanfu-service.test.js` 和 `yishuhuanfu-auto.test.js` 分别覆盖协议、服务和自动化。实服执行情况可通过 `event=以薯换福自动` 的日志核对。

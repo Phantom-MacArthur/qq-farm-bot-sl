@@ -116,7 +116,7 @@ function mountFarmRoutes(app, ctx) {
         if (!id)
             return res.status(400).json({ ok: false });
         try {
-            const data = await ctx.provider.getLands(id);
+            const data = await ctx.provider.getLands(id, req.query.includeCareer !== '0');
             res.json({ ok: true, data });
         }
         catch (e) {
@@ -430,6 +430,17 @@ function mountFarmRoutes(app, ctx) {
             handleApiError(res, e);
         }
     });
+    app.get('/api/daily-completion', async (req, res) => {
+        const id = getAccId(ctx, req);
+        if (!id)
+            return res.status(400).json({ ok: false });
+        try {
+            res.json({ ok: true, data: await ctx.provider.getDailyCompletion(id) });
+        }
+        catch (error) {
+            handleApiError(res, error);
+        }
+    });
     // API: 启动账号
     app.post('/api/accounts/:id/start', async (req, res) => {
         try {
@@ -500,7 +511,7 @@ function mountFarmRoutes(app, ctx) {
         if (!id)
             return res.status(400).json({ ok: false });
         try {
-            const { opType, landId } = req.body; // landId 将支持的操作限定到单块土地
+            const { opType, landId } = req.body; // 收获和务农也支持传入地块编号数组
             const data = await ctx.provider.doFarmOp(id, opType, landId);
             res.json({ ok: true, data });
         }

@@ -3,12 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const node_async_hooks_1 = require("node:async_hooks");
 const storage = new node_async_hooks_1.AsyncLocalStorage();
 const queuedTasks = [];
-const interactiveReads = [];
+const interactiveTasks = [];
 let running = false;
 function runNextTask() {
     if (running)
         return;
-    const task = interactiveReads.shift() ?? queuedTasks.shift();
+    const task = interactiveTasks.shift() ?? queuedTasks.shift();
     if (!task)
         return;
     running = true;
@@ -34,7 +34,7 @@ function runExclusiveAutomationTask(taskName, taskFn, options = {}) {
                 runNextTask();
             }
         });
-        (options.interactiveRead ? interactiveReads : queuedTasks).push(task);
+        (options.interactive || options.interactiveRead ? interactiveTasks : queuedTasks).push(task);
         runNextTask();
     });
 }

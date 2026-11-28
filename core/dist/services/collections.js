@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const farm_activity_events_1 = require("./farm-activity-events");
 const { getItemById, getItemImageById } = require('../config/gameConfig');
 const fs = require('node:fs');
 const { getResourcePath } = require('../config/runtime-paths');
@@ -253,6 +254,7 @@ async function claimCollectionRewards(automation) {
         const result = { claimedScores: reply.claimed_scores, rewards: (reply.total_rewards || []).map((item) => ({ id: Number(item.id), name: getItemById(Number(item.id))?.name || `物品${item.id}`, count: quantity(item.count) })) };
         if (automation)
             return result;
+        (0, farm_activity_events_1.emitFarmReward)('藏品图鉴奖励', result.rewards);
         Object.assign(detail, { current_score: reply.current_score, claimed_reward_score: reply.claimed_reward_score });
         return { ...result, snapshot: normalizeCollections(raw) };
     });

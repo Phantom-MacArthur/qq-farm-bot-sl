@@ -545,8 +545,9 @@ function mountAccountRoutes(app, ctx) {
             const token = String(entry.token || cfg.token || '').trim();
             const wxPusherUid = String(entry.wxPusherUid || cfg.wxPusherUid || '').trim();
             // 与真实下线推送保持一致：标题取账号备注，不再单独配置。
-            const accountName = String((ctx.provider.getAccounts().accounts || [])
-                .find((a) => String(a?.id) === String(accountId))?.name || '').trim();
+            const account = (ctx.provider.getAccounts().accounts || []).find((a) => String(a?.id) === String(accountId));
+            const accountName = String(account?.name || '').trim();
+            const accountNick = String(account?.nick || '').trim() || accountName;
             const titleBase = String(cfg.title || '').trim() || accountName || '农场下线';
             const msgBase = String(cfg.msg || '').trim();
             if (!channel) {
@@ -566,25 +567,24 @@ function mountAccountRoutes(app, ctx) {
             }
             const now = new Date();
             const ts = now.toISOString().replace('T', ' ').slice(0, 19);
-            const { sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage } = require('../../services/push');
+            const { sendNotification } = require('../../services/push');
             const notifications = [
                 { type: 'offline', label: '账号下线', content: msgBase },
                 { type: 'mysteryArrival', label: '神秘商店到访', content: String(cfg.mysteryMessages?.mysteryArrival || '').trim() },
                 { type: 'mysteryPurchase', label: '神秘商店购买', content: String(cfg.mysteryMessages?.mysteryPurchase || '').trim() },
+                { type: 'farmActivity', label: '农牧场动态', content: '' },
             ];
             const results = [];
             for (const notification of notifications) {
                 try {
                     const payload = {
                         channel, endpoint, token, secret, wxPusherUid,
-                        title: [`${titleBase}（${notification.label}测试）`, notification.content].filter(Boolean).join(' '),
+                        title: notification.type === 'farmActivity'
+                            ? accountNick || notification.label
+                            : [`${titleBase}（${notification.label}测试）`, notification.content].filter(Boolean).join(' '),
                         content: `这是一条${notification.label}测试消息。\n时间: ${ts}`,
                     };
-                    const ret = channel === 'wxpusher'
-                        ? await sendWxPusherMessage(payload)
-                        : channel === 'wxpusher_wechat'
-                            ? await sendWxPusherWechatMessage(payload)
-                            : await sendPushooMessage(payload);
+                    const ret = await sendNotification(payload);
                     results.push({
                         type: notification.type,
                         label: notification.label,
@@ -600,11 +600,11 @@ function mountAccountRoutes(app, ctx) {
             if (failures.length) {
                 return res.status(400).json({
                     ok: false,
-                    error: `测试完成，${results.length - failures.length}/3 条成功；${failures.map(result => `${result.label}：${result.error}`).join('；')}`,
+                    error: `测试完成，${results.length - failures.length}/${results.length} 条成功；${failures.map(result => `${result.label}：${result.error}`).join('；')}`,
                     data: results,
                 });
             }
-            return res.json({ ok: true, data: results, message: '三类测试通知均发送成功' });
+            return res.json({ ok: true, data: results, message: '全部测试通知已发送' });
         }
         catch (e) {
             return handleApiError(res, e);

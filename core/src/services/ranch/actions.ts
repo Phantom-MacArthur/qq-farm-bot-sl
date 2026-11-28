@@ -1,5 +1,6 @@
 import type { RanchFeedStage } from '../../config/ranch-automation';
 import { RANCH_NEAR_HARVEST_MS } from '../../config/ranch-automation';
+import { farmActivityEvents } from '../farm-activity-events';
 export {};
 
 const { rpc, inScene } = require('./transport');
@@ -636,9 +637,17 @@ async function operate(action: string, input: any = {}, feedStage?: RanchFeedSta
                     .some(animal => animal.mutation?.mutation_type > 0) };
         });
 
-        if (result.status === 'confirmed' && result.rewards.length) {
+        if (result.status === 'confirmed') {
+            const harvested = action === 'harvest' && result.harvestedAnimals > 0;
+            if (harvested || action === 'sell' && result.completed > 0) {
+                const loot = result.rewards.map((item: { name: string; count: string }) => `${item.name} ×${item.count}`).join('、');
+                const summary = harvested ? `收获 ${result.harvestedAnimals} 只动物` : `${plan.label}完成`;
+                farmActivityEvents.emit('activity', harvested ? 'animalHarvest' : 'sale', `${summary}${loot ? `，获得 ${loot}` : ''}`);
+            }
             const rewardNames: Record<string, string> = { claimTasks: '任务奖励', claimDailyShare: '分享礼包', claimIllustrated: '图鉴奖励' };
-            if (rewardNames[action]) require('../farm-reward-history').recordFarmReward(`ranch_${action}`, result.rewards, rewardNames[action]);
+            if (result.rewards.length && rewardNames[action]) {
+                require('../farm-reward-history').recordFarmReward(`ranch_${action}`, result.rewards, rewardNames[action]);
+            }
         }
         if (result.harvestedGiant) require('../../utils/network').networkEvents.emit('ranchBookReward', 'giant', true);
         if (!direct || action !== 'feed' || input.produceAfterFeed !== true || result.status !== 'confirmed') return result;

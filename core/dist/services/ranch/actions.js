@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 const ranch_automation_1 = require("../../config/ranch-automation");
+const farm_activity_events_1 = require("../farm-activity-events");
 const { rpc, inScene } = require('./transport');
 const { loadBag, loadRaw, snapshot, balance, taskList, catalog, market, canCatalog, ranchMallCatalog, canLockRanchItem, resourceBalance, salePrices, shedAwaitingActivation } = require('./state');
 const { animalMap, cubMap, canMap, facilityMap, itemMap, taskMap, error, positiveId, positiveCount, quantity, itemDto, sumItems, signature } = require('./model');
@@ -747,10 +748,17 @@ async function operate(action, input = {}, feedStage) {
                 harvestedGiant: action === 'harvest' && animalsInResults(before.cells.facilities.flatMap((f) => f.ranch ? [f.ranch] : []), reply.op_results)
                     .some(animal => animal.mutation?.mutation_type > 0) };
         });
-        if (result.status === 'confirmed' && result.rewards.length) {
+        if (result.status === 'confirmed') {
+            const harvested = action === 'harvest' && result.harvestedAnimals > 0;
+            if (harvested || action === 'sell' && result.completed > 0) {
+                const loot = result.rewards.map((item) => `${item.name} ×${item.count}`).join('、');
+                const summary = harvested ? `收获 ${result.harvestedAnimals} 只动物` : `${plan.label}完成`;
+                farm_activity_events_1.farmActivityEvents.emit('activity', harvested ? 'animalHarvest' : 'sale', `${summary}${loot ? `，获得 ${loot}` : ''}`);
+            }
             const rewardNames = { claimTasks: '任务奖励', claimDailyShare: '分享礼包', claimIllustrated: '图鉴奖励' };
-            if (rewardNames[action])
+            if (result.rewards.length && rewardNames[action]) {
                 require('../farm-reward-history').recordFarmReward(`ranch_${action}`, result.rewards, rewardNames[action]);
+            }
         }
         if (result.harvestedGiant)
             require('../../utils/network').networkEvents.emit('ranchBookReward', 'giant', true);

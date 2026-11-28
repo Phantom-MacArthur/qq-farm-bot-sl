@@ -388,7 +388,7 @@ test('土地和图鉴读取失败提供反馈，后台轮询跳过读取失败�
   const farm = read('components/farm/FarmPanel.vue')
   const friends = read('views/Friends.vue')
   const illustrated = read('components/IllustratedPanel.vue')
-  assert.match(farm, /<OfflineState v-else-if="error" \/>/)
+  assert.match(farm, /<EmptyState v-else-if="error"[^>]*title="土地读取失败"[^>]*>\s*<NButton secondary @click="refreshFarm">\s*重新读取/)
   assert.match(illustrated, /<OfflineState v-else-if="isOffline" \/>[^]*?<EmptyState v-else-if="error"[^>]*title="图鉴加载失败"[^>]*>\s*<NButton secondary @click="refresh">重试<\/NButton>/)
   assert.match(friends, /<OfflineState v-else-if="friendLandsError\[friend\.gid\]" class="offline-state--inline" \/>/)
   assert.match(style, /\.offline-state:not\(\.offline-state--inline\)/)

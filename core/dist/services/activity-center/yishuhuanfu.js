@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const yishuhuanfu_1 = require("../../config/yishuhuanfu");
 const yishuhuanfu_history_1 = require("../yishuhuanfu-history");
 const yishu_quote_queue_1 = require("./yishu-quote-queue");
+const daily_completion_1 = require("../daily-completion");
 const { getDataFile } = require('../../config/runtime-paths');
 const { readJsonFile, writeJsonFileAtomic } = require('../json-db');
 /**
@@ -31,7 +32,8 @@ const YSHF_SWEET_POTATO_ITEM_ID = '1032';
 const YSHF_LUCK_COIN_ITEM_ID = '1033';
 const YSHF_CMD_CLAIM_SEED = 91;
 const YSHF_CMD_SHOP_QUERY = 92;
-const YSHF_SHOP_UNAVAILABLE_CODES = [1000012, 1034001];
+const YSHF_SHOP_SHARE_EXPIRED_CODE = 1034184;
+const YSHF_SHOP_UNAVAILABLE_CODES = [1000012, 1034001, YSHF_SHOP_SHARE_EXPIRED_CODE];
 const YSHF_CMD_SELL = 93;
 // 95 是「收购记录列表」，不是刷新行情。2026-11-25 15:11 抓包证实：
 // 请求空、回包 slot195 = repeated 收购记录；没有记录时回包为空。
@@ -116,7 +118,14 @@ function createYishuHuanfuActivityService(deps) {
             group_id: YSHF_GROUP_ID,
         })).finish());
         const { body: replyBody } = await sendMsgAsync('gamepb.activitypb.ActivityService', 'GetGroup', body);
-        return types.GetGroupReply.decode(replyBody);
+        const reply = types.GetGroupReply.decode(replyBody);
+        const activity = findMainModule(reply)?.activity;
+        if (activity) {
+            const start = int64Number(activity.begin_time);
+            const end = int64Number(activity.end_time);
+            (0, yishuhuanfu_1.observeYishuActivity)(activityWindowIsActive(activity) && getServerTimeSec() < end, end, start);
+        }
+        return reply;
     }
     function collectPanelFriendGids() {
         const result = [];
@@ -178,6 +187,13 @@ function createYishuHuanfuActivityService(deps) {
         const children = Array.isArray(groupReply?.group?.children) ? groupReply.group.children : [];
         return children.find((child) => int64String(child?.activity?.activity_id) === YSHF_ACTIVITY_ID) || null;
     }
+    function checkDailyActionDay(snapshot) {
+        const now = getServerTimeSec();
+        if (now < Number(snapshot.startTime) || now >= Number(snapshot.endTime)) {
+            return businessError('YSHF_INACTIVE', '以薯换福活动未在活动期内');
+        }
+        return (0, yishuhuanfu_1.yishuDate)(now) === snapshot.daily.dateKey ? null : businessError('YSHF_DAY_CHANGED', '游戏日已变化，请刷新活动状态');
+    }
     /** 兑换目录的单档商品 DTO。status 在抓包中恒为 2，语义未取证，不据它判断可兑性。 */
     function catalogDto(catalog) {
         const goods = Array.isArray(catalog?.goods) ? catalog.goods : [];
@@ -223,7 +239,7 @@ function createYishuHuanfuActivityService(deps) {
         const estimatedPrice = basePrice !== '0'
             ? (BigInt(basePrice) + BigInt(bonus)).toString()
             : null;
-        const active = activityWindowIsActive(activity);
+        const active = activityWindowIsActive(activity) && getServerTimeSec() < int64Number(activity.end_time);
         const dateKey = (0, yishuhuanfu_1.yishuDate)(getServerTimeSec());
         const readBalance = (itemId) => balances?.get(itemId) || '0';
         const seedBalance = balances ? readBalance(YSHF_SEED_ITEM_ID) : null;
@@ -235,13 +251,15 @@ function createYishuHuanfuActivityService(deps) {
         const luckCoinBalance = stateLuckCoin !== '0' ? stateLuckCoin : bagLuckCoin;
         // 130.1 是服务端的今日领取标记，比本地日期记账可靠得多：
         // 进程重启、跨设备、多端操作都能立刻体现。本地记账只作为兜底保留。
-        const seedClaimed = !!claims.seed_claimed || seedClaimedDateKey === dateKey;
-        const shared = !!claims.share_claimed || sharedDateKey === dateKey;
+        const savedSeed = (0, daily_completion_1.getDailyMark)('yishu_claim_seed');
+        const savedShare = (0, daily_completion_1.getDailyMark)('yishu_share');
+        const seedClaimed = !!claims.seed_claimed || seedClaimedDateKey === dateKey || savedSeed?.status === 'completed';
+        const shared = !!claims.share_claimed || sharedDateKey === dateKey || savedShare?.status === 'completed' || savedShare?.count !== undefined;
         const shareTimeSec = Number(int64String(shareState.timestamp || '0'));
         const sharedToday = Number.isFinite(shareTimeSec) && shareTimeSec > 0
             && (0, yishuhuanfu_1.yishuDate)(shareTimeSec) === dateKey;
-        const dailySeedCount = seedClaimed ? (seedClaimedDateKey === dateKey ? claimedSeedCount : YSHF_DAILY_SEED_FALLBACK) : '0';
-        const dailyShareCount = shared || sharedToday ? (sharedDateKey === dateKey ? sharedSeedCount : YSHF_SHARE_SEED_FALLBACK) : '0';
+        const dailySeedCount = seedClaimed ? (seedClaimedDateKey === dateKey ? claimedSeedCount : savedSeed?.count ?? YSHF_DAILY_SEED_FALLBACK) : '0';
+        const dailyShareCount = shared || sharedToday ? (sharedDateKey === dateKey ? sharedSeedCount : savedShare?.count ?? YSHF_SHARE_SEED_FALLBACK) : '0';
         // 基础价为 0 说明服务端还没下发当日行情，此时不能卖，否则按 0 价结算。
         const quoteReady = basePrice !== '0';
         const hasSweetPotato = balances === null || BigInt(sweetPotatoBalance || '0') > 0n;
@@ -427,6 +445,8 @@ function createYishuHuanfuActivityService(deps) {
     }
     async function getCurrentYishuHuanfuActivity(options = {}) {
         const requestDay = quoteQueue.currentDay();
+        const seedCheck = (0, daily_completion_1.beginDailyCheck)('yishu_claim_seed');
+        const shareCheck = (0, daily_completion_1.beginDailyCheck)('yishu_share');
         const groupReply = await queryYshfGroupReply();
         // 写操作后、以及进程里还没有任何成功值时，同步单次读一次（不重试）。
         // 其余情况只读内存，快照不会被 Bag 拖住，也不会出现并发快照互相覆盖。
@@ -439,7 +459,15 @@ function createYishuHuanfuActivityService(deps) {
         // 目录查询是独立命令，快照里不拉，避免每次刷新快照都多发一条网关请求；
         // 前端进入活动页时单独调用 queryYishuHuanfuCatalog。
         const snapshot = yshfDto(groupReply, balances, null);
-        (0, yishuhuanfu_1.observeYishuActivity)(snapshot.active, Number(snapshot.endTime));
+        if (snapshot.active && seedCheck?.dateKey === snapshot.daily.dateKey && snapshot.daily.seedClaimed) {
+            (0, daily_completion_1.recordDailyMark)(seedCheck, 'completed');
+        }
+        if (snapshot.active && shareCheck?.dateKey === snapshot.daily.dateKey) {
+            if (snapshot.daily.sharedToday)
+                (0, daily_completion_1.recordDailyMark)(shareCheck, 'completed');
+            else if (snapshot.daily.shared)
+                (0, daily_completion_1.recordDailyMark)(shareCheck, 'pending_confirmation');
+        }
         if (requestDay && requestDay === quoteQueue.currentDay() && requestDay === snapshot.daily.dateKey) {
             const { gid, price, bonus, estimatedPrice, priceKnown } = snapshot.shop;
             const user = getUserState();
@@ -455,6 +483,9 @@ function createYishuHuanfuActivityService(deps) {
     }
     async function claimYishuHuanfuSeeds(options = {}) {
         return serializeMutation(async () => {
+            if ((0, daily_completion_1.isDailyComplete)('yishu_claim_seed'))
+                throw businessError('YSHF_SEED_ALREADY_CLAIMED', '今日红薯种子已经领取，无需重复领取');
+            const check = (0, daily_completion_1.beginDailyCheck)('yishu_claim_seed');
             const snapshot = await getCurrentYishuHuanfuActivity({ freshBalances: true });
             if (!snapshot.active) {
                 throw businessError('YSHF_INACTIVE', '以薯换福活动未在活动期内');
@@ -462,12 +493,19 @@ function createYishuHuanfuActivityService(deps) {
             if (snapshot.daily.seedClaimed) {
                 throw businessError('YSHF_SEED_ALREADY_CLAIMED', '今日红薯种子已经领取，无需重复领取');
             }
+            if ((0, daily_completion_1.getDailyMark)('yishu_claim_seed')?.status === 'pending_confirmation') {
+                throw businessError('YSHF_DAILY_ACTION_PENDING', '本次领种结果待核对，请先刷新活动状态');
+            }
             const reply = await (async () => {
                 try {
                     return await operateYshf(types.YshfClaimSeedRequest, {
                         activity_id: YSHF_ACTIVITY_ID,
                         cmd: YSHF_CMD_CLAIM_SEED,
                         params: {},
+                    }, {
+                        expectedErrorCodes: [1034177],
+                        beforeSend: () => checkDailyActionDay(snapshot),
+                        onSent: () => (0, daily_completion_1.recordDailyMark)(check, 'pending_confirmation'),
                     });
                 }
                 catch (error) {
@@ -475,16 +513,24 @@ function createYishuHuanfuActivityService(deps) {
                     // 服务端用 1034177 表示今天已经领过。以前这个码没有映射，前端只能看到
                     // “活动操作失败，请刷新页面后重试”，按钮也不会变灰。
                     if (String(error?.code || '') === '1034177' || /code=1034177\b/.test(message)) {
-                        seedClaimedDateKey = (0, yishuhuanfu_1.yishuDate)(getServerTimeSec());
+                        seedClaimedDateKey = snapshot.daily.dateKey;
+                        (0, daily_completion_1.recordDailyMark)(check, 'completed');
                         throw businessError('YSHF_SEED_ALREADY_CLAIMED', '今日红薯种子已经领取，明天再来领取');
                     }
+                    if (/^\d+$/.test(String(error?.code || '')))
+                        (0, daily_completion_1.recordDailyMark)(check, 'clear_pending');
                     throw error;
                 }
             })();
-            seedClaimedDateKey = (0, yishuhuanfu_1.yishuDate)(getServerTimeSec());
+            if (!reply?.yshf_claim_seed) {
+                (0, daily_completion_1.recordDailyMark)(check, 'pending_confirmation');
+                throw businessError('YSHF_DAILY_ACTION_PENDING', '领种回包未能确认，请先刷新活动状态');
+            }
+            seedClaimedDateKey = snapshot.daily.dateKey;
             const grant = reply?.yshf_claim_seed?.grant;
             const count = grant ? int64String(grant.count) : YSHF_DAILY_SEED_FALLBACK;
             claimedSeedCount = count;
+            (0, daily_completion_1.recordDailyMark)(check, 'completed', { count });
             return {
                 count,
                 reward: grant ? itemDto({ item_id: int64String(grant.item_id), count }) : null,
@@ -495,20 +541,23 @@ function createYishuHuanfuActivityService(deps) {
         });
     }
     /**
-     * 查单个铺子的今日行情（cmd 92）。只读，不产生成交，可以拿任意 gid 查，
-     * 好友铺子比价就是靠它逐个扫。
+     * 按铺主 gid 查今日行情（cmd 92）。是否能查到报价由服务端决定。
      */
-    async function fetchShopQuote(targetGid) {
+    async function fetchShopQuote(targetGid, beforeSend) {
         let reply;
         try {
             reply = await operateYshf(types.YshfShopQueryRequest, {
                 activity_id: YSHF_ACTIVITY_ID,
                 cmd: YSHF_CMD_SHOP_QUERY,
                 params: { shop_gid: targetGid },
-            }, { expectedErrorCodes: YSHF_SHOP_UNAVAILABLE_CODES });
+            }, { expectedErrorCodes: YSHF_SHOP_UNAVAILABLE_CODES, beforeSend });
         }
         catch (error) {
-            if (YSHF_SHOP_UNAVAILABLE_CODES.includes(Number(error?.code))) {
+            const code = Number(error?.code);
+            if (code === YSHF_SHOP_SHARE_EXPIRED_CODE) {
+                throw businessError('YSHF_SHOP_SHARE_EXPIRED', '铺子的分享链接已失效，请联系店主重新分享');
+            }
+            if (YSHF_SHOP_UNAVAILABLE_CODES.includes(code)) {
                 throw businessError('YSHF_SHOP_CLOSED', '该铺子暂未开放收购');
             }
             throw error;
@@ -577,7 +626,7 @@ function createYishuHuanfuActivityService(deps) {
     }
     async function loadYishuFriendTargets() {
         const activity = findMainModule(await queryYshfGroupReply())?.activity;
-        if (!activity || !activityWindowIsActive(activity)) {
+        if (!activity || !activityWindowIsActive(activity) || getServerTimeSec() >= int64Number(activity.end_time)) {
             throw businessError('YSHF_INACTIVE', '以薯换福活动未在活动期内');
         }
         const own = ownGid();
@@ -618,8 +667,7 @@ function createYishuHuanfuActivityService(deps) {
                 via: 'friend',
             });
         }
-        // 面板里其它账号的好友同样并进来：蜜薯能卖给任何开着铺子的人，
-        // 不限于本账号好友，候选池越大越容易挑到当日最高价。
+        // 面板里其它账号的好友同样并入候选，能否查价和出售由服务端判定。
         for (const entry of panelFriends) {
             if (seen.has(entry.gid))
                 continue;
@@ -656,7 +704,8 @@ function createYishuHuanfuActivityService(deps) {
         now: deps.quoteClock || (() => performance.now()),
         loadTargets: loadYishuFriendTargets,
         query: async (target) => {
-            const { shop, ...quote } = await fetchShopQuote(target.gid);
+            const { shop, ...quote } = await fetchShopQuote(target.gid, () => (0, yishuhuanfu_1.isYishuAutomationInWindow)(getServerTimeSec())
+                ? null : businessError('YSHF_INACTIVE', '以薯换福活动未在活动期内'));
             if (shop?.gid !== target.gid)
                 throw businessError('YSHF_SHOP_UNKNOWN', '无法确认铺主');
             return {
@@ -728,8 +777,10 @@ function createYishuHuanfuActivityService(deps) {
     function scanYishuHuanfuFriendShops() {
         return includeOwnShop(quoteQueue.snapshot());
     }
-    function refreshYishuHuanfuFriendShops() {
-        return includeOwnShop(quoteQueue.refreshZeroQuotes());
+    function refreshYishuHuanfuFriendShops(mode) {
+        if (mode === 'off')
+            return { ...scanYishuHuanfuFriendShops(), message: '当前卖薯模式已停用比价' };
+        return includeOwnShop(quoteQueue.refreshQuotes(mode === 'manual'));
     }
     function tickYishuHuanfuFriendShops(options) {
         return quoteQueue.tick(options);
@@ -859,7 +910,8 @@ function createYishuHuanfuActivityService(deps) {
                     params: { shop_gid: targetGid, count },
                 }, {
                     beforeSend: () => {
-                        const error = quoteQueue.currentDay() === saleDay ? validateAutoSale() : quoteDayError();
+                        const error = quoteQueue.currentDay() === saleDay
+                            ? checkDailyActionDay(snapshot) ?? validateAutoSale() : quoteDayError();
                         blockedBeforeSend = !!error;
                         return error;
                     },
@@ -986,7 +1038,7 @@ function createYishuHuanfuActivityService(deps) {
                 activity_id: YSHF_ACTIVITY_ID,
                 cmd: YSHF_CMD_CLAIM_COMMISSION,
                 params: {},
-            });
+            }, { beforeSend: () => checkDailyActionDay(snapshot) });
             const result = reply?.yshf_commission;
             const amount = result ? int64String(result.amount) : '0';
             return {
@@ -1068,19 +1120,41 @@ function createYishuHuanfuActivityService(deps) {
     /** 分享本人铺子（cmd 98）。每日首次触发分享暴击涨价。 */
     async function shareYishuHuanfuShop(options = {}) {
         return serializeMutation(async () => {
+            if ((0, daily_completion_1.isDailyComplete)('yishu_share'))
+                throw businessError('YSHF_SHARE_ALREADY_DONE', '今日已经分享过铺子，暴击涨价每日只触发一次');
+            const check = (0, daily_completion_1.beginDailyCheck)('yishu_share');
             const snapshot = await getCurrentYishuHuanfuActivity({ freshBalances: true });
             if (!snapshot.active) {
                 throw businessError('YSHF_INACTIVE', '以薯换福活动未在活动期内');
             }
-            if (snapshot.daily.shared) {
+            if (snapshot.daily.shared || snapshot.daily.sharedToday) {
                 throw businessError('YSHF_SHARE_ALREADY_DONE', '今日已经分享过铺子，暴击涨价每日只触发一次');
+            }
+            if ((0, daily_completion_1.getDailyMark)('yishu_share')?.status === 'pending_confirmation') {
+                throw businessError('YSHF_DAILY_ACTION_PENDING', '分享结果待核对，请先刷新活动状态');
             }
             const reply = await operateYshf(types.YshfShareRequest, {
                 activity_id: YSHF_ACTIVITY_ID,
                 cmd: YSHF_CMD_SHARE,
                 params: {},
+            }, {
+                beforeSend: () => checkDailyActionDay(snapshot),
+                onSent: () => (0, daily_completion_1.recordDailyMark)(check, 'pending_confirmation'),
+            }).catch(error => {
+                if (/^\d+$/.test(String(error?.code || '')))
+                    (0, daily_completion_1.recordDailyMark)(check, 'clear_pending');
+                throw error;
             });
-            sharedDateKey = (0, yishuhuanfu_1.yishuDate)(getServerTimeSec());
+            if (!reply?.yshf_share) {
+                (0, daily_completion_1.recordDailyMark)(check, 'pending_confirmation');
+                throw businessError('YSHF_DAILY_ACTION_PENDING', '分享回包未能确认，请先刷新活动状态');
+            }
+            sharedDateKey = snapshot.daily.dateKey;
+            const share = reply.yshf_share;
+            const grant = share.grant;
+            const count = grant ? int64String(grant.count) : YSHF_SHARE_SEED_FALLBACK;
+            sharedSeedCount = count;
+            (0, daily_completion_1.recordDailyMark)(check, 'pending_confirmation', { count });
             // cmd 98 只是“活动内的分享动作”，官方客户端还会走一次
             // ShareService.CheckCanShare → ReportShare{field_1:28, field_4:2017}，
             // 暴击加成要到这一步才真正落地。参考 Anrylin/qq-farm-bot 的实机实现。
@@ -1092,7 +1166,9 @@ function createYishuHuanfuActivityService(deps) {
                 const checkReply = await sendMsgAsync('gamepb.sharepb.ShareService', 'CheckCanShare', checkBody);
                 if (types.CheckCanShareReply.decode(checkReply.body).can_share) {
                     const reportBody = Buffer.from(types.ReportShareRequest.encode(types.ReportShareRequest.create({ field_1: 28, field_4: 2017 })).finish());
-                    await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', reportBody);
+                    await sendMsgAsync('gamepb.sharepb.ShareService', 'ReportShare', reportBody, {
+                        beforeSend: () => checkDailyActionDay(snapshot),
+                    });
                     shareReported = true;
                 }
                 else {
@@ -1108,10 +1184,6 @@ function createYishuHuanfuActivityService(deps) {
                     // 日志失败不影响主流程
                 }
             }
-            const share = reply?.yshf_share;
-            const grant = share?.grant;
-            const count = grant ? int64String(grant.count) : YSHF_SHARE_SEED_FALLBACK;
-            sharedSeedCount = count;
             return {
                 count,
                 seedReward: grant ? itemDto({ item_id: int64String(grant.item_id), count }) : null,

@@ -8,13 +8,18 @@ exports.stopYishuWatchdog = stopYishuWatchdog;
 exports.startYishuTimer = startYishuTimer;
 const yishuhuanfu_1 = require("../config/yishuhuanfu");
 const yishuhuanfu_history_1 = require("./yishuhuanfu-history");
-exports.YISHU_AUTOMATION_KEYS = [
-    'yishu_claim_seed', 'yishu_share', 'yishu_auto_sell', 'yishu_sell_mode',
+const daily_completion_1 = require("./daily-completion");
+const YISHU_DAILY_ACTION_KEYS = [
+    'yishu_claim_seed', 'yishu_share',
     'yishu_claim_commission', 'yishu_plant', 'yishu_harvest',
+];
+exports.YISHU_AUTOMATION_KEYS = [
+    ...YISHU_DAILY_ACTION_KEYS, 'yishu_auto_sell', 'yishu_sell_mode',
     'yishu_sell_after_time', 'yishu_scan_friend_limit', 'yishu_scan_interval_minutes',
 ];
 const SKIP_SALE_CODES = new Set([
     'YSHF_SHOP_QUOTA_INSUFFICIENT', 'YSHF_SHOP_UNKNOWN', 'YSHF_SHOP_CLOSED', 'YSHF_PRICE_TOO_LOW',
+    'YSHF_SHOP_SHARE_EXPIRED',
 ]);
 const TASK = 'yishu_next';
 const QUOTE_TASK = 'yishu_quotes';
@@ -22,7 +27,12 @@ const SELL_SPACING_MS = 1200;
 function isYishuAutomationEnabled(automation = {}) {
     if (automation.activity_enabled === false)
         return false;
-    return (0, yishuhuanfu_1.yishuSellMode)(automation) !== 'off' || exports.YISHU_AUTOMATION_KEYS.some(key => key !== 'yishu_auto_sell' && key !== 'yishu_sell_mode' && automation[key] === true);
+    return isBackgroundQuoteEnabled(automation)
+        || YISHU_DAILY_ACTION_KEYS.some(key => automation[key] === true);
+}
+function isBackgroundQuoteEnabled(automation) {
+    const mode = (0, yishuhuanfu_1.yishuSellMode)(automation);
+    return automation.activity_enabled !== false && (mode === 'scan' || mode === 'auto');
 }
 function nextYishuCheck(seconds, scanMinutes = yishuhuanfu_1.YISHU_SCAN_MINUTES, sellAfterTime) {
     const start = (0, yishuhuanfu_1.yishuDayStart)(seconds);
@@ -46,6 +56,7 @@ function eligibleQuote(quote, minPrice) {
 }
 function createYishuAutomation(deps) {
     const delay = deps.delay || ((ms) => new Promise(resolve => setTimeout(resolve, ms)));
+    const dailyStatus = deps.getDailyStatus || (key => (0, daily_completion_1.getDailyMark)(key)?.status);
     async function runYishuAutomation(automation, live, round) {
         const summary = {
             type: 'round', ...round, status: 'skip', reason: '', minPrice: (0, yishuhuanfu_1.normalizeYishuMinPrice)(automation.yishu_sell_min_price),
@@ -63,6 +74,12 @@ function createYishuAutomation(deps) {
         const finish = (reason, status = 'skip') => ({ ...summary, reason, status });
         if (!isYishuAutomationEnabled(automation))
             return finish('活动自动化已关闭');
+        if (!isBackgroundQuoteEnabled(automation) && round.source !== 'settlement'
+            && !enabled('yishu_claim_commission') && !enabled('yishu_plant') && !enabled('yishu_harvest')
+            && (!enabled('yishu_claim_seed') || dailyStatus('yishu_claim_seed') === 'completed')
+            && (!enabled('yishu_share') || dailyStatus('yishu_share') === 'completed')) {
+            return finish('今日领种和分享已完成');
+        }
         try {
             let snapshot = await deps.getActivity({ freshBalances: true, balanceRetries: 1, balanceStaleMaxMs: 0 });
             if (!snapshot?.active || !stillToday())
@@ -89,8 +106,8 @@ function createYishuAutomation(deps) {
                 }
             }
             if (round.source !== 'settlement') {
-                await action('yishu_claim_seed', !snapshot.daily?.seedClaimed, () => deps.claimSeed({ withSnapshot: false }), result => '领取红薯种子 ' + result.count + ' 个');
-                await action('yishu_share', !snapshot.daily?.shared, () => deps.shareShop({ withSnapshot: false }), result => result.shareReported ? '已上报分享，等待服务端确认暴击' : (result.shareReportError || '请在游戏里分享铺子'));
+                await action('yishu_claim_seed', !snapshot.daily?.seedClaimed && !dailyStatus('yishu_claim_seed'), () => deps.claimSeed({ withSnapshot: false }), result => '领取红薯种子 ' + result.count + ' 个');
+                await action('yishu_share', !snapshot.daily?.shared && !dailyStatus('yishu_share'), () => deps.shareShop({ withSnapshot: false }), result => result.shareReported ? '已上报分享，等待服务端确认暴击' : (result.shareReportError || '请在游戏里分享铺子'));
                 await action('yishu_claim_commission', snapshot.commission?.claimable === true, () => deps.claimCommission({ withSnapshot: false }), result => '领取收购提成 ' + result.amount + ' 福气币');
                 const lastSaleMinute = (0, yishuhuanfu_1.yishuSellMinutes)(getSellAfterTime()).at(-1);
                 if (canTrade() && round.slot === (0, yishuhuanfu_1.yishuDayStart)(round.plannedAt) + lastSaleMinute * 60 && enabled('yishu_harvest')) {
@@ -122,9 +139,9 @@ function createYishuAutomation(deps) {
                 return finish('活动未开放，或已跨日');
             if (round.source === 'settlement')
                 return finish('已停发新订单，等待游戏日终结算', 'settlement');
-            if (mode === 'off')
+            if (mode === 'off' || mode === 'manual')
                 return finish('自动卖薯已关闭');
-            if ((0, yishuhuanfu_1.yishuSellMode)(live()) === 'off')
+            if (!isBackgroundQuoteEnabled(live()))
                 return finish('本轮已暂停', 'interrupted');
             summary.scan = deps.getFriendQuotes();
             if (mode === 'scan')
@@ -223,7 +240,7 @@ async function runYishuTick(isReady, plannedAt, source) {
     const { getServerTimeSec, log, logWarn } = require('../utils/utils');
     const { runExclusiveAutomationTask } = require('./automation-lock');
     const now = getServerTimeSec();
-    if (now < yishuhuanfu_1.YISHU_START || now >= yishuhuanfu_1.YISHU_END || !isYishuAutomationEnabled(getAutomation()))
+    if (!(0, yishuhuanfu_1.isYishuAutomationInWindow)(now) || !isYishuAutomationEnabled(getAutomation()))
         return;
     const slot = (0, yishuhuanfu_1.latestYishuSellSlot)(now, getAutomation().yishu_sell_after_time);
     const accountId = process.env.FARM_ACCOUNT_ID || '';
@@ -240,6 +257,8 @@ async function runYishuTick(isReady, plannedAt, source) {
             if (!isReady() || !isYishuAutomationEnabled(getAutomation()))
                 return;
             const seconds = getServerTimeSec();
+            if (!(0, yishuhuanfu_1.isYishuAutomationInWindow)(seconds))
+                return;
             const sellAfterTime = getAutomation().yishu_sell_after_time;
             const history = (0, yishuhuanfu_history_1.readYishuHistory)(accountId);
             const done = history.some(entry => entry.type === 'round' && entry.slot === slot
@@ -311,23 +330,28 @@ function startYishuTimer(scheduler, isReady) {
     const { getServerTimeSec, logWarn } = require('../utils/utils');
     const { getAutomation } = require('../models/store');
     const { isAutomationTaskRunning, runExclusiveAutomationTask } = require('./automation-lock');
-    const canQuery = () => {
-        const seconds = getServerTimeSec();
-        return isReady() && seconds >= yishuhuanfu_1.YISHU_START && seconds < yishuhuanfu_1.YISHU_END;
-    };
+    const canQuery = () => isReady() && (0, yishuhuanfu_1.isYishuAutomationInWindow)(getServerTimeSec());
+    function nextScheduledCheck(now) {
+        const automation = getAutomation();
+        if (!isYishuAutomationEnabled(automation))
+            return;
+        const { start, end } = (0, yishuhuanfu_1.getYishuAutomationWindow)();
+        if (now >= end)
+            return;
+        const interval = isBackgroundQuoteEnabled(automation) ? automation.yishu_scan_interval_minutes : yishuhuanfu_1.YISHU_SCAN_MINUTES;
+        const next = now < start ? start : nextYishuCheck(now, interval, automation.yishu_sell_after_time);
+        return next < end ? next : undefined;
+    }
     watchdog ??= setInterval(() => {
         if (!canQuery())
             return;
-        if (scheduler.has(QUOTE_TASK) && (scheduler.has(TASK) || !isYishuAutomationEnabled(getAutomation())))
+        const scheduledCheckMissing = !scheduler.has(TASK) && nextScheduledCheck(getServerTimeSec()) !== undefined;
+        if (scheduler.has(QUOTE_TASK) && !scheduledCheckMissing)
             return;
         startYishuTimer(scheduler, isReady);
         logWarn('系统', '以薯换福自动任务定时器丢失，已重新注册', { module: 'system', event: '以薯换福自动', result: 'recovered' });
     }, 60_000);
     watchdog.unref?.();
-    const backgroundEnabled = () => {
-        const automation = getAutomation();
-        return automation.activity_enabled !== false && (0, yishuhuanfu_1.yishuSellMode)(automation) !== 'off';
-    };
     if (!scheduler.has(QUOTE_TASK))
         scheduler.setIntervalTask(QUOTE_TASK, 1000, async () => {
             if (!canQuery() || isAutomationTaskRunning())
@@ -336,7 +360,8 @@ function startYishuTimer(scheduler, isReady) {
             await runExclusiveAutomationTask('yishu_friend_quote', () => require('./activity-center').tickYishuHuanfuFriendShops({
                 limit: Math.max(1, Math.min(yishuhuanfu_1.YISHU_SCAN_LIMIT, Number(yishu_scan_friend_limit) || yishuhuanfu_1.YISHU_SCAN_LIMIT)),
                 intervalMs: 60_000 * Math.max(5, Number(yishu_scan_interval_minutes) || yishuhuanfu_1.YISHU_SCAN_MINUTES),
-                enabled: backgroundEnabled,
+                enabled: () => isBackgroundQuoteEnabled(getAutomation()),
+                manualEnabled: () => (0, yishuhuanfu_1.yishuSellMode)(getAutomation()) !== 'off',
                 ready: canQuery,
             }));
         }, { preventOverlap: true });
@@ -345,13 +370,12 @@ function startYishuTimer(scheduler, isReady) {
         scheduler.clear('yishu_start');
         return;
     }
-    const interval = () => (0, yishuhuanfu_1.yishuSellMode)(getAutomation()) === 'off' ? yishuhuanfu_1.YISHU_SCAN_MINUTES : getAutomation().yishu_scan_interval_minutes;
     const resume = !scheduler.has(TASK);
     function schedule() {
         const now = getServerTimeSec();
-        if (now >= yishuhuanfu_1.YISHU_END)
+        const next = nextScheduledCheck(now);
+        if (next === undefined)
             return;
-        const next = now < yishuhuanfu_1.YISHU_START ? yishuhuanfu_1.YISHU_START : nextYishuCheck(now, interval(), getAutomation().yishu_sell_after_time);
         scheduler.setTimeoutTask(TASK, Math.max(1, (next - now) * 1000), () => {
             schedule();
             const settlement = next === (0, yishuhuanfu_1.yishuDayStart)(next) + yishuhuanfu_1.YISHU_SELL_CUTOFF * 60;
@@ -360,7 +384,7 @@ function startYishuTimer(scheduler, isReady) {
     }
     schedule();
     const now = getServerTimeSec();
-    if (resume && now >= yishuhuanfu_1.YISHU_START && now < yishuhuanfu_1.YISHU_END) {
+    if (resume && (0, yishuhuanfu_1.isYishuAutomationInWindow)(now)) {
         scheduler.setTimeoutTask('yishu_start', 1000, () => runYishuTick(isReady, now, 'reconnect'));
     }
 }

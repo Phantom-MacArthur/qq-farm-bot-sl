@@ -1,0 +1,1 @@
+function e(r){const t=Math.max(0,Math.floor(Number(r)||0)),o=Math.floor(t/3600),a=Math.floor(t%3600/60),n=t%60;return`${o>0?`${o}:`:""}${String(a).padStart(2,"0")}:${String(n).padStart(2,"0")}`}export{e as f};

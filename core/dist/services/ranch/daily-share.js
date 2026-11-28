@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+const daily_completion_1 = require("../daily-completion");
 const network = require('../../utils/network');
 const { rpc } = require('./transport');
 const { itemDto, signature, error } = require('./model');
@@ -8,7 +9,10 @@ const SHARE_ID = 102;
 const DOC_ID = 2101;
 function getState() {
     const info = network.getDailyShareInfo(SHARE_ID);
-    return { ...info, canClaim: !info.claimed, shared: BigInt(info.shareCount) > 0n, rewards: [itemDto({ id: 80021, count: 5 })] };
+    const claimed = info.claimed || (0, daily_completion_1.isDailyComplete)('ranch_share');
+    if (info.claimed)
+        (0, daily_completion_1.recordDailyMark)((0, daily_completion_1.beginDailyCheck)('ranch_share'), 'completed');
+    return { ...info, claimed, canClaim: !claimed, shared: claimed || BigInt(info.shareCount) > 0n, rewards: [itemDto({ id: 80021, count: 5 })] };
 }
 async function prepare() {
     const state = getState();
@@ -17,6 +21,9 @@ async function prepare() {
     return state;
 }
 async function claim() {
+    const check = (0, daily_completion_1.beginDailyCheck)('ranch_share');
+    if (getState().claimed)
+        return { skipped: true, rewards: [] };
     if (!getState().shared) {
         const reply = await rpc('reportShare', { share_id: SHARE_ID, doc_id: DOC_ID }, true);
         network.applyShareInfos(reply.share_infos);
@@ -30,6 +37,7 @@ async function claim() {
     network.applyShareInfos(reply.share_infos);
     if (!getState().claimed || signature(reply.rewards) !== signature(state.rewards))
         throw error('RANCH_RESULT_UNKNOWN', '每日分享奖励回包未能确认，请刷新核对，勿重复提交');
+    (0, daily_completion_1.recordDailyMark)(check, 'completed');
     return { skipped: false, rewards: reply.rewards };
 }
 module.exports = { getState, prepare, claim };

@@ -1,5 +1,5 @@
 import type { AutomationConfig } from '../types/config';
-export declare const YISHU_AUTOMATION_KEYS: readonly ["yishu_claim_seed", "yishu_share", "yishu_auto_sell", "yishu_sell_mode", "yishu_claim_commission", "yishu_plant", "yishu_harvest", "yishu_sell_after_time", "yishu_scan_friend_limit", "yishu_scan_interval_minutes"];
+export declare const YISHU_AUTOMATION_KEYS: readonly ["yishu_claim_seed", "yishu_share", "yishu_claim_commission", "yishu_plant", "yishu_harvest", "yishu_auto_sell", "yishu_sell_mode", "yishu_sell_after_time", "yishu_scan_friend_limit", "yishu_scan_interval_minutes"];
 type Settings = Partial<AutomationConfig>;
 type Round = {
     plannedAt: number;
@@ -33,6 +33,7 @@ export declare function createYishuAutomation(deps: {
         harvested: number;
     }>;
     getServerTimeSec: () => number;
+    getDailyStatus?: (key: 'yishu_claim_seed' | 'yishu_share') => 'completed' | 'pending_confirmation' | undefined;
     log: (module: string, message: string, meta?: any) => void;
     delay?: (ms: number) => Promise<void>;
 }): {

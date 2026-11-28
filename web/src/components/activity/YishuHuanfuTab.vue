@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { YishuHuanfuActivityDto, YishuHuanfuCatalogEntryDto, YishuHuanfuFriendShopDto } from '@/stores/activity-center'
 import type { YishuHuanfuTabKey } from './center/yishu-huanfu-details'
+import type { yishuSellMode } from '@/utils/account-feature-modules'
 import { computed, ref } from 'vue'
 import { isYishuSaleTarget } from './center/yishu-huanfu-details'
 
@@ -13,6 +14,7 @@ const props = defineProps<{
   friendShopsLoading: boolean
   friendScanNote: string
   manualPending: number
+  quoteMode: ReturnType<typeof yishuSellMode> | null
 }>()
 
 const emit = defineEmits<{
@@ -119,10 +121,17 @@ function goodsTitle(entry: { index: number, name: string, nameKnown: boolean }) 
       <section aria-label="好友比价">
         <div class="compare-toolbar margin-shell">
           <div class="margin-content">
-            <span class="compare-count">已比价 {{ comparedCount }} 家</span>
+            <span class="compare-count">{{ friendScanNote || `已比价 ${comparedCount} 家` }}</span>
             <div class="compare-actions">
-              <button type="button" class="yshf-button ghost compact" :disabled="friendShopsLoading || manualPending > 0 || busy" title="刷新基础价或加成为 0 的已查铺子" @click="emit('scanFriends', true)">
-                {{ manualPending > 0 ? '刷新中…' : '重新比价' }}
+              <button
+                v-if="quoteMode && quoteMode !== 'off'"
+                type="button"
+                class="yshf-button ghost compact"
+                :disabled="!activity?.active || friendShopsLoading || manualPending > 0 || busy"
+                :title="quoteMode === 'manual' ? '手动查询一批好友铺子报价' : '刷新基础价或加成为 0 的已查铺子'"
+                @click="emit('scanFriends', true)"
+              >
+                {{ manualPending > 0 ? '询价中…' : quoteMode === 'manual' ? '开始询价' : '重新比价' }}
               </button>
             </div>
           </div>
@@ -137,7 +146,7 @@ function goodsTitle(entry: { index: number, name: string, nameKnown: boolean }) 
                 <span v-if="shop.own" class="compare-meta">当前账号</span>
                 <span v-else-if="shop.via === 'account'" class="compare-meta">已登录</span>
               </div>
-              <span v-if="shop.quotePending" class="compare-quote">待查价</span>
+              <span v-if="shop.quotePending" class="compare-quote">{{ shop.quoteShareExpired ? '分享链接已失效' : '待查价' }}</span>
               <span v-else class="compare-quote">
                 <span class="compare-price">{{ formatNumber(shop.totalPrice) }}</span>（基础{{ formatNumber(shop.price) }}+加成{{ formatNumber(shop.bonus) }}），{{ shop.own ? '不限量' : `还可收 ${formatNumber(shop.canSell === false ? 0 : shop.quota)}` }}
               </span>
@@ -153,7 +162,7 @@ function goodsTitle(entry: { index: number, name: string, nameKnown: boolean }) 
             </div>
           </li>
         </ol>
-        <p v-else-if="!friendShopsLoading" class="yshf-empty">{{ friendScanNote || '暂无报价。' }}</p>
+        <p v-else-if="!friendShopsLoading && !friendScanNote" class="yshf-empty">暂无报价。</p>
       </section>
     </template>
 
@@ -309,11 +318,12 @@ function goodsTitle(entry: { index: number, name: string, nameKnown: boolean }) 
 }
 
 .compare-count {
-  flex: none;
+  min-width: 0;
 }
 
 .compare-actions {
   display: flex;
+  flex: none;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;

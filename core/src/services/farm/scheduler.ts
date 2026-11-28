@@ -376,17 +376,27 @@ function createFarmOperationCounts(): FarmOperationCounts {
 
 /**
  * 手动/自动执行农场操作
- * @param opType - 'all', 'harvest', 'clear', 'plant', 'upgrade', 'remove'
+ * @param opType - 'all', 'harvest', 'clear', 'plant_empty', 'upgrade', 'remove'
  */
 async function runFarmOperation(
     opType: string,
     targetLandIdInput: unknown = null,
     propagateErrors: boolean = false,
     automatic?: { generation: number; pacing: any },
-): Promise<{ hadWork: boolean; actions: string[]; counts: FarmOperationCounts }> {
+): Promise<{ hadWork: boolean; actions: string[]; counts: FarmOperationCounts; warnings?: string[] }> {
     if (opType === 'plant') throw new Error('独立种植操作已移除，请使用一键打理');
+    if (!['all', 'harvest', 'clear', 'plant_empty', 'upgrade', 'remove'].includes(opType)) {
+        throw new Error('未知农场操作');
+    }
+    const batchTargets = Array.isArray(targetLandIdInput)
+        ? new Set<number>(targetLandIdInput.map(id => toNum(id))) : null;
+    if (batchTargets && (!['clear', 'harvest'].includes(opType) || !batchTargets.size
+        || [...batchTargets].some(id => !Number.isSafeInteger(id) || id <= 0))) {
+        throw new Error('批量务农或收获需要有效的地块编号');
+    }
     const counts = createFarmOperationCounts();
     const actions: string[] = [];
+    const warnings: string[] = [];
     const harvestedLandIds: number[] = [];
     const harvestReply: { land: any[] } = { land: [] };
     const pushedIds = new Set<number>();
@@ -445,10 +455,10 @@ async function runFarmOperation(
     const state = getUserState();
     const status = analyzeLands(lands, isFirstFarmCheck, state.gid);
     const socialEventItemIds: number[] = getCleanableFarmSocialEventItemIds(landsReply);
-    const hasTargetLandId = targetLandIdInput !== null
+    const hasTargetLandId = !batchTargets && targetLandIdInput !== null
         && targetLandIdInput !== undefined
         && String(targetLandIdInput).trim() !== '';
-    const targetLandId = toNum(targetLandIdInput);
+    const targetLandId = hasTargetLandId ? toNum(targetLandIdInput) : 0;
     if (hasTargetLandId && (!Number.isSafeInteger(targetLandId) || targetLandId <= 0)) {
         throw new Error('地块编号无效');
     }
@@ -494,10 +504,10 @@ async function runFarmOperation(
     const harvestFromRead = async () => {
         const candidates: number[] = opType === 'all' ? autoHarvestLandIds(status)
             : hasTargetLandId ? status.harvestable.filter((id: number) => id === targetLandId) : status.harvestable;
-        const ids = candidates.filter(id => !pushedIds.has(id));
+        const ids = candidates.filter(id => !pushedIds.has(id) && (!batchTargets || batchTargets.has(id)));
         if (ids.length) {
             fertilizerSnapshot = undefined;
-            await collectHarvest(ids, lands, !hasTargetLandId && !pushedIds.size && ids.length === status.harvestable.length);
+            await collectHarvest(ids, lands, !hasTargetLandId && !batchTargets && !pushedIds.size && ids.length === status.harvestable.length);
         }
     };
     if (automatic) await harvestFromRead();
@@ -527,7 +537,7 @@ async function runFarmOperation(
     // 执行一键务农 (除草+除虫+浇水) - 串行执行以降低并发压力
     if (opType === 'all' || opType === 'clear') {
         // 检查是否跳过一键务农（仅自动模式生效，手动clear不受影响）
-        const skipOwnWeedBug = opType === 'all' && isAutomationOn('skip_own_weed_bug');
+        const skipOwnWeedBug = !!automatic && isAutomationOn('skip_own_weed_bug');
         let farmingLandIds = [...new Set([
             ...status.needWeed,
             ...status.needBug,
@@ -540,6 +550,7 @@ async function runFarmOperation(
             ...status.harvestable,
             ...status.dead,
         ]);
+        if (batchTargets) farmingLandIds = farmingLandIds.filter(id => batchTargets.has(id));
         if (hasTargetLandId) {
             if (!validSingleLandIds.has(targetLandId)) {
                 throw new Error(`土地#${targetLandId} 当前不能执行务农`);
@@ -548,36 +559,47 @@ async function runFarmOperation(
             farmingLandIds = targetNeedsFarming || socialEventItemIds.length > 0 ? [targetLandId] : [];
         } else if (socialEventItemIds.length > 0 && farmingLandIds.length === 0) {
             // 青蛙属于农场级事件，但 Farming 仍需携带一块有效作物地；官方单点抓包也是该结构。
-            const fallbackLandId = status.growing[0] || status.harvestable[0] || status.dead[0] || 0;
+            const fallbackLandId = [...validSingleLandIds].find(id => !batchTargets || batchTargets.has(id)) || 0;
             if (fallbackLandId > 0) farmingLandIds = [fallbackLandId];
         }
 
         if (!skipOwnWeedBug && farmingLandIds.length > 0) {
             fertilizerSnapshot = undefined;
             try {
-                await farming(farmingLandIds, socialEventItemIds);
-                const parts: string[] = [];
-                if (status.needWeed.length) parts.push(`草${status.needWeed.length}`);
-                if (status.needBug.length) parts.push(`虫${status.needBug.length}`);
-                if (status.needWater.length) parts.push(`水${status.needWater.length}`);
-                if (status.needInteractionCleanup.length) parts.push(`道具${status.needInteractionCleanup.length}`);
-                if (socialEventItemIds.length) parts.push(`青蛙${socialEventItemIds.length}`);
-                if (hasTargetLandId) {
-                    actions.push(`单点务农#${targetLandId}${parts.length ? `(${parts.join('/')})` : ''}`);
-                } else {
-                    const tended = new Set([...status.needWeed, ...status.needBug]).size;
-                    const summary = [
-                        tended ? `农${tended}` : '',
-                        status.needWater.length ? `水${status.needWater.length}` : '',
-                        status.needInteractionCleanup.length ? `道具${status.needInteractionCleanup.length}` : '',
-                        socialEventItemIds.length ? `青蛙${socialEventItemIds.length}` : '',
-                    ].filter(Boolean);
-                    actions.push(`一键务农: ${summary.join('，')}`);
+                const reply = await farming(farmingLandIds, socialEventItemIds);
+                const updatedIds = new Set([
+                    ...(reply?.land || []).map((land: any) => toNum(land.id)),
+                    ...(reply?.results || []).map((result: any) => toNum(result.land_id)),
+                ]);
+                const confirmed = farmingLandIds.filter(id => updatedIds.has(id));
+                const cleanedEvents = new Set((reply?.social_event_rewards || []).map((event: any) => toNum(event.item_id)));
+                const cleanedCount = socialEventItemIds.filter(id => cleanedEvents.has(id)).length;
+                if (cleanedCount && !confirmed.length) confirmed.push(farmingLandIds[0]);
+                if (confirmed.length < farmingLandIds.length || cleanedCount < socialEventItemIds.length) {
+                    warnings.push('部分务农结果未获游戏确认，请核对土地状态');
                 }
-                counts.farming += farmingLandIds.length;
+                const countConfirmed = (ids: number[]) => ids.filter(id => confirmed.includes(id)).length;
+                const weeds = countConfirmed(status.needWeed);
+                const bugs = countConfirmed(status.needBug);
+                const water = countConfirmed(status.needWater);
+                const items = countConfirmed(status.needInteractionCleanup);
+                const parts: string[] = [];
+                if (weeds) parts.push(`草${weeds}`);
+                if (bugs) parts.push(`虫${bugs}`);
+                if (water) parts.push(`水${water}`);
+                if (items) parts.push(`道具${items}`);
+                if (cleanedCount) parts.push(`青蛙${cleanedCount}`);
+                if (confirmed.length && hasTargetLandId) {
+                    actions.push(`单点务农#${targetLandId}${parts.length ? `(${parts.join('/')})` : ''}`);
+                } else if (confirmed.length) {
+                    actions.push(`一键务农: ${confirmed.length} 块${parts.length ? `（${parts.join('，')}）` : ''}`);
+                }
+                counts.farming += confirmed.length;
             } catch (e: any) {
                 logWarn(hasTargetLandId ? '单点务农' : '一键务农', e.message);
-                if (hasTargetLandId || propagateErrors) throw e;
+                if (!automatic && opType === 'all' && e.name === 'GatewayError') {
+                    warnings.push(`务农失败：${e.errorMessage || e.message}`);
+                } else if (hasTargetLandId || propagateErrors) throw e;
             }
         }
     }
@@ -596,7 +618,7 @@ async function runFarmOperation(
 
         if (opType === 'all' && harvestedLandIds.length > 0) {
             // 收获后延迟再铲除枯地
-            await randomDelay(1000, 1500);
+            if (automatic) await randomDelay(1000, 1500);
             postHarvest = await resolveRemovableHarvestedLands(harvestedLandIds, harvestReply);
             allDeadLands = [...new Set([...allDeadLands, ...postHarvest.removable])];
         }
@@ -650,7 +672,7 @@ async function runFarmOperation(
                     });
                     if (propagateErrors) throw e;
                 }
-                await randomDelay(1000, 1500);
+                if (automatic || landId !== unlockable.at(-1) || upgradable.length) await randomDelay(1000, 1500);
             }
             if (unlocked > 0) {
                 actions.push(`解锁${unlocked}`);
@@ -674,7 +696,7 @@ async function runFarmOperation(
                     });
                     if (propagateErrors) throw e;
                 }
-                await randomDelay(1000, 1500);
+                if (automatic || landId !== upgradable.at(-1)) await randomDelay(1000, 1500);
             }
             if (upgraded > 0) {
                 actions.push(`升级${upgraded}`);
@@ -755,7 +777,7 @@ async function runFarmOperation(
              module: 'farm', event: '农场循环', opType, actions
          });
     }
-    return { hadWork: actions.length > 0, actions, counts };
+    return { hadWork: actions.length > 0, actions, counts, ...(warnings.length ? { warnings } : {}) };
 }
 
 function scheduleNextFarmCheck(delayMs: number = CONFIG.farmCheckInterval): void {

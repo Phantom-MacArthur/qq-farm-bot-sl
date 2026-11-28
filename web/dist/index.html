@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <!-- 图标唯一来源：public/icon.png（页头品牌图标、标签页图标共用同一张图）。
+         不写 type，由浏览器按文件内容嗅探，换图时无需同步维护 svg/ico/icns。
+         覆盖 icon.png 后把这里两处与 PageHeader.vue 一处的 v 值同时 +1，让浏览器缓存失效。 -->
+    <link rel="icon" href="/icon.png?v=3" />
+    <link rel="apple-touch-icon" href="/icon.png?v=3" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <title>QQ农场智能助手</title>
+    <script>
+      (() => {
+        try {
+          const mode = localStorage.getItem('theme_mode') || 'system'
+          const dark = mode === 'dark' || (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches)
+          document.documentElement.classList.toggle('dark', dark)
+          document.documentElement.style.colorScheme = dark ? 'dark' : 'light'
+        } catch (_) { /* storage may be unavailable */ }
+      })()
+    </script>
+  <script type="module" crossorigin src="/assets/index-BwhAU3Jc.js"></script>
+  <link rel="modulepreload" crossorigin href="/assets/vendor-CC6vGjow.js">
+  <link rel="modulepreload" crossorigin href="/assets/vendor-vue-CJitUa84.js">
+  <link rel="modulepreload" crossorigin href="/assets/vendor-axios-C0Zqfgkc.js">
+  <link rel="modulepreload" crossorigin href="/assets/vendor-ui-C93tIkQH.js">
+  <link rel="stylesheet" crossorigin href="/assets/vendor-Dq8racbg.css">
+  <link rel="stylesheet" crossorigin href="/assets/index-CwNXlN-T.css">
+</head>
+<body>
+<div id="app"></div>
+</body>
+</html>
