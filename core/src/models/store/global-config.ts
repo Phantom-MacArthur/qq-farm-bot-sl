@@ -1,9 +1,10 @@
+import type { LegacyAutoCodeRefreshConfig } from '../../types/config';
 import type { NotificationTypes } from '../../config/notification-types';
-import type { AutoCodeRefreshConfig, CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
-import { normalizeNotificationTypes } from '../../config/notification-types';
+import type { CaptureSettings, GlobalConfig, LoginSettings, OfflineReminder, SystemConfig, UIConfig } from '../../types/config';
+import { normalizeFarmActivityEvents, normalizeNotificationTypes } from '../../config/notification-types';
 export {};
 
-const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
+const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, DEFAULT_AUTO_CODE_REFRESH: DEFAULT_OFFLINE_RECOVERY, normalizeAutoCodeRefresh: normalizeOfflineRecovery, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
 
 const sharedState = require('./shared-state');
 const { getSavedAutomation } = require('./account-config');
@@ -74,8 +75,8 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
             channelCredentials[key]!.wxPusherUid = wxPusherUid;
         }
     }
-    const notificationTypes: Partial<NotificationTypes> = {};
-    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase'] as const) {
+    const notificationTypes: Partial<NotificationTypes> = { farmActivity: false };
+    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase', 'farmActivity'] as const) {
         const value = src.notificationTypes?.[key];
         if (typeof value === 'boolean') notificationTypes[key] = value;
     }
@@ -89,6 +90,7 @@ function normalizeOfflineReminder(input: unknown): OfflineReminder {
         title,
         msg,
         notificationTypes,
+        farmActivityEvents: normalizeFarmActivityEvents(src.farmActivityEvents),
         mysteryMessages: {
             mysteryArrival: typeof src.mysteryMessages?.mysteryArrival === 'string' ? src.mysteryMessages.mysteryArrival.trim() : '神秘商人到访',
             mysteryPurchase: typeof src.mysteryMessages?.mysteryPurchase === 'string' ? src.mysteryMessages.mysteryPurchase.trim() : '神秘商人到访',
@@ -153,14 +155,18 @@ function getLoginSettings(): LoginSettings {
 
 function setLoginSettings(cfg: Partial<LoginSettings> | undefined): LoginSettings {
     const next = normalizeLoginSettings({ ...getLoginSettings(), ...(cfg || {}) });
-    if (next.qqQrLogin && (!next.napCatEndpoint || !next.napCatSignature)) {
+    // 部署侧已经自带 NapCat（compose 的 napcat profile 会注入 NAPCAT_LOGIN_ENABLED，
+    // 并且 NAPCAT_WEBUI_URL / NAPCAT_OPENAUTH_URL 就是取码链路真正使用的地址）时，
+    // 不再要求面板里重复填地址和签名——运行时取码只读这两个环境变量。
+    const napCatProvidedByHost = process.env.NAPCAT_LOGIN_ENABLED === 'true' || !!process.env.NAPCAT_WEBUI_URL;
+    if (next.qqQrLogin && !napCatProvidedByHost && (!next.napCatEndpoint || !next.napCatSignature)) {
         throw new Error('开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名');
     }
     saveGlobalConfig({ loginSettings: next });
     return getLoginSettings();
 }
 
-function normalizeAutoCodeRefresh(input: unknown): AutoCodeRefreshConfig {
+function normalizeAutoCodeRefresh(input: unknown): LegacyAutoCodeRefreshConfig {
     const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
     const intervalMinutes = Number(src.intervalMinutes);
     const maxRetries = Number(src.maxRetries);
@@ -175,13 +181,14 @@ function normalizeAutoCodeRefresh(input: unknown): AutoCodeRefreshConfig {
     };
 }
 
-function getAutoCodeRefresh(): AutoCodeRefreshConfig {
-    return normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh);
+function getAutoCodeRefresh(): LegacyAutoCodeRefreshConfig {
+    return { ...normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh), enabled: normalizeOfflineRecovery(globalConfig.systemConfig?.autoCodeRefresh ?? globalConfig.autoCodeRefresh).offlineEnabled };
 }
 
-function setAutoCodeRefresh(cfg: Partial<AutoCodeRefreshConfig> | undefined): AutoCodeRefreshConfig {
+function setAutoCodeRefresh(cfg: Partial<LegacyAutoCodeRefreshConfig> | undefined): LegacyAutoCodeRefreshConfig {
     const next = normalizeAutoCodeRefresh({ ...getAutoCodeRefresh(), ...(cfg || {}) });
-    saveGlobalConfig({ autoCodeRefresh: next });
+    const systemConfig = globalConfig.systemConfig;
+    saveGlobalConfig({ autoCodeRefresh: next, ...(systemConfig ? { systemConfig: { ...systemConfig, autoCodeRefresh: normalizeOfflineRecovery(next) } } : {}) });
     return getAutoCodeRefresh();
 }
 
@@ -247,7 +254,15 @@ function applyOfflineReminderDefault(accountId: string): OfflineReminder | null 
 }
 
 function getSystemConfig(): SystemConfig | null {
-    return globalConfig.systemConfig ? { ...globalConfig.systemConfig } : null;
+    if (!globalConfig.systemConfig) return null;
+    const config = globalConfig.systemConfig;
+    return {
+        ...config,
+        // 旧配置没有该字段时默认开启，保证升级后重启自动生效。
+        autoCodeRefresh: normalizeOfflineRecovery(config.autoCodeRefresh ?? globalConfig.autoCodeRefresh),
+        // 旧配置没有该字段时默认开启：升级前用户从没关过这个开关。
+        autoStartAccounts: config.autoStartAccounts !== false,
+    };
 }
 
 function setSystemConfig(config: Partial<SystemConfig> | undefined): SystemConfig | null {
@@ -305,6 +320,14 @@ function setSystemConfig(config: Partial<SystemConfig> | undefined): SystemConfi
         os: deviceInfo.os,
         timeZone: normalizeTimeZone(config.timeZone || current?.timeZone || DEFAULT_TIME_ZONE),
         deviceInfo,
+        // 只改账号保活时不要把其它系统设置清零：缺字段时沿用已保存的值。
+        autoCodeRefresh: normalizeOfflineRecovery(config.autoCodeRefresh === undefined
+            ? (current?.autoCodeRefresh ?? globalConfig.autoCodeRefresh ?? DEFAULT_OFFLINE_RECOVERY)
+            : config.autoCodeRefresh),
+        // 同上：缺字段沿用已保存值，避免只保存保活配置时把自动登录关掉。
+        autoStartAccounts: config.autoStartAccounts === undefined
+            ? (current?.autoStartAccounts !== false)
+            : config.autoStartAccounts === true,
     };
     saveGlobalConfig({ systemConfig: next });
     return { ...globalConfig.systemConfig };

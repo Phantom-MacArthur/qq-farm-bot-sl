@@ -1,9 +1,9 @@
-export {};
+import { beginDailyCheck, getDailyMark, isDailyComplete, recordDailyMark } from './daily-completion';
 /**
  * 每日分享礼包
  */
 
-const { sendMsgAsync, sendMsgNoReply } = require('../utils/network');
+const { getDailyShareInfo, sendMsgAsync, sendMsgNoReply } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { log, getSystemDateKey } = require('../utils/utils');
 const { describeRewardItems } = require('../utils/reward-items');
@@ -11,6 +11,7 @@ const { recordFarmReward } = require('./farm-reward-history');
 
 const DAILY_KEY: string = 'daily_share';
 const CHECK_COOLDOWN_MS: number = 10 * 60 * 1000;
+const SHARE_REWARD_ALREADY_CLAIMED = 1009001;
 
 type ShareCheckStatus = 'unchecked' | 'entry_available' | 'entry_unavailable' | 'already_claimed' | 'check_failed';
 
@@ -28,7 +29,7 @@ function isCheckedToday(): boolean {
 }
 
 function isAlreadyClaimedError(error: any): boolean {
-    return Number(error?.code) === 1009001 || /\bcode=1009001\b/.test(String(error?.message || error || ''));
+    return Number(error?.code) === SHARE_REWARD_ALREADY_CLAIMED || /\bcode=1009001\b/.test(String(error?.message || error || ''));
 }
 
 async function checkCanShare(): Promise<any> {
@@ -52,11 +53,14 @@ async function reportShare(): Promise<void> {
     types.ReportShareReply.decode(replyBody);
 }
 
-async function claimShareReward(): Promise<any> {
+async function claimShareReward(onSent?: () => void): Promise<any> {
     const body: Uint8Array = types.ClaimShareRewardRequest.encode(types.ClaimShareRewardRequest.create({
         field_1: true,
     })).finish();
-    const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ClaimShareReward', body);
+    const { body: replyBody } = await sendMsgAsync('gamepb.sharepb.ShareService', 'ClaimShareReward', body, {
+        expectedErrorCodes: [SHARE_REWARD_ALREADY_CLAIMED],
+        onSent,
+    });
     return types.ClaimShareRewardReply.decode(replyBody);
 }
 
@@ -70,9 +74,16 @@ async function reportActivityShare(source: number, scene: number): Promise<void>
 
 async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
     const now: number = Date.now();
-    if (claimedDateKey === getSystemDateKey()) return false;
+    if (claimedDateKey === getSystemDateKey() || isDailyComplete('farm_daily_share')) return false;
     if (!force && now - lastCheckAt < CHECK_COOLDOWN_MS) return false;
     lastCheckAt = now;
+    const check = beginDailyCheck('farm_daily_share');
+    const recorded = getDailyShareInfo?.(1);
+    if (check && recorded?.dateKey === check.dateKey && recorded.claimed === true) {
+        recordDailyMark(check, 'completed');
+        return false;
+    }
+    if (getDailyMark('farm_daily_share')?.status === 'pending_confirmation') return false;
     try {
         const reply: any = await checkCanShare();
         canShare = !!(reply && reply.can_share);
@@ -89,9 +100,10 @@ async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
         }
 
         await reportShare();
-        const claimReply: any = await claimShareReward();
+        const claimReply: any = await claimShareReward(() => recordDailyMark(check, 'pending_confirmation'));
         const items: any[] = Array.isArray(claimReply?.items) ? claimReply.items : [];
         claimedDateKey = checkedDateKey;
+        recordDailyMark(check, 'completed');
         lastClaimAt = Date.now();
         lastRewards = describeRewardItems(items);
         recordFarmReward('daily_share', lastRewards);
@@ -106,6 +118,7 @@ async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
     } catch (e: any) {
         if (isAlreadyClaimedError(e)) {
             claimedDateKey = getSystemDateKey();
+            recordDailyMark(check, 'completed');
             checkedDateKey = claimedDateKey;
             lastClaimAt = Date.now();
             checkStatus = 'already_claimed';
@@ -116,6 +129,7 @@ async function checkDailyShareStatus(force: boolean = false): Promise<boolean> {
             });
             return true;
         }
+        if (/^\d+$/.test(String(e?.code || ''))) recordDailyMark(check, 'clear_pending');
         canShare = null;
         checkStatus = 'check_failed';
         log('分享', `状态检查失败: ${e.message}`, {
@@ -137,7 +151,7 @@ module.exports = {
         checkedToday: isCheckedToday(),
         checkStatus,
         canShare,
-        doneToday: claimedDateKey === getSystemDateKey(),
+        doneToday: claimedDateKey === getSystemDateKey() || isDailyComplete('farm_daily_share'),
         lastCheckAt,
         lastClaimAt,
         rewards: claimedDateKey === getSystemDateKey() ? lastRewards : [],

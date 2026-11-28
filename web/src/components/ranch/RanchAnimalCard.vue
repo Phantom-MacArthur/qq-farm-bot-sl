@@ -2,6 +2,7 @@
 import { NButton } from 'naive-ui/es/button'
 import { NPopover } from 'naive-ui/es/popover'
 import { computed, ref, watch } from 'vue'
+import { formatDuration } from '@/components/ranch/ranch-shared'
 import RanchFeedMenu from '@/components/ranch/RanchFeedMenu.vue'
 import { formatCountdown } from '@/utils/format-countdown'
 
@@ -66,6 +67,16 @@ const maturityCountdown = computed(() => {
     || props.animal.deliveringUntilMs || remaining == null || percent == null || !Number.isFinite(duration) || duration <= 0)
     return null
   return { percent, duration, elapsed: Math.min(duration, Math.max(0, duration - remaining)) }
+})
+const growthDetails = computed(() => {
+  const growth = props.animal?.growth
+  return [
+    { label: '幼崽期', seconds: Number(growth?.infantSec) },
+    { label: '成长期', seconds: Number(growth?.growSec) },
+    { label: '成熟期', seconds: Number(growth?.matureSec) },
+    { label: '每轮生产', seconds: Number(growth?.productRoundSec) },
+    { label: '每份产物耗草', seconds: Number(growth?.grassSecPerItem) },
+  ].filter(({ seconds }) => Number.isFinite(seconds) && seconds > 0)
 })
 function roundProgress(round: number) {
   if (round <= (rounds.value?.done ?? 0)) return 100
@@ -138,6 +149,15 @@ function roundProgress(round: number) {
             </div>
           </section>
           <p v-if="giant" class="pen-detail__giant">巨大<template v-if="weight"> · {{ weight }}</template></p>
+          <section v-if="growthDetails.length" class="pen-detail__section" aria-label="基础耗时">
+            <div class="pen-detail__section-content">
+              <p>基础耗时</p>
+              <div v-for="detail in growthDetails" :key="detail.label" class="pen-detail__row pen-detail__muted">
+                <span>{{ detail.label }}</span>
+                <span>{{ formatDuration(detail.seconds) }}</span>
+              </div>
+            </div>
+          </section>
         </div>
       </div>
     </NPopover>

@@ -3,10 +3,9 @@ import type { ActivityTab } from '@/components/activity/BottomNav.vue'
 import type { ActivityDirectoryItemDto, ActivityGameplayKey } from '@/stores/activity-center'
 import { useNotification } from 'naive-ui/es/notification'
 import { storeToRefs } from 'pinia'
-import { onMounted, onUnmounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { resolveActivityGameplay } from '@/components/activity/gameplays'
-import ShareRewardActivity from './ShareRewardActivity.vue'
 import { useAccountOffline, useReconnectRefresh } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
 import { useActivityCenterStore } from '@/stores/activity-center'
@@ -20,10 +19,13 @@ import MugePage from './MugePage.vue'
 import PetDiaryPage from './PetDiaryPage.vue'
 import QingMeiActivityPage from './QingMeiActivityPage.vue'
 import QixiActivityPage from './QixiActivityPage.vue'
+import ShareRewardActivity from './ShareRewardActivity.vue'
 import StellarActivityPage from './StellarActivityPage.vue'
 import WeatherActivityPage from './WeatherActivityPage.vue'
+import YishuHuanfuActivityPage from './YishuHuanfuActivityPage.vue'
 
 const props = withDefaults(defineProps<{ space?: 'farm' | 'ranch' }>(), { space: 'farm' })
+const route = useRoute()
 const router = useRouter()
 const notification = useNotification()
 const accountStore = useAccountStore()
@@ -31,12 +33,19 @@ const activityStore = useActivityCenterStore()
 const friendStore = useFriendStore()
 const { currentAccountId } = storeToRefs(accountStore)
 const { notice, actionError } = storeToRefs(activityStore)
+const isDirectoryRoute = computed(() => route.name === (props.space === 'ranch' ? 'ranch-activity-center' : 'activity-center'))
+const linkedActivity = computed(() => {
+  if (!isDirectoryRoute.value)
+    return null
+  const activity = route.query.activity
+  return activity === 'muge' || (props.space === 'farm' && activity === 'yishuhuanfu') ? activity : null
+})
 const selectedActivity = ref<ActivityGameplayKey | null>(null)
 const selectedInstanceId = ref('')
 const isOffline = useAccountOffline()
 const appStore = useAppStore()
 watch([selectedActivity, isOffline], ([activity, offline]) => {
-  appStore.activityDetailOpen = !!activity && !offline
+  appStore.activityUsesCustomLayout = !!activity && !offline && activity !== 'muge' && activity !== 'yishuhuanfu'
 }, { immediate: true })
 const stellarEntryTab = ref<ActivityTab>('travel')
 
@@ -71,6 +80,10 @@ async function loadSelectedActivity() {
 }
 
 function goBack() {
+  if (linkedActivity.value) {
+    void router.replace({ query: { ...route.query, activity: undefined } })
+    return
+  }
   if (selectedActivity.value) {
     selectedActivity.value = null
     return
@@ -78,7 +91,22 @@ function goBack() {
   router.back()
 }
 
+watch(linkedActivity, (activity, previous) => {
+  if (!activity && !previous)
+    return
+  selectedActivity.value = activity
+  selectedInstanceId.value = ''
+  if (activity)
+    void loadSelectedActivity()
+  else if (props.space === 'farm' && isDirectoryRoute.value)
+    void activityStore.refresh(accountId())
+}, { immediate: true })
+
 watch(currentAccountId, () => {
+  if (linkedActivity.value) {
+    void loadSelectedActivity()
+    return
+  }
   selectedActivity.value = null
   if (props.space === 'farm')
     activityStore.refresh(accountId())
@@ -114,17 +142,17 @@ watch([notice, actionError], ([successMessage, failureMessage]) => {
 useReconnectRefresh(() => selectedActivity.value ? loadSelectedActivity() : activityStore.refresh(accountId()))
 
 onMounted(() => {
-  if (props.space === 'farm')
+  if (props.space === 'farm' && !linkedActivity.value)
     activityStore.refresh(accountId())
 })
-onUnmounted(() => {
-  appStore.activityDetailOpen = false
+onBeforeUnmount(() => {
+  appStore.activityUsesCustomLayout = false
 })
 </script>
 
 <template>
   <ActivityDirectoryPage
-    v-if="!selectedActivity || isOffline"
+    v-if="!selectedActivity || (isOffline && selectedActivity !== 'yishuhuanfu')"
     :offline="isOffline"
     :space="space"
     @back="goBack"
@@ -160,6 +188,7 @@ onUnmounted(() => {
     @back="goBack"
   />
   <PetDiaryPage v-else-if="selectedActivity === 'pet'" @back="goBack" />
+  <YishuHuanfuActivityPage v-else-if="selectedActivity === 'yishuhuanfu'" @back="goBack" />
 </template>
 
 <style>

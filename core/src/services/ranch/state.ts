@@ -5,10 +5,20 @@ export {};
 
 const { rpc, inScene, isUnlocked } = require('./transport');
 const { animalMap, mutationMap, cubMap, canMap, facilityMap, itemMap, taskMap, itemDto, pendingOperationView, quantity, levelInfo, error } = require('./model');
-const { getServerTimeSec } = require('../../utils/utils');
+const { getServerTimeSec, getSystemDateKey } = require('../../utils/utils');
 const { types } = require('../../utils/proto');
-const { getUserState } = require('../../utils/network');
+const { getUserState, getWs } = require('../../utils/network');
 const { getCareerInfoOrNull } = require('../career');
+
+const DASHBOARD_CACHE_TTL_MS = 15_000;
+let dashboardSnapshot: { socket: unknown; loadedAt: number; dateKey: string; state: any } | null = null;
+
+function getCachedDashboardState() {
+    const cached = dashboardSnapshot;
+    if (!cached || cached.socket !== getWs() || Date.now() - cached.loadedAt >= DASHBOARD_CACHE_TTL_MS
+        || !isUnlocked() || cached.dateKey !== getSystemDateKey()) return null;
+    return cached.state;
+}
 
 function bagItems(bag: any): any[] {
     return [...bag.physical_items, ...bag.virtual_items];
@@ -66,6 +76,18 @@ function animalDto(animal: any): any {
         harvestExp: cfg ? Number(cfg.harvest_exp) : null,
         canProduce: animal.can_deliver, canHarvest: animal.can_harvest, canFeed: animal.can_feed, canRelease: animal.can_donate,
         limitedCanUsed: animal.limited_can_used,
+        // 官方配置里的成长节奏：各阶段秒数、生产周期、每份产物耗草秒数。
+        growth: cfg ? {
+            infantSec: Number(cfg.infant_sec) || 0,
+            growSec: Number(cfg.grow_sec) || 0,
+            matureSec: Number(cfg.mature_sec) || 0,
+            productRoundSec: Number(cfg.product_round_sec) || 0,
+            productDropSec: Number(cfg.product_drop_sec) || 0,
+            grassSecPerItem: Number(cfg.grass_sec_per_item) || 0,
+            maxProduceCount: Number(cfg.max_produce_count) || 0,
+            produceExp: Number(cfg.produce_exp) || 0,
+            harvestExp: Number(cfg.harvest_exp) || 0,
+        } : null,
         mutation: mutation ? { type: mutation.mutation_type, source: mutation.source, weightX10: mutation.weight_display_x10, finalWeightX10: mutation.weight_final_x10, tier: mutation.tier, canStroke: mutation.strokable } : null,
     };
 }
@@ -115,7 +137,7 @@ async function loadBag(): Promise<any> {
 }
 
 async function loadRaw(cells?: any): Promise<any> {
-    return { cells: cells || await rpc('cells'), bag: await loadBag() };
+    return { cells: cells || await rpc('cells'), bag: await loadBag(), loadedAt: Date.now() };
 }
 
 function shedAwaitingActivation(raw: any): any {
@@ -135,7 +157,7 @@ function snapshot(raw: any): any {
         canNormal: balance(raw.bag, 7003).total,
         canOrganic: balance(raw.bag, 7004).total,
     });
-    return {
+    const state = {
         todayAssetGains,
         unlocked: true, sceneId: 2, serverTime: getServerTimeSec() * 1000, ...info,
         currencies: [1007, 1002, 1005, 1008, 7002].map(id => ({ ...itemDto({ id, count: balance(raw.bag, id).total }), locked: balance(raw.bag, id).locked })),
@@ -144,6 +166,12 @@ function snapshot(raw: any): any {
         hourglassSeconds: balance(raw.bag, 1006).total,
         facilities: raw.cells.facilities.filter((facility: any) => [6, 7, 8].includes(facility.module_type)).map((facility: any) => facilityDto(facility, info.level)),
     };
+    const socket = getWs();
+    if (socket && !raw.recipient && raw.loadedAt > 0
+        && (dashboardSnapshot?.socket !== socket || raw.loadedAt >= dashboardSnapshot.loadedAt)) {
+        dashboardSnapshot = { socket, loadedAt: raw.loadedAt, dateKey: getSystemDateKey(), state: { ...state } };
+    }
+    return state;
 }
 
 function canLockRanchItem(item: any): boolean {
@@ -278,13 +306,18 @@ async function ranchCareer(gid: number): Promise<any> {
 }
 
 async function getState(view = 'animals', shopId?: number, hostGid?: string): Promise<any> {
-    if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'overview', 'mall'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面');
+    if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'overview', 'mall', 'dashboard'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面');
     if (!isUnlocked()) return { unlocked: false, sceneId: 2, reason: '牧场尚未解锁，请先在游戏中完成开启条件' };
+    if (view === 'dashboard') {
+        const cached = getCachedDashboardState();
+        if (cached) return cached;
+    }
     return inScene(async (cells: any) => {
         const raw = await loadRaw(cells);
         const state = snapshot(raw);
+        if (view === 'dashboard') return state;
         state.pendingOperations = require('./operation-state').forCurrentAccount().pending().map(pendingOperationView);
-        if (view === 'overview' || view === 'animals') state.career = await ranchCareer(getUserState().gid);
+        if (view === 'overview') state.career = await ranchCareer(getUserState().gid);
         if (view === 'bag') state.bag = inventory(raw);
         if (view === 'shop') {
             if (shopId === 0) {
@@ -345,4 +378,4 @@ async function resourceBalances(keys: string[]): Promise<any[]> {
     });
 }
 
-module.exports = { getState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, readRanchMallGoods, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };
+module.exports = { getState, getCachedDashboardState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, readRanchMallGoods, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };

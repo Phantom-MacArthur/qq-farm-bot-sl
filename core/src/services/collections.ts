@@ -1,3 +1,4 @@
+import { emitFarmReward } from './farm-activity-events';
 export {};
 
 const { getItemById, getItemImageById } = require('../config/gameConfig');
@@ -249,6 +250,7 @@ async function claimCollectionRewards(automation?: { canContinue: () => boolean 
         if (reply.current_score < detail.current_score || reply.claimed_reward_score < eligible.score || reply.claimed_reward_score > reply.current_score) unconfirmed();
         const result = { claimedScores: reply.claimed_scores, rewards: (reply.total_rewards || []).map((item: any) => ({ id: Number(item.id), name: getItemById(Number(item.id))?.name || `物品${item.id}`, count: quantity(item.count) })) };
         if (automation) return result;
+        emitFarmReward('藏品图鉴奖励', result.rewards);
         Object.assign(detail, { current_score: reply.current_score, claimed_reward_score: reply.claimed_reward_score });
         return { ...result, snapshot: normalizeCollections(raw) };
     });

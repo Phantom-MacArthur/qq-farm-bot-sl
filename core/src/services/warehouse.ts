@@ -1,4 +1,5 @@
 import type { SellConditionContext } from '../config/sell-conditions';
+import { farmActivityEvents } from './farm-activity-events';
 
 export {};
 /**
@@ -6,10 +7,11 @@ export {};
  * 协议说明：BagReply 使用 item_bag（ItemBag），item_bag.items 才是背包物品列表
  */
 const { getFruitName, getPlantByFruitId, getPlantBySeedId, getItemById, getItemImageById, getSeedImageBySeedId, getEffectiveSellInfo, getMutantEffectsByIds } = require('../config/gameConfig');
+const { parseSellConditions } = require('../config/sell-conditions');
 const { isAutomationOn } = require('../models/store');
 const { sendMsgAsync, getUserState } = require('../utils/network');
 const { types } = require('../utils/proto');
-const { toLong, toNum, toTimeSec, log, logWarn, sleep, getSystemDateKey } = require('../utils/utils');
+const { toLong, toNum, toTimeSec, log, logWarn, sleep, getSystemDateKey, getServerTimeSec } = require('../utils/utils');
 const { getSellConditionContext } = require('./activity-windows');
 const { updateStatusGold } = require('./status');
 
@@ -68,7 +70,15 @@ function toSellItem(item: any): any {
     return payload;
 }
 
-async function sellItems(items: any[]): Promise<any> {
+function describeSoldItems(items: any[]): string {
+    return items.map(item => `${getItemById(toNum(item.id))?.name || getFruitName(toNum(item.id))} ×${toNum(item.count)}`).join('、');
+}
+
+function confirmedSoldItems(reply: any): any[] {
+    return (reply.sell_items || []).filter((item: any) => toNum(item.id) > 0 && toNum(item.count) > 0);
+}
+
+async function sellItems(items: any[], notify: boolean = true): Promise<any> {
     const requested: any[] = Array.isArray(items) ? items : [];
     if (requested.length === 0) throw new Error('没有可出售的物品');
     const baseContext: SellConditionContext = await getSellConditionContext();
@@ -92,7 +102,12 @@ async function sellItems(items: any[]): Promise<any> {
     const payload: any[] = requested.map(toSellItem);
     const body: Uint8Array = types.SellRequest.encode(types.SellRequest.create({ items: payload })).finish();
     const { body: replyBody } = await sendMsgAsync('gamepb.itempb.ItemService', 'Sell', body);
-    return types.SellReply.decode(replyBody);
+    const reply = types.SellReply.decode(replyBody);
+    if (notify) {
+        const soldItems = confirmedSoldItems(reply);
+        if (soldItems.length) farmActivityEvents.emit('activity', 'sale', `出售完成：${describeSoldItems(soldItems)}`);
+    }
+    return reply;
 }
 
 async function useItem(itemId: number, count: number = 1, landIds: number[] = [], uid: number = 0): Promise<any> {
@@ -509,10 +524,16 @@ async function getCurrentTotalsFromBag(): Promise<{ gold: number | null; exp: nu
     return { gold, exp };
 }
 
-async function getBagDetail(): Promise<any> {
-    const bagReply: any = await getBag();
+async function getBagDetail(loadBag = getBag): Promise<any> {
+    const bagReply: any = await loadBag();
     const rawItems: any[] = getBagItems(bagReply);
-    const baseContext: SellConditionContext = await getSellConditionContext();
+    const needsActivityWindows = rawItems.some((item: any) => {
+        if (toNum(item.uid) <= 0 || toNum(item.count) <= 0) return false;
+        const config = getItemById(toNum(item.id));
+        return config?.cond_sells && parseSellConditions(config.sell_cond).some(({ type }: { type: string }) =>
+            type === '活动结束后' || type === '活动结束前' || type === '活动区间外');
+    });
+    const baseContext: SellConditionContext = needsActivityWindows ? await getSellConditionContext() : { nowSec: getServerTimeSec() };
 
     // Balance/container entries have no UID and are not real bag stacks. Keep
     // them separate so status widgets can consume them without displaying them.
@@ -711,10 +732,12 @@ async function sellAllFruits(): Promise<void> {
         const goldBefore: number = totalsBefore.gold;
         let serverGoldTotal: number = 0;
         let knownGold: number = goldBefore;
+        const soldItems: any[] = [];
         for (let i = 0; i < toSell.length; i += SELL_BATCH_SIZE) {
             const batch: any[] = toSell.slice(i, i + SELL_BATCH_SIZE);
             try {
-                const reply: any = await sellItems(batch);
+                const reply: any = await sellItems(batch, false);
+                soldItems.push(...confirmedSoldItems(reply));
                 const inferred: { gain: number; nextKnownGold: number } = deriveGoldGainFromSellReply(reply, knownGold);
                 const gained: number = Math.max(0, toNum(inferred.gain));
                 knownGold = inferred.nextKnownGold;
@@ -724,7 +747,8 @@ async function sellAllFruits(): Promise<void> {
                 logWarn('仓库', `批量出售失败，改为逐个重试: ${batchErr.message}`);
                 for (const it of batch) {
                     try {
-                        const singleReply: any = await sellItems([it]);
+                        const singleReply: any = await sellItems([it], false);
+                        soldItems.push(...confirmedSoldItems(singleReply));
                         const inferred: { gain: number; nextKnownGold: number } = deriveGoldGainFromSellReply(singleReply, knownGold);
                         const gained: number = Math.max(0, toNum(inferred.gain));
                         knownGold = inferred.nextKnownGold;
@@ -771,6 +795,10 @@ async function sellAllFruits(): Promise<void> {
         }
 
         const totalGoldEarned: number = Math.max(serverGoldTotal, totalGoldDelta, bagDelta);
+        if (soldItems.length) {
+            const gain = totalGoldEarned > 0 ? `，获得 ${totalGoldEarned} 金币` : '';
+            farmActivityEvents.emit('activity', 'sale', `出售完成：${describeSoldItems(soldItems)}${gain}`);
+        }
         if (totalGoldDelta <= 0 && totalGoldEarned > 0) {
             // 某些情况下 ItemNotify 丢失，使用出售回包做金币兜底同步
             const state: any = getUserState();

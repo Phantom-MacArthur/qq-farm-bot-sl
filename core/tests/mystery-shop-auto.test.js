@@ -223,9 +223,16 @@ test('worker unified scheduler checks mystery shop at due time and stops after d
         '../config/fertilizer-strategy': require('../dist/config/fertilizer-strategy'),
         '../models/store': { getAutomation: () => auto, applyConfigSnapshot: snapshot => { if (snapshot.automation) auto = snapshot.automation; return snapshot; } },
         '../services/status': { setRecordGoldExpHook: noop },
+        '../services/farm-activity-events': { farmActivityEvents: { on: noop } },
         '../services/email': { configureEmailClaim: noop },
         '../services/farm': { refreshFarmCheckLoop: noop },
         '../services/friend': { refreshFriendCheckLoop: noop },
+        '../services/solar-calendar-auto': {
+            SOLAR_CALENDAR_AUTOMATION_KEYS: require('../dist/services/solar-calendar-auto').SOLAR_CALENDAR_AUTOMATION_KEYS,
+        },
+        '../services/yishuhuanfu-auto': {
+            YISHU_AUTOMATION_KEYS: require('../dist/services/yishuhuanfu-auto').YISHU_AUTOMATION_KEYS,
+        },
         '../services/mystery-shop-auto': {
             isMysteryShopWatchEnabled: isMysteryShopWatchEnabled,
             mysteryShopConfigChanged,
@@ -238,7 +245,7 @@ test('worker unified scheduler checks mystery shop at due time and stops after d
             setTimeoutTask: (key, delay, fn) => scheduled.set(key, { at: now + delay, fn }),
         }) },
         '../utils/low-priority-gate': { isGatewayHealthyForBusiness: () => true },
-        '../utils/network': { getGatewayLoad: () => ({}) },
+        '../utils/network': { getGatewayLoad: () => ({}), networkEvents: { on: noop } },
         '../utils/request-context': { runWithRequestClass: (_kind, fn) => fn() },
         '../utils/utils': { setLogHook: noop, randomIntervalMs: () => 600000 },
     };

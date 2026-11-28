@@ -30,7 +30,7 @@ const purchasing = computed(() => purchasingGoodsId.value !== null || mysteryPur
 function selectTab(tab: MallTab) {
   if (purchasing.value || tab === activeTab.value)
     return
-  // 只有默认页签不写 query，保证 `/game-mall` 是干净链接；其余页签仍然显式入 URL，方便书签。
+  // 只有默认页签不写 query，保证 `/farm/game-mall` 是干净链接；其余页签仍然显式入 URL，方便书签。
   router.replace({ query: { ...route.query, tab: tab === defaultTab ? undefined : tab }, hash: route.hash })
 }
 </script>

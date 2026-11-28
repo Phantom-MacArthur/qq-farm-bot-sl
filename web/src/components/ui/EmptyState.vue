@@ -31,21 +31,7 @@ withDefaults(defineProps<{
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 44px 20px;
-  border: 1px solid var(--ui-border);
-  border-radius: var(--ui-radius-card);
-  background: var(--ui-surface);
-  box-shadow:
-    inset 0 1px 0 var(--glass-highlight),
-    var(--ui-shadow-sm);
   text-align: center;
-}
-
-.empty-state--bare {
-  padding-block: 36px;
-  border: 0;
-  background: transparent;
-  box-shadow: none;
 }
 
 .empty-state__badge {

@@ -183,7 +183,7 @@ test('状态写入失败时不发送邮箱请求', async (t) => {
     assert.equal(h.methods.length, 0);
 });
 
-test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重跑日常任务', async (t) => {
+test('Worker 登录立即检查邮箱，同日不再轮询，仅跨日重跑日常任务', async (t) => {
     const h = emailHarness(t);
     const email = h.load();
     const filename = path.resolve(__dirname, '../dist/core/worker.js');
@@ -198,7 +198,8 @@ test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重
         '../models/store': { getAutomation: () => automation, applyConfigSnapshot: value => value },
         '../services/email': email,
         '../services/status': { setRecordGoldExpHook: noop },
-        '../services/automation-lock': require('../dist/services/automation-lock'),
+        '../services/farm-activity-events': { farmActivityEvents: { on: noop } },
+        '../services/automation-lock': { runExclusiveAutomationTask: (_name, run) => Promise.resolve().then(run) },
         '../services/scheduler': { createScheduler: () => ({ clear: noop, setIntervalTask: (_name, ms, fn) => {
             assert.equal(ms, 30000);
             tick = fn;
@@ -208,6 +209,7 @@ test('上游 Worker 登录立即检查邮箱，同日不再轮询，仅跨日重
         '../services/monthcard': { performDailyMonthCardGift: noop },
         '../services/mall': { buyFreeGifts: noop },
         '../services/qqvip': { performDailyVipGift: noop },
+        '../utils/network': { networkEvents: { on: noop } },
         '../utils/utils': { ...h.utils, setLogHook: noop },
     };
     const worker = vm.runInNewContext(`${fs.readFileSync(filename, 'utf8')}\n;({

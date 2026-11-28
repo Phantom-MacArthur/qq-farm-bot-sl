@@ -1,0 +1,227 @@
+export interface YishuQuoteTarget {
+    gid: string;
+    name: string;
+    avatar: string;
+    level: string;
+    via: 'friend' | 'panel' | 'account' | 'own';
+    panelAccount?: string;
+}
+
+export interface YishuQuoteRow extends YishuQuoteTarget {
+    own?: boolean;
+    unlimited?: boolean;
+    quotePending?: boolean;
+    quoteShareExpired?: boolean;
+    price: string;
+    bonus: string;
+    totalPrice: string;
+    quota: string;
+    quotaCap: string;
+    quotaUsed: string;
+    canSell: boolean | null;
+    sharedToday: boolean;
+    quotedAt: number;
+}
+
+export function createYishuQuoteQueue(deps: {
+    day: () => string;
+    now: () => number;
+    loadTargets: () => Promise<YishuQuoteTarget[]>;
+    query: (target: YishuQuoteTarget) => Promise<YishuQuoteRow>;
+    minimumDay?: () => string;
+    activateDay?: (day: string) => void;
+    restore: (day: string) => YishuQuoteRow[];
+    save: (day: string, rows: YishuQuoteRow[]) => void;
+}) {
+    let day = '';
+    let minimumDay = deps.minimumDay?.() || '';
+    let targets: YishuQuoteTarget[] = [];
+    let background: YishuQuoteTarget[] = [];
+    let manual: YishuQuoteTarget[] = [];
+    let manualRoundRequested = false;
+    let manualInFlightDay = '';
+    let busy = false;
+    let lastStartedAt = -Infinity;
+    let roundStartedAt = -Infinity;
+    let lastError = '';
+    let manualNote = '';
+    let limit = 0;
+    const rows = new Map<string, YishuQuoteRow>();
+    const failures = new Map<string, string>();
+    const attempts = new Map<string, number>();
+    let onlineTargets = new Map<string, YishuQuoteTarget>();
+    let priority = new Set<string>();
+
+    function currentDay() {
+        const next = deps.day();
+        if (!next || next < minimumDay) return '';
+        if (next === day) return day;
+        day = next;
+        if (day > minimumDay) {
+            minimumDay = day;
+            deps.activateDay?.(day);
+        }
+        rows.clear();
+        for (const row of deps.restore(day)) rows.set(row.gid, row);
+        failures.clear();
+        attempts.clear();
+        priority = new Set([...onlineTargets.keys()].filter(gid => !rows.has(gid)));
+        targets = [];
+        background = [];
+        manual = [];
+        manualRoundRequested = false;
+        roundStartedAt = -Infinity;
+        lastError = '';
+        manualNote = '';
+        return day;
+    }
+
+    function snapshot() {
+        const activeDay = currentDay();
+        const quoted = (activeDay ? [...rows.values()].map(row => ({ ...row, ...onlineTargets.get(row.gid) })) : []).sort((a, b) => {
+            const delta = (BigInt(b.totalPrice) - BigInt(a.totalPrice)) || (BigInt(b.quota) - BigInt(a.quota));
+            return delta < 0n ? -1 : delta > 0n ? 1 : 0;
+        });
+        const known = new Set(activeDay ? [...rows.keys(), ...targets.map(target => target.gid), ...onlineTargets.keys()] : []);
+        const unquoted = activeDay ? [...onlineTargets.values()].filter(target => !rows.has(target.gid)).map(target => ({
+            ...target, quotePending: true, price: '0', bonus: '0', totalPrice: '0', quota: '0', quotaCap: '0', quotaUsed: '0',
+            quoteShareExpired: failures.get(target.gid) === 'YSHF_SHOP_SHARE_EXPIRED',
+            canSell: null, sharedToday: false, quotedAt: 0,
+        })) : [];
+        const shareExpiredCount = activeDay ? [...failures.values()].filter(code => code === 'YSHF_SHOP_SHARE_EXPIRED').length : 0;
+        return {
+            shops: [...quoted, ...unquoted], best: quoted[0] || null, ownShop: null, cached: true, paced: true,
+            scanned: quoted.length, failed: activeDay ? failures.size : 0, candidateCount: known.size, friendCount: known.size,
+            shareExpiredCount,
+            pendingCount: [...known].filter(gid => !rows.has(gid) && !failures.has(gid)).length,
+            panelFriendCount: activeDay ? targets.filter(target => target.via === 'panel').length : 0,
+            panelScannedCount: quoted.filter(shop => shop.via === 'panel').length,
+            scannedAt: quoted.reduce((latest, shop) => Math.max(latest, shop.quotedAt * 1000), 0),
+            day: activeDay, limit, manualPending: activeDay
+                ? manual.length + Number(manualRoundRequested || manualInFlightDay === activeDay) : 0,
+            friendListError: activeDay ? lastError : '', message: activeDay ? manualNote : '等待游戏服务器确认当天报价日期',
+        };
+    }
+
+    function setOnlineTargets(targets: YishuQuoteTarget[]) {
+        const next = new Map(targets.map(target => [target.gid, target]));
+        for (const gid of onlineTargets.keys()) {
+            if (!next.has(gid)) priority.delete(gid);
+        }
+        for (const gid of next.keys()) {
+            if (!onlineTargets.has(gid) && !rows.has(gid)) priority.add(gid);
+        }
+        onlineTargets = next;
+    }
+
+    function refreshQuotes(fullRound = false) {
+        const activeDay = currentDay();
+        if (activeDay && !manualRoundRequested && !manual.length && manualInFlightDay !== activeDay) {
+            if (fullRound) {
+                manualRoundRequested = true;
+                manualNote = '正在准备好友比价';
+                lastError = '';
+            } else {
+                manual = [...rows.values()].filter(row => row.price === '0' || row.bonus === '0');
+                manualNote = manual.length ? '' : '暂无基础价或加成为 0 的已查铺子';
+            }
+        }
+        return snapshot();
+    }
+
+    function oldestFirst(a: YishuQuoteTarget, b: YishuQuoteTarget) {
+        const aTime = attempts.get(a.gid) ?? (rows.has(a.gid) ? -1 : -Infinity);
+        const bTime = attempts.get(b.gid) ?? (rows.has(b.gid) ? -1 : -Infinity);
+        return aTime === bTime ? 0 : aTime - bTime;
+    }
+
+    async function tick(options: {
+        limit: number; intervalMs: number; enabled: () => boolean; manualEnabled?: () => boolean; ready: () => boolean;
+    }) {
+        const startedDay = currentDay();
+        if (!startedDay || busy || !options.ready()) return;
+        limit = options.limit;
+        if (!options.enabled()) {
+            background = [];
+            roundStartedAt = -Infinity;
+        }
+        const manualEnabled = options.manualEnabled ?? (() => true);
+        if (!manualEnabled()) {
+            manual = [];
+            manualRoundRequested = false;
+            manualNote = '';
+        }
+        const spacing = manualRoundRequested || manual.length ? 3000 : 10000;
+        const now = deps.now();
+        if (now - lastStartedAt < spacing) return;
+        busy = true;
+        try {
+            const prepareManual = manualRoundRequested;
+            const prepareBackground = !manual.length && !priority.size && !background.length
+                && options.enabled() && now - roundStartedAt >= options.intervalMs;
+            if (prepareManual || prepareBackground) {
+                if (prepareManual) {
+                    manualRoundRequested = false;
+                    manualInFlightDay = startedDay;
+                } else {
+                    roundStartedAt = now;
+                }
+                try {
+                    const loaded = await deps.loadTargets();
+                    const stillEnabled = prepareManual ? manualEnabled : options.enabled;
+                    if (currentDay() !== startedDay || !options.ready() || !stillEnabled()) return;
+                    targets = [...new Map([...loaded.map(target => [target.gid, target] as const), ...onlineTargets]).values()];
+                    if (prepareManual) {
+                        manual = [...targets].sort(oldestFirst).slice(0, limit);
+                        manualNote = manual.length ? '' : '暂无可询价的好友铺子';
+                    } else {
+                        background = targets.filter(target => !onlineTargets.has(target.gid)
+                            || now - (attempts.get(target.gid) ?? -Infinity) >= options.intervalMs
+                        ).sort(oldestFirst).slice(0, limit);
+                    }
+                    lastError = '';
+                } catch (error: any) {
+                    if (currentDay() === startedDay) lastError = error?.message || '好友列表读取失败';
+                    return;
+                }
+            }
+            const expedited = manual.length > 0 && manualEnabled();
+            const priorityGid = options.enabled() ? priority.values().next().value : undefined;
+            const target = expedited ? manual.shift() : priorityGid ? onlineTargets.get(priorityGid) : options.enabled() ? background.shift() : undefined;
+            if (!target || !options.ready()) return;
+            priority.delete(target.gid);
+            background = background.filter(item => item.gid !== target.gid);
+            manualInFlightDay = expedited ? startedDay : '';
+            lastStartedAt = deps.now();
+            attempts.set(target.gid, lastStartedAt);
+            try {
+                const quote = await deps.query(target);
+                if (currentDay() !== startedDay || !options.ready()) return;
+                rows.set(target.gid, quote);
+                failures.delete(target.gid);
+                manualNote = '';
+                deps.save(day, [...rows.values()]);
+            } catch (error: any) {
+                if (currentDay() !== startedDay || !options.ready()) return;
+                const code = String(error?.code || '');
+                failures.set(target.gid, code);
+                if (['YSHF_SHOP_CLOSED', 'YSHF_SHOP_SHARE_EXPIRED'].includes(code) && rows.delete(target.gid)) {
+                    deps.save(day, [...rows.values()]);
+                }
+            }
+        } finally {
+            manualInFlightDay = '';
+            busy = false;
+        }
+    }
+
+    function updateQuota(saleDay: string, gid: string, quota: string) {
+        if (!saleDay || saleDay !== currentDay()) return;
+        const row = rows.get(gid);
+        if (!row) return;
+        rows.set(gid, { ...row, quota, quotaUsed: (BigInt(row.quotaCap) - BigInt(quota)).toString() });
+        deps.save(day, [...rows.values()]);
+    }
+
+    return { currentDay, snapshot, refreshQuotes, tick, updateQuota, setOnlineTargets };
+}

@@ -1,9 +1,10 @@
 import config from '../activity-data/muge-20261117.json';
 import type { MugeRewardKey } from '../config/automation-modules';
+import { emitFarmReward } from './farm-activity-events';
 
 export {};
 
-const { sendMsgAsync } = require('../utils/network');
+const { sendMsgAsync, networkEvents } = require('../utils/network');
 const { types } = require('../utils/proto');
 const { getServerTimeSec, toNum } = require('../utils/utils');
 const { getItemById, getItemImageById } = require('../config/gameConfig');
@@ -22,6 +23,12 @@ const OPERATIONS = {
     claimShare: { id: IDS.personality, cmd: 89, field: 'survey_claim_share_reward' },
 } as const;
 let mutationTail: Promise<any> = Promise.resolve();
+let observedWindow: { startTime: number; endTime: number } | undefined;
+networkEvents?.on('activitiesChanged', () => { observedWindow = undefined; });
+
+function inActivityWindow(now: number, window: { startTime: number; endTime: number }): boolean {
+    return window.startTime > 0 && now >= window.startTime && now < window.endTime;
+}
 
 function fail(code: string, message: string): never {
     throw Object.assign(new Error(message), { code });
@@ -55,7 +62,8 @@ async function getMugeActivity() {
     const now = getServerTimeSec() * 1000;
     const startTime = toNum(group.head.start_time) * 1000;
     const endTime = toNum(group.head.end_time) * 1000;
-    const active = group.head.status === 1 && now >= startTime && now < endTime;
+    if (startTime > 0 && endTime > startTime) observedWindow = { startTime, endTime };
+    const active = group.head.status === 1 && inActivityWindow(now, { startTime, endTime });
     const personalityId = toNum(personality?.personality_id);
     return {
         activityId: GROUP_ID, title: '牧歌初启', serverTime: now, startTime, endTime, active,
@@ -113,7 +121,7 @@ async function perform(action: string, input: any, automatic?: { state: MugeStat
         beforeSend: () => {
             if (!automatic.enabled()) return Object.assign(new Error('自动领取已暂停'), { code: 'MUGE_AUTO_PAUSED' });
             const now = getServerTimeSec() * 1000;
-            return now < state.startTime || now >= state.endTime
+            return !inActivityWindow(now, state)
                 ? Object.assign(new Error('牧歌初启不在活动时段内'), { code: 'MUGE_ENDED' })
                 : null;
         },
@@ -132,6 +140,7 @@ async function perform(action: string, input: any, automatic?: { state: MugeStat
         fail('MUGE_RESULT_UNKNOWN', '操作状态未能确认，请刷新核对，勿重复提交');
     }
     const rewards = (result.awards || []).map(itemDto);
+    if (action.startsWith('claim')) emitFarmReward('牧歌初启奖励', rewards);
     try { return { activity: await getMugeActivity(), rewards }; }
     catch { return { activity: null, rewards, refreshRequired: true }; }
 }
@@ -149,6 +158,7 @@ function operateMugeActivity(action: string, input: any = {}) {
 function runMugeAutoRewards(enabled: (key: MugeRewardKey) => boolean, report: (key: MugeRewardKey, rewards: any[]) => void) {
     return serializeMutation(async () => {
         if (!MUGE_REWARD_KEYS.some(enabled)) return;
+        if (observedWindow && !inActivityWindow(getServerTimeSec() * 1000, observedWindow)) return;
         let state: MugeState | null;
         try {
             state = await getMugeActivity();

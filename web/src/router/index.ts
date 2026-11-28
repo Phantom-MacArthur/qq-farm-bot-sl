@@ -1,6 +1,7 @@
+import type { RouteRecordRaw } from 'vue-router'
 import NProgress from 'nprogress'
 import { createRouter, createWebHistory } from 'vue-router'
-import { allMenuRoutes } from './menu'
+import { allMenuRoutes, menuRoutes, settingsMenuRoutes } from './menu'
 import 'nprogress/nprogress.css'
 
 NProgress.configure({ showSpinner: false })
@@ -19,6 +20,18 @@ const router = createRouter({
         meta: route.meta,
       })),
     },
+    ...menuRoutes.filter(route => route.path.startsWith('farm/')).map(route => ({
+      path: route.path.slice('farm'.length),
+      redirect: { name: route.name },
+    })),
+    ...settingsMenuRoutes.flatMap<RouteRecordRaw>(route => ['farm', 'ranch'].map(space => ({
+      path: `/${space}/${route.path}`,
+      redirect: to => ({
+        name: route.name,
+        query: { ...to.query, space: space === 'ranch' ? 'ranch' : undefined },
+        hash: to.hash,
+      }),
+    }))),
     {
       path: '/mystery-shop',
       name: 'mystery-shop',
@@ -32,12 +45,14 @@ const router = createRouter({
   ],
 })
 
-router.beforeEach((to, _from) => {
+router.beforeEach((to) => {
   NProgress.start()
 
   // 系统设置已从“设置”页标签拆为独立栏目，旧的 tab 链接必须仍能直达新页面
-  if (to.name === 'Settings' && ['system', 'user'].includes(String(to.query.tab || '')))
-    return { name: 'SystemSettings' }
+  if (to.meta.settingsPage === 'account' && ['system', 'user'].includes(String(to.query.tab || ''))) {
+    const { tab: _tab, ...query } = to.query
+    return { name: 'SystemSettings', query, hash: to.hash }
+  }
 
   return true
 })

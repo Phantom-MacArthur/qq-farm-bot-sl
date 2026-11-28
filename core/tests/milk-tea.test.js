@@ -28,7 +28,7 @@ function harness() {
     mock('utils/network', { sendMsgAsync: async (_service, method, body) => {
         if (method === 'GetGroup') {
             if (failRefresh && writes) throw new Error('offline');
-            return { body: encode(types.MilkTeaGetGroupReply, { group: { head: { activity_id: '2026110100' }, children: [milk, { head: { activity_id: '2026110102' }, shop: { goods: [goods] } }, { head: { activity_id: '2026110103' }, growth_fund: fund }] } }) };
+            return { body: encode(types.MilkTeaGetGroupReply, { group: { head: { activity_id: '2026110100' }, children: [milk, { head: { activity_id: '2026110102', begin_time: 1792029600, end_time: 1794844799 }, shop: { goods: [goods] } }, { head: { activity_id: '2026110103' }, growth_fund: fund }] } }) };
         }
         const req = types.MilkTeaOperateRequest.toObject(types.MilkTeaOperateRequest.decode(body), { longs: String });
         const cmd = Number(req.operate_type);
@@ -63,6 +63,7 @@ test('boost spends the checked horn once and returns actual awards, retaining su
     assert.deepEqual(h.calls[0].milk_tea_boost, { count: 1 });
     assert.equal(h.bag[0].count, 0);
 });
+
 test('boost rejects insufficient horns, changed prices and settlement without sending writes', async () => {
     const h = harness();
     await assert.rejects(h.service.operateMilkTeaActivity('boost', { count: 2, expectedCosts: [{ id: 1042, count: 1 }] }), /不足/);
@@ -89,8 +90,12 @@ test('shop retains finite limits and enforces level, price and settlement condit
     h.goods.cond_hints = [];
     await assert.rejects(h.service.operateMilkTeaActivity('exchange', { goodsId: 301, count: 1, expectedCosts: [{ id: 1001, count: 1 }] }), /费用已变化/);
     h.setTime(1794672000);
-    await assert.rejects(h.service.operateMilkTeaActivity('exchange', { goodsId: 301, count: 1, expectedCosts: h.goods.cost }), /条件/);
-    assert.equal(h.calls.length, 0);
+    // 结算期只关店铺动作，兑换按商店子活动自己的时段判断（上游 2026-11-15 修正）。
+    await h.service.operateMilkTeaActivity('exchange', { goodsId: 301, count: 1, expectedCosts: h.goods.cost });
+    assert.equal(h.calls.length, 1);
+    h.setTime(1794844800);
+    await assert.rejects(h.service.operateMilkTeaActivity('exchange', { goodsId: 301, count: 1, expectedCosts: h.goods.cost }), /尚未开放或已经结束/);
+    assert.equal(h.calls.length, 1);
 });
 test('fund unlock is serialized and claims require paid unlock without duplicate charges', async () => {
     const h = harness();

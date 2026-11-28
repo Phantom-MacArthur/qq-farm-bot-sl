@@ -90,14 +90,33 @@ async function resolvePnpmInvocation() {
     if (process.env.FARM_PNPM_BIN) {
         return { cmd: process.env.FARM_PNPM_BIN, prefixArgs: [] };
     }
-    const rootPkg = readJsonSafe(path.join(REPO_ROOT, 'package.json'));
-    const pkgMgr = String(rootPkg?.packageManager || '');
-    const preferredVer = pkgMgr.startsWith('pnpm@') ? pkgMgr.slice('pnpm@'.length).split('+')[0] : '';
     if (process.platform === 'win32') {
+        const canRunPnpm = async (candidate) => {
+            if (!fs.existsSync(candidate)) return false;
+            try {
+                await runCommand(candidate, ['--version'], { quiet: true });
+                return true;
+            } catch {
+                return false;
+            }
+        };
+
+        // pnpm's managed cache can contain a .cmd shim that points to a non-runnable file.
+        for (const entry of (process.env.PATH || '').split(path.delimiter)) {
+            const dir = entry.replace(/^"|"$/g, '');
+            if (!path.isAbsolute(dir)) continue;
+            for (const file of ['pnpm.exe', 'pnpm.cmd', 'pnpm.bat']) {
+                const candidate = path.join(dir, file);
+                if (await canRunPnpm(candidate)) return { cmd: candidate, prefixArgs: [] };
+            }
+        }
+
         const localAppData = process.env.LOCALAPPDATA || '';
         if (localAppData) {
             const toolsDir = path.join(localAppData, 'pnpm', '.tools', 'pnpm');
             if (fs.existsSync(toolsDir)) {
+                const pkgMgr = String(readJsonSafe(path.join(REPO_ROOT, 'package.json'))?.packageManager || '');
+                const preferredVer = pkgMgr.startsWith('pnpm@') ? pkgMgr.slice('pnpm@'.length).split('+')[0] : '';
                 const versions = fs.readdirSync(toolsDir)
                     .filter(v => /^\d+\.\d+\.\d+$/.test(v))
                     .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
@@ -106,11 +125,11 @@ async function resolvePnpmInvocation() {
                     : versions;
                 for (const ver of ordered) {
                     const candidate = path.join(toolsDir, ver, 'bin', 'pnpm.cmd');
-                    if (fs.existsSync(candidate)) return { cmd: candidate, prefixArgs: [] };
+                    if (await canRunPnpm(candidate)) return { cmd: candidate, prefixArgs: [] };
                 }
             }
         }
-        return { cmd: 'pnpm.cmd', prefixArgs: [] };
+        throw new Error('未找到可运行的 pnpm。请安装 pnpm 并确认 pnpm --version 可运行，或设置 FARM_PNPM_BIN 指向可用的 pnpm。');
     }
     const hasPnpm = await new Promise(resolve => {
         const probe = spawn('pnpm', ['--version'], { stdio: 'ignore' });
@@ -564,6 +583,7 @@ async function withProgress(label, run) {
 
 function runCommand(cmd, args, options = {}) {
     const useShell = process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(cmd);
+    const captureOutput = !options.quiet && !VERBOSE_OUTPUT;
     const command = useShell
         ? [cmd, ...args].map(a => (/[\s"&|<>^()]/.test(a) ? `"${String(a).replace(/"/g, '\\"')}"` : String(a))).join(' ')
         : cmd;
@@ -571,12 +591,12 @@ function runCommand(cmd, args, options = {}) {
         const child = spawn(command, useShell ? [] : args, {
             cwd: REPO_ROOT,
             env: options.env || process.env,
-            stdio: VERBOSE_OUTPUT ? ['ignore', 'inherit', 'inherit'] : ['ignore', 'pipe', 'pipe'],
+            stdio: options.quiet ? 'ignore' : ['ignore', captureOutput ? 'pipe' : 'inherit', captureOutput ? 'pipe' : 'inherit'],
             shell: useShell,
             windowsHide: true,
         });
         const capturedLines = [];
-        if (!VERBOSE_OUTPUT) {
+        if (captureOutput) {
             const attachStream = (stream) => {
                 if (!stream) return;
                 stream.setEncoding('utf8');

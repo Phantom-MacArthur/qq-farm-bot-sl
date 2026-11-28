@@ -6,6 +6,7 @@ const test = require('node:test');
 const dist = path.resolve(__dirname, '../dist');
 const calls = [];
 let status;
+let skipOwnWeedBug = false;
 
 function installMock(relativePath, exports) {
     const filename = path.resolve(dist, relativePath);
@@ -36,7 +37,7 @@ function makeStatus(overrides = {}) {
 installMock('config/config.js', { CONFIG: { farmCheckInterval: 1000 } });
 installMock('config/gameConfig.js', { getPlantById: () => null, getItemById: () => null });
 installMock('models/store/index.js', {
-    isAutomationOn: () => false,
+    isAutomationOn: key => key === 'skip_own_weed_bug' && skipOwnWeedBug,
     getAutomation: () => ({}),
     getFertilizerBuyOrganicCount: () => 0,
     getFertilizerBuyOrganicThresholdHours: () => 0,
@@ -64,7 +65,11 @@ installMock('services/farm/api.js', {
         calls.push(['harvest', landIds]);
         return {};
     },
-    farming: async () => {},
+    farming: async (ids) => {
+        calls.push(['farming', ids]);
+        return { land: ids.map(id => ({ id })) };
+    },
+    isFertilizerContainerEmpty: () => true,
     unlockLand: async () => {},
     upgradeLand: async landId => {
         calls.push(['upgrade', landId]);
@@ -103,6 +108,29 @@ test('harvest operation is restricted to the selected land', async () => {
     await runFarmOperation('harvest', 2, true);
 
     assert.deepEqual(calls, [['harvest', [2]]]);
+});
+
+test('manual one-click care still tends crops when automatic tending is disabled', async () => {
+    calls.length = 0;
+    status = makeStatus({ growing: [1, 2], needWater: [2], needWeed: [1] });
+    skipOwnWeedBug = true;
+    try {
+        const result = await runFarmOperation('all', null, true);
+        assert.equal(result.counts.farming, 2);
+        assert.deepEqual(calls, [['farming', [1, 2]]]);
+    } finally {
+        skipOwnWeedBug = false;
+    }
+});
+
+test('selected tending and harvesting use one request each without touching the other land', async () => {
+    calls.length = 0;
+    status = makeStatus({ growing: [1, 2, 3], needWater: [1, 2, 3] });
+    const result = await runFarmOperation('clear', [1, 3], true);
+    assert.equal(result.counts.farming, 2);
+    status = makeStatus({ harvestable: [1, 2, 3] });
+    await runFarmOperation('harvest', [1, 3], true);
+    assert.deepEqual(calls, [['farming', [1, 3]], ['harvest', [1, 3]]]);
 });
 
 test('standalone planting is rejected without changing any land', async () => {

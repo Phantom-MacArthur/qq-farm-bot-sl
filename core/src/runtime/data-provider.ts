@@ -1,5 +1,7 @@
-export {};
+import { yishuDate } from '../config/yishuhuanfu';
+import { pendingYishuOrder, readYishuHistory } from '../services/yishuhuanfu-history';
 const { findAccountByRef, normalizeAccountRef, resolveAccountId: resolveAccountIdByList } = require('../services/account-resolver');
+const { getAccountRuntimeState, setAccountRuntimeState } = require('../services/account-runtime-state');
 
 interface DataProviderOptions {
     workers: Record<string, any>;
@@ -19,12 +21,15 @@ interface DataProviderOptions {
     startWorker: (account: any) => boolean | Promise<boolean>;
     stopWorker: (account: any) => void | Promise<void>;
     restartWorker: (account: any) => void | Promise<void>;
-    scheduleAutoCodeRefresh?: (accountId: string) => void;
-    rescheduleAllAutoCodeRefresh?: () => void;
-    stopAutoCodeRefresh?: (accountId: string) => void;
-    pauseAutoCodeRefreshPolling?: (accountId: string) => void;
-    resumeAutoCodeRefreshPolling?: (accountId: string) => void;
-    refreshAccountCode?: (accountId: string, reason?: string) => Promise<boolean>;
+    /**
+     * 撤销账号「掉线后等待重登」的定时器，由 runtime-engine 注入
+     * （`wx-keepalive.cancelPendingRelogin`）。用注入而不是在这里 require，
+     * 是为了让 data-provider 不反向依赖保活模块——保活模块顶层会加载凭证服务，
+     * 测试里靠 Module._load 注入假实现，多一条静态依赖就会提前把真模块钉进缓存。
+     */
+    cancelPendingRelogin?: (accountId: string) => void;
+    ensureFreshGameCode?: (accountId: string) => Promise<{ ok: boolean }>;
+    applyAccountKeepAliveConfig?: () => void;
 }
 
 function createDataProvider(options: DataProviderOptions) {
@@ -46,13 +51,40 @@ function createDataProvider(options: DataProviderOptions) {
         startWorker,
         stopWorker,
         restartWorker,
-        scheduleAutoCodeRefresh,
-        rescheduleAllAutoCodeRefresh,
-        stopAutoCodeRefresh,
-        pauseAutoCodeRefreshPolling,
-        resumeAutoCodeRefreshPolling,
-        refreshAccountCode,
+        cancelPendingRelogin,
+        ensureFreshGameCode,
+        applyAccountKeepAliveConfig,
     } = options;
+    const pendingStarts = new Map<string, symbol>();
+
+    function getAccountRuntime(accountId: string) {
+        const worker = workers[accountId];
+        const online = !worker?.stopping && worker?.status?.connection?.connected === true;
+        const state = getAccountRuntimeState(accountId);
+        return {
+            id: accountId,
+            running: !!worker,
+            online,
+            runtimeState: state?.state ?? (online ? 'running' : worker ? 'logging_in' : 'stopped'),
+            reloginAt: state?.reloginAt ?? 0,
+            runtimeUpdatedAt: state?.updatedAt ?? 0,
+        };
+    }
+
+    /**
+     * 用户手动「停止」/「启动」/「重启」都是明确的人工意图，必须让自动重登让位：
+     * 等待期内账号没有子进程，`stopWorker` 停不掉这条定时器，到点会把它重新拉起，
+     * 用户看到的就是「点了停止却自己启动了」。
+     */
+    function cancelPendingReloginSafe(accountId: string): void {
+        if (!accountId || typeof cancelPendingRelogin !== 'function') return;
+        try {
+            cancelPendingRelogin(accountId);
+        }
+        catch {
+            // 撤销失败不能影响停止 / 启动流程本身
+        }
+    }
 
     function getStoredAccountsList(): any[] {
         const data = getAccounts();
@@ -123,7 +155,7 @@ function createDataProvider(options: DataProviderOptions) {
             return { cleared: before - after, accountId };
         },
 
-        getLands: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getLands', true),
+        getLands: (accountRef: string, includeCareer = true) => callWorkerApi(resolveAccountRefId(accountRef), 'getLands', true, includeCareer),
         // 拉取种子商店目录（worker 侧顺带写入购买价校准缓存）；propagateErrors=true 使商店拉取失败真正抛出，供手动校准顺延下一个账号并如实报错
         refreshSeedShopCatalog: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSeeds', true),
         getIllustratedSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedSnapshot'),
@@ -193,6 +225,7 @@ function createDataProvider(options: DataProviderOptions) {
             callWorkerApi(resolveAccountRefId(accountRef), 'getPetProtectLogs')
         ),
         getDailyGifts: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyGiftOverview', true),
+        getDailyCompletion: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getDailyCompletion'),
         getActivityDirectorySnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityDirectorySnapshot'),
         getRanchActivityDirectorySnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchActivityDirectorySnapshot'),
         getActivityCenterSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getActivityCenterSnapshot'),
@@ -227,6 +260,40 @@ function createDataProvider(options: DataProviderOptions) {
         continueQingMeiBrew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'continueQingMeiBrew'),
         settleQingMeiBrew: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'settleQingMeiBrew'),
         claimQixiBridgeRewards: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'claimQixiBridgeRewards'),
+        getCurrentYishuHuanfuActivity: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCurrentYishuHuanfuActivity'),
+        queryYishuHuanfuCatalog: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'queryYishuHuanfuCatalog'),
+        queryYishuHuanfuRecords: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'queryYishuHuanfuRecords'),
+        queryYishuHuanfuShop: (accountRef: string, friendGid: unknown) => (
+            callWorkerApi(resolveAccountRefId(accountRef), 'queryYishuHuanfuShop', friendGid)
+        ),
+        scanYishuHuanfuFriendShops: (accountRef: string) =>
+            callWorkerApi(resolveAccountRefId(accountRef), 'scanYishuHuanfuFriendShops'),
+        refreshYishuHuanfuFriendShops: (accountRef: string) =>
+            callWorkerApi(resolveAccountRefId(accountRef), 'refreshYishuHuanfuFriendShops'),
+        exchangeYishuHuanfuGoods: (accountRef: string, index: unknown, count: unknown) => (
+            callWorkerApi(resolveAccountRefId(accountRef), 'exchangeYishuHuanfuGoods', index, count)
+        ),
+        sellYishuHuanfuSweetPotato: (accountRef: string, friendGid: unknown, count: unknown, options?: Record<string, unknown>) => (
+            callWorkerApi(resolveAccountRefId(accountRef), 'sellYishuHuanfuSweetPotato', friendGid, count, options)
+        ),
+        getYishuFarmStatus: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getYishuFarmStatus'),
+        resolveYishuSale: (accountRef: string, orderId: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'resolveYishuSale', orderId),
+        getYishuAutomationHistory: (accountRef: string, requestedDay: unknown) => {
+            const accountId = resolveAccountRefId(accountRef);
+            const today = yishuDate(Math.floor(Date.now() / 1000));
+            const history = readYishuHistory(accountId);
+            const events = history.filter(entry => entry.type === 'harvest' || entry.type === 'sale');
+            const days = [...new Set([today, ...events.map(entry => entry.day)])].sort().reverse();
+            const day = typeof requestedDay === 'string' && days.includes(requestedDay) ? requestedDay : today;
+            const pendingOrder = pendingYishuOrder(history);
+            return {
+                day, days,
+                entries: events.filter(entry => entry.day === day).reverse().map(({ type, at, count, targetGid, targetName }) =>
+                    type === 'harvest' ? { type, at, count } : { type, at, count, targetGid, targetName }),
+                pendingOrder: pendingOrder ? { orderId: pendingOrder.orderId } : null,
+            };
+        },
+        refreshYishuHuanfuQuote: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'refreshYishuHuanfuQuote'),
         giftQixiSachet: (accountRef: string, friendGid: unknown, messageTextId: unknown = 15) => (
             callWorkerApi(resolveAccountRefId(accountRef), 'giftQixiSachet', friendGid, messageTextId)
         ),
@@ -341,6 +408,7 @@ function createDataProvider(options: DataProviderOptions) {
                 'bagSeedMultiLandReservationEnabled',
                 'bagSeedLandTypes',
                 'bagSeedFallbackStrategy',
+                'rankedSeedFallbackStrategy',
                 'autoAcceptFriendMinLevel',
                 'autoAcceptRequireOwnLevel',
             ]) {
@@ -413,10 +481,10 @@ function createDataProvider(options: DataProviderOptions) {
             broadcastConfigToWorkers(accountId);
         },
 
-        /** 保存后立即重建所有账号的调度，间隔修改不需要重启进程就生效。 */
+        /** 旧版接口的开关同步到掉线重登设置。 */
         saveAutoCodeRefresh: async (config: any) => {
             const data = store.setAutoCodeRefresh(config || {});
-            if (typeof rescheduleAllAutoCodeRefresh === 'function') rescheduleAllAutoCodeRefresh();
+            applyAccountKeepAliveConfig?.();
             return { autoCodeRefresh: data };
         },
 
@@ -424,19 +492,19 @@ function createDataProvider(options: DataProviderOptions) {
         unscheduleAutoCodeRefresh: (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             if (!accountId) return false;
-            if (typeof stopAutoCodeRefresh === 'function') stopAutoCodeRefresh(accountId);
+            cancelPendingReloginSafe(accountId);
+            pendingStarts.delete(accountId);
             return true;
         },
 
         refreshAccountCode: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             if (!accountId) throw new Error('Missing x-account-id');
-            if (typeof refreshAccountCode !== 'function') throw new Error('自动刷新服务不可用');
-            // 页面上的“立即刷新”是显式意图：取完码账号会被重启，顺手把它重新交回轮询管理，
-            // 否则只会停在“在跑但不轮询”的中间态。
-            if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(accountId);
-            const ok = await refreshAccountCode(accountId, 'manual');
-            if (ok && typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(accountId);
+            if (!ensureFreshGameCode) throw new Error('自动刷新服务不可用');
+            cancelPendingReloginSafe(accountId);
+            const { ok } = await ensureFreshGameCode(accountId);
+            const latest = ok ? findAccountByAnyRef(accountId) : null;
+            if (latest) await restartWorker(latest);
             return { ok };
         },
 
@@ -457,16 +525,12 @@ function createDataProvider(options: DataProviderOptions) {
          * 账号列表下发前脱敏：loginBuffer / refreshtoken / accesstoken 只留在服务端，
          * 页面只需要知道该账号能否自动刷新。
          */
+        getAccountRuntime,
         getAccounts: () => {
             const data = store.maskWxCredentialsForClient(getAccounts());
             data.accounts.forEach((a: any) => {
                 const worker = workers[a.id];
-                a.running = !!worker;
-                /**
-                 * running 只说明 worker 进程还在，登录是否成功要由 worker 上报的 connection.connected 决定。
-                 * 页面在确认上线之前必须继续显示离线，不能拿进程状态冒充在线。
-                 */
-                a.online = !!(worker && worker.status && worker.status.connection && worker.status.connection.connected === true);
+                Object.assign(a, getAccountRuntime(String(a.id)));
                 if (worker && worker.status && worker.status.status && worker.status.status.name) {
                     a.nick = worker.status.status.name;
                 }
@@ -474,35 +538,60 @@ function createDataProvider(options: DataProviderOptions) {
                     a.avatar = worker.status.status.avatarUrl;
                 }
             });
-            return data;
+            return { ...data, serverTime: Date.now() };
         },
 
         /**
-         * 启动账号。微信账号会先注册定时刷新/凭证保活，再尝试用持久化凭证换新 Code；
+         * 启动微信账号时尝试用持久化凭证换新 Code；
          * 刷新失败时退回用现有 Code 启动，让常规的失效恢复链路接手。
          */
         startAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            // 显式启动代表“这个账号重新交给后台管理”，先解除手动停止的轮询门禁。
-            if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(acc.id);
-            if (typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(acc.id);
-            if (acc.platform === 'wx' && acc.loginBuffer && typeof refreshAccountCode === 'function') {
-                const refreshed = await refreshAccountCode(acc.id, 'manual_start');
-                if (refreshed) return true;
+            if (pendingStarts.has(accountId) || workers[accountId]) return true;
+            cancelPendingReloginSafe(accountId);
+            const attempt = Symbol();
+            pendingStarts.set(accountId, attempt);
+            setAccountRuntimeState(accountId, 'logging_in');
+            let started = false;
+            try {
+                if (acc.platform === 'wx' && (acc.loginBuffer || acc.refreshtoken) && ensureFreshGameCode) {
+                    try {
+                        await ensureFreshGameCode(accountId);
+                    } catch (error: any) {
+                        addAccountLog('auto_code_refresh_failed', `启动前刷新 Code 失败：${error.message}`, accountId, acc.name);
+                    }
+                }
+                if (pendingStarts.get(accountId) !== attempt) return false;
+                const latest = getStoredAccountsList().find((account: any) => String(account.id) === accountId);
+                started = latest ? await startWorker(latest) : false;
+                return started;
+            } finally {
+                if (pendingStarts.get(accountId) === attempt) {
+                    pendingStarts.delete(accountId);
+                    if (!started) setAccountRuntimeState(accountId, 'offline', { onlyFrom: ['logging_in'] });
+                }
             }
-            await startWorker(acc);
-            return true;
         },
 
         stopAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            if (accountId) await stopWorker(acc);
-            // 退出轮询：用户手动停掉的账号不能又被定时刷新拉起来。
-            if (typeof pauseAutoCodeRefreshPolling === 'function') pauseAutoCodeRefreshPolling(acc.id);
+            if (accountId) {
+                // 用户主动停止 = 明确不想再自动拉起。等待重登阶段账号本身没有子进程，
+                // 只靠 stopWorker 停不掉那条定时器，到点会把它重新启动。
+                cancelPendingReloginSafe(accountId);
+                pendingStarts.delete(accountId);
+                const hadWorker = !!workers[accountId];
+                setAccountRuntimeState(accountId, hadWorker ? 'stopping' : 'stopped');
+                await stopWorker(acc);
+                if (!hadWorker) {
+                    // 本来就没在跑：不会有进程退出事件来收尾，直接把状态落成「已停止」。
+                    setAccountRuntimeState(accountId, 'stopped');
+                }
+            }
             return true;
         },
 
@@ -510,8 +599,10 @@ function createDataProvider(options: DataProviderOptions) {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            if (typeof resumeAutoCodeRefreshPolling === 'function') resumeAutoCodeRefreshPolling(acc.id);
-            if (typeof scheduleAutoCodeRefresh === 'function') scheduleAutoCodeRefresh(acc.id);
+            // 手动重启要走确定的路径，别让一条还没到点的自动重登定时器在背后
+            // 再来一次「换码 + 重启」，把刚起来的连接又打断。
+            cancelPendingReloginSafe(accountId);
+            pendingStarts.delete(accountId);
             await restartWorker(acc);
             return true;
         },

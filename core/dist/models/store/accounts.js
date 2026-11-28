@@ -1,0 +1,237 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const { ensureDataDir } = require('../../config/runtime-paths');
+const { readJsonFileStrict, writeJsonFileAtomic, storageError } = require('../../services/json-db');
+const { ACCOUNTS_FILE } = require('./shared-state');
+let accountsCache = null;
+function cloneAccounts(data) {
+    return { accounts: data.accounts.map(account => ({ ...account })), nextId: data.nextId };
+}
+/**
+ * 只能留在服务端的微信扫码凭证。客户端提交的同名字段一律先丢弃，
+ * 凭证只能通过短期待绑定扫码会话写入。
+ */
+const WX_CREDENTIAL_FIELDS = ['loginBuffer', 'refreshtoken', 'accesstoken'];
+function stripProtectedWxCredentials(source) {
+    const result = { ...(source && typeof source === 'object' ? source : {}) };
+    for (const field of [...WX_CREDENTIAL_FIELDS, 'expires_in', 'expires_at', 'wxCredentialRefreshedAt',
+        'wxCredentialLastAttemptAt', 'wxCredentialRefreshError', 'wxCredentialNeedsRescan'])
+        delete result[field];
+    return result;
+}
+/** 账号列表下发前脱敏：不下发凭证，只保留 hasWxCredential 供页面判断可用性。 */
+function maskWxCredentialsForClient(data) {
+    const list = Array.isArray(data && data.accounts) ? data.accounts : [];
+    return {
+        ...(data || {}),
+        accounts: list.map((account) => {
+            const masked = { ...(account || {}) };
+            masked.hasWxCredential = !!String(masked.loginBuffer || '').trim();
+            for (const field of WX_CREDENTIAL_FIELDS)
+                delete masked[field];
+            return masked;
+        }),
+    };
+}
+function loadAccounts() {
+    accountsCache = null;
+    try {
+        ensureDataDir();
+        const raw = readJsonFileStrict(ACCOUNTS_FILE, () => ({ accounts: [], nextId: 1 }));
+        if (!raw || !Array.isArray(raw.accounts))
+            throw new Error('Invalid accounts data');
+        const data = normalizeAccountsData(raw);
+        if (raw.accounts.some((account) => !Number(account?.createdAt)))
+            saveAccounts(data);
+        accountsCache = data;
+        return cloneAccounts(data);
+    }
+    catch (error) {
+        throw storageError('读取', ACCOUNTS_FILE, error);
+    }
+}
+function saveAccounts(data) {
+    let normalized;
+    try {
+        ensureDataDir();
+        normalized = normalizeAccountsData(data);
+        writeJsonFileAtomic(ACCOUNTS_FILE, normalized);
+    }
+    catch (error) {
+        throw storageError('保存', ACCOUNTS_FILE, error);
+    }
+    accountsCache = normalized;
+}
+function getAccounts() {
+    return accountsCache ? cloneAccounts(accountsCache) : loadAccounts();
+}
+function normalizeAccountsData(raw) {
+    const data = raw && typeof raw === 'object' ? raw : {};
+    const accounts = (Array.isArray(data.accounts) ? data.accounts : []).map(normalizeAccount);
+    const maxId = accounts.reduce((m, a) => Math.max(m, Number.parseInt(a && a.id, 10) || 0), 0);
+    let nextId = Number.parseInt(data.nextId, 10);
+    if (!Number.isFinite(nextId) || nextId <= 0)
+        nextId = maxId + 1;
+    if (accounts.length === 0)
+        nextId = 1;
+    if (nextId <= maxId)
+        nextId = maxId + 1;
+    return { accounts, nextId };
+}
+function normalizeAccount(raw) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    const account = {
+        id: String(source.id || ''),
+        name: String(source.name || ''),
+        code: String(source.code || ''),
+        platform: String(source.platform || 'qq'),
+        uin: String(source.uin || ''),
+        qq: String(source.qq || source.uin || ''),
+        avatar: String(source.avatar || source.avatarUrl || ''),
+        createdAt: Number(source.createdAt) || Date.now(),
+        updatedAt: Number(source.updatedAt) || Date.now(),
+    };
+    const nick = String(source.nick || '').trim();
+    if (nick)
+        account.nick = nick;
+    // 空串是显式清除凭证的信号，必须与普通缺省区分，因此不能只在非空时写入。
+    if (typeof source.wxid === 'string')
+        account.wxid = source.wxid.trim();
+    else if (typeof source.openid === 'string')
+        account.wxid = source.openid.trim();
+    if (typeof source.loginBuffer === 'string')
+        account.loginBuffer = source.loginBuffer.trim();
+    if (typeof source.refreshtoken === 'string')
+        account.refreshtoken = source.refreshtoken.trim();
+    if (typeof source.accesstoken === 'string')
+        account.accesstoken = source.accesstoken.trim();
+    for (const key of ['expires_in', 'expires_at', 'wxCredentialRefreshedAt', 'wxCredentialLastAttemptAt']) {
+        const value = Number(source[key]);
+        if (Number.isFinite(value) && value > 0)
+            account[key] = value;
+    }
+    const refreshError = String(source.wxCredentialRefreshError || '').trim();
+    if (refreshError)
+        account.wxCredentialRefreshError = refreshError;
+    // 授权被吊销的闸门必须落盘，否则「停止自动续期」只在内存里存在一瞬：
+    // saveAccounts 会用本函数归一化后的结果回填缓存并写文件，漏一个字段就等于
+    // wx-keepalive 里那句 `if (account.wxCredentialNeedsRescan) continue` 永远为假，
+    // 凭证吊销后第二天跨日重置，又继续拿死 token 空打 OAuth 层。
+    // 只保留 true：false / 缺失一律不写，语义是「只有被明确判死才停手」。
+    if (source.wxCredentialNeedsRescan === true)
+        account.wxCredentialNeedsRescan = true;
+    return account;
+}
+function addOrUpdateAccount(acc) {
+    const { ensureAccountConfig } = require('./account-config');
+    const data = getAccounts();
+    let touchedAccountId = '';
+    const source = acc || {};
+    const cleanAccount = {};
+    for (const key of [
+        'id', 'name', 'code', 'platform', 'uin', 'qq', 'avatar', 'avatarUrl', 'nick',
+        'wxid', 'openid', 'refreshtoken', 'accesstoken', 'loginBuffer',
+        'expires_in', 'expires_at', 'wxCredentialRefreshedAt', 'wxCredentialLastAttemptAt', 'wxCredentialRefreshError',
+        'wxCredentialNeedsRescan',
+    ]) {
+        if (source[key] !== undefined)
+            cleanAccount[key] = source[key];
+    }
+    acc = cleanAccount;
+    if (acc.id) {
+        const idx = data.accounts.findIndex(a => a.id === acc.id);
+        if (idx >= 0) {
+            const previous = data.accounts[idx];
+            const next = {
+                ...previous,
+                ...acc,
+                name: acc.name !== undefined ? acc.name : previous.name,
+                updatedAt: Date.now(),
+            };
+            // 重新扫码 / 手动填 Code / 续期成功都会换 Code 或换长效凭据。
+            // 此时必须清掉上一次的失败标记，否则账号管理页会一直显示琥珀色
+            // 「待续期」，即使凭证已经刷新（用户反馈的“重扫后不是绿色”）。
+            // 只有调用方显式传入新的错误信息时才保留它。
+            //
+            // 「换了 Code」与「换了对令牌」必须分开看：只换 Code（loginBuffer 直接
+            // 换码、手动填 Code）并不会延长 access token 的寿命。如果这时也刷新
+            // wxCredentialRefreshedAt，code-watch 与 web 端都会按「最近成功 + 2 小时」
+            // 重算到期时间，真正的续期窗口被整体推后最多 2 小时——token 过期后
+            // 才被发现，表现就是「刚换过码，过一阵还是掉线」。
+            const errorClearingKeys = ['code', 'refreshtoken', 'accesstoken', 'loginBuffer', 'wxid', 'openid', 'expires_at'];
+            const tokenRotatedKeys = ['refreshtoken', 'accesstoken', 'loginBuffer', 'expires_at'];
+            const changed = (key) => acc[key] !== undefined
+                && String(acc[key] ?? '') !== String(previous[key] ?? '');
+            const credentialRotated = errorClearingKeys.some(changed);
+            const tokenRotated = tokenRotatedKeys.some(changed);
+            if (credentialRotated && !String(acc.wxCredentialRefreshError || '').trim()) {
+                delete next.wxCredentialRefreshError;
+            }
+            if (tokenRotated) {
+                if (acc.wxCredentialRefreshedAt === undefined)
+                    next.wxCredentialRefreshedAt = Date.now();
+                if (acc.wxCredentialLastAttemptAt === undefined)
+                    next.wxCredentialLastAttemptAt = Date.now();
+            }
+            // 「授权已被吊销，只能重新扫码」是保活停止自动重试的开关；换到新凭据
+            // （重新扫码 / 手动填 Code / 续期成功）时必须一并清掉，否则账号会永远
+            // 停在「不再自动续期」的状态里。调用方显式传 true 时才保留。
+            if (credentialRotated && acc.wxCredentialNeedsRescan === undefined) {
+                delete next.wxCredentialNeedsRescan;
+            }
+            data.accounts[idx] = next;
+            touchedAccountId = String(next.id || '');
+        }
+    }
+    else {
+        const id = data.nextId++;
+        touchedAccountId = String(id);
+        data.accounts.push({
+            id: touchedAccountId,
+            name: acc.name || `账号${id}`,
+            code: acc.code || '',
+            platform: acc.platform || 'qq',
+            uin: acc.uin ? String(acc.uin) : '',
+            qq: acc.qq ? String(acc.qq) : (acc.uin ? String(acc.uin) : ''),
+            avatar: acc.avatar || acc.avatarUrl || '',
+            ...(acc.wxid || acc.openid ? { wxid: String(acc.wxid || acc.openid) } : {}),
+            ...(acc.refreshtoken ? { refreshtoken: String(acc.refreshtoken) } : {}),
+            ...(acc.accesstoken ? { accesstoken: String(acc.accesstoken) } : {}),
+            ...(acc.loginBuffer ? { loginBuffer: String(acc.loginBuffer) } : {}),
+            ...(acc.expires_in ? { expires_in: Number(acc.expires_in) } : {}),
+            ...(acc.expires_at ? { expires_at: Number(acc.expires_at) } : {}),
+            ...(acc.wxCredentialRefreshedAt ? { wxCredentialRefreshedAt: Number(acc.wxCredentialRefreshedAt) } : {}),
+            ...(acc.wxCredentialLastAttemptAt ? { wxCredentialLastAttemptAt: Number(acc.wxCredentialLastAttemptAt) } : {}),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+        });
+    }
+    if (touchedAccountId) {
+        ensureAccountConfig(touchedAccountId);
+    }
+    saveAccounts(data);
+    return data;
+}
+function deleteAccount(id) {
+    const { removeAccountConfig } = require('./account-config');
+    const data = getAccounts();
+    data.accounts = data.accounts.filter(a => a.id !== String(id));
+    if (data.accounts.length === 0) {
+        data.nextId = 1;
+    }
+    saveAccounts(data);
+    removeAccountConfig(id);
+    return data;
+}
+module.exports = {
+    loadAccounts,
+    saveAccounts,
+    getAccounts,
+    normalizeAccountsData,
+    addOrUpdateAccount,
+    deleteAccount,
+    stripProtectedWxCredentials,
+    maskWxCredentialsForClient,
+    WX_CREDENTIAL_FIELDS,
+};
+//# sourceMappingURL=accounts.js.map

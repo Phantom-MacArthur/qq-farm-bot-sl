@@ -8,10 +8,14 @@ import test from 'node:test'
 const require = createRequire(import.meta.url)
 const ts = require('typescript')
 
+const runtimeSource = readFileSync(new URL('../src/utils/account-runtime.ts', import.meta.url), 'utf8')
+const runtimeModule = { exports: {} }
+const runtimeCode = ts.transpileModule(runtimeSource, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText
+new Function('module', 'exports', runtimeCode)(runtimeModule, runtimeModule.exports)
 const source = readFileSync(new URL('../src/utils/account-bulk-actions.ts', import.meta.url), 'utf8')
 const { outputText } = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } })
 const module = { exports: {} }
-new Function('require', 'module', 'exports', outputText)(require, module, module.exports)
+new Function('require', 'module', 'exports', outputText)(id => id === './account-runtime' ? runtimeModule.exports : require(id), module, module.exports)
 const {
   allAccountIds,
   formatAccountBatchSummary,
@@ -29,6 +33,19 @@ const accounts = [
   { id: '3', platform: 'qq', running: false, online: false },
   { id: '4', platform: 'wx', hasWxCredential: false, running: true, online: false },
 ]
+
+test('等待重登可立即启动或取消，登录中只允许停止', () => {
+  const transitioning = [
+    { id: 'login', running: false, runtimeState: 'logging_in' },
+    { id: 'waiting', running: false, runtimeState: 'relogin_waiting' },
+    { id: 'stopping', running: true, runtimeState: 'stopping' },
+    { id: 'stopped', running: false, runtimeState: 'stopped' },
+  ]
+  assert.deepEqual(pickAccountBatchTargets(transitioning, 'start'), ['waiting', 'stopped'])
+  assert.deepEqual(pickAccountBatchTargets(transitioning, 'start', ['waiting', 'login']), ['waiting'])
+  assert.deepEqual(pickAccountBatchTargets(transitioning, 'stop'), ['login', 'waiting'])
+  assert.deepEqual(pickAccountBatchTargets(transitioning, 'cleanup'), ['stopped'])
+})
 
 test('批量目标按卡片启动/停止按钮的同一套语义挑选', () => {
   assert.deepEqual(pickAccountBatchTargets(accounts, 'start'), ['2', '3', '4'])

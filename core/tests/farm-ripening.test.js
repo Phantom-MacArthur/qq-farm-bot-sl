@@ -10,6 +10,12 @@ const { DEFAULT_ACCOUNT_CONFIG, globalConfig, normalizeAccountConfig } = require
 const { applyConfigSnapshot, ensureAccountConfig, getAccountConfigSnapshot, getConfigSnapshot } = require('../dist/models/store/account-config');
 const { pickDefaultPlanConfig } = require('../dist/models/store/user-default-plan');
 
+const fertilizerInventory = {
+    isFertilizerContainerEmpty: () => false,
+    NORMAL_FERTILIZER_ID: 1011,
+    ORGANIC_FERTILIZER_ID: 1012,
+};
+
 function load(relativePath, overrides) {
     const filepath = require.resolve(relativePath);
     const localRequire = createRequire(filepath);
@@ -132,6 +138,7 @@ test('ripening selects only configured land types and sends one batch of the cho
     const calls = [];
     const { runRipeningFertilizer } = load('../dist/services/farm/ripening', {
         './api': {
+            ...fertilizerInventory,
             getAllLands: async () => assert.fail('reuse supplied snapshot'),
             fertilizeBatch: async (ids, fertilizer) => {
                 calls.push([fertilizer, ...ids]);
@@ -197,6 +204,7 @@ test('sowing and ripening route each land type to its own fertilizer choice', as
     ];
     const calls = [];
     const api = {
+        ...fertilizerInventory,
         getAllLands: async () => ({ lands }),
         fertilize: async ids => { calls.push(['normal', ...ids]); return ids.length; },
         fertilizeOrganicLoop: async ids => { calls.push(['organic', ...ids]); return ids.length; },
@@ -227,6 +235,7 @@ test('patrol reuses its land read and rechecks once for harvest only after succe
             '../../utils/utils': { toNum: Number, log() {}, logWarn() {} },
             '../stats': { recordOperation() {} },
             './api': {
+                ...fertilizerInventory,
                 getAllLands: async () => { calls.push('read'); return { lands: [land] }; },
                 harvest: async ids => { calls.push(`harvest:${ids.join(',')}`); return {}; },
             },

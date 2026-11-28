@@ -81,13 +81,18 @@ test('book read failure never falls back to purchases', async () => {
     assert.equal(h.calls.length, 0);
 });
 
-test('configuration accepts book priority but disallows recursive fallback', () => {
+test('farm configuration accepts book priority in either slot and ranch keeps its fallback validation', () => {
     const { normalizeAccountConfig } = require('../dist/models/store/shared-state');
     const { normalizeRanchSetting } = require('../dist/config/ranch-automation');
     assert.equal(normalizeAccountConfig({ plantingStrategy: 'illustrated' }).plantingStrategy, 'illustrated');
-    assert.equal(normalizeAccountConfig({ bagSeedFallbackStrategy: 'illustrated' }).bagSeedFallbackStrategy, 'level');
+    const preferred = normalizeAccountConfig({ plantingStrategy: 'preferred', bagSeedFallbackStrategy: 'illustrated' });
+    assert.equal(preferred.bagSeedFallbackStrategy, 'illustrated');
+    assert.equal(normalizeAccountConfig({ plantingStrategy: 'illustrated' }, preferred).bagSeedFallbackStrategy, 'level');
     assert.equal(normalizeRanchSetting('ranch_strategy', 'illustrated'), 'illustrated');
     assert.equal(normalizeAccountConfig({ bagSeedFallbackStrategy: 'bag_priority' }).bagSeedFallbackStrategy, 'bag_priority');
+    assert.equal(normalizeAccountConfig({ plantingStrategy: 'max_exp' }).rankedSeedFallbackStrategy, '');
+    assert.equal(normalizeAccountConfig({ rankedSeedFallbackStrategy: 'bag_priority' }).rankedSeedFallbackStrategy, 'bag_priority');
+    assert.equal(normalizeAccountConfig({ rankedSeedFallbackStrategy: 'illustrated' }).rankedSeedFallbackStrategy, 'illustrated');
     assert.equal(normalizeRanchSetting('ranch_bag_fallback', 'bag_priority'), 'bag_priority');
     assert.throws(() => normalizeRanchSetting('ranch_bag_fallback', 'illustrated'));
 });

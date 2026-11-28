@@ -1,0 +1,361 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+/**
+ * 邮箱系统 - 自动领取邮箱奖励
+ *
+ * 邮箱领取是默认开启的周期任务：登录（含刷新 code 后重新上线）立即检查一次，
+ * 之后由 worker 的 30 秒日常定时器轮询；服务层用冷却间隔限流，不再按每天一点触发。
+ * 领取成功/无奖励后隔一段时间再查；失败或部分领取用更短的重试间隔。
+ * 执行途中退出留下的 running 记录不算已完成，恢复后继续读取邮箱状态。
+ */
+const crypto = require('node:crypto');
+const { sendMsgAsync } = require('../utils/network');
+const { types } = require('../utils/proto');
+const { log, toNum, getSystemDateKey } = require('../utils/utils');
+const { getDataFile } = require('../config/runtime-paths');
+const { readJsonFileStrict, writeJsonFileAtomic } = require('./json-db');
+const DAILY_KEY = 'email_rewards';
+const STATE_VERSION = 2;
+/** 检查完成（成功/无奖励）后的重复检查间隔。 */
+const CHECK_DONE_COOLDOWN_MS = 30 * 60 * 1000;
+/** 失败或部分领取后的重试间隔（跨日也适用，避免午夜前失败就整天不再重试）。 */
+const CHECK_RETRY_COOLDOWN_MS = 5 * 60 * 1000;
+let stateAccountId = '';
+let attemptedDateKey = '';
+let lastCheckAt = 0;
+let lastResult = '';
+let lastError = '';
+let lastClaimed = 0;
+let stateLoaded = false;
+function getStateFile() {
+    if (!stateAccountId)
+        return '';
+    const token = crypto.createHash('sha256').update(stateAccountId, 'utf8').digest('hex');
+    return getDataFile(`email-claim-${token}.json`);
+}
+function loadState() {
+    if (stateLoaded)
+        return;
+    const file = getStateFile();
+    if (!file)
+        return;
+    const state = readJsonFileStrict(file, () => ({}));
+    stateLoaded = true;
+    if (!state || Number(state.version) !== STATE_VERSION)
+        return;
+    if (String(state.dateKey || '') !== getSystemDateKey())
+        return;
+    attemptedDateKey = String(state.dateKey || '');
+    lastCheckAt = Math.max(0, Number(state.attemptedAt) || 0);
+    lastResult = String(state.result || '');
+    lastError = String(state.lastError || state.error || '');
+    lastClaimed = Math.max(0, Number(state.claimed) || 0);
+    if (lastResult === 'running') {
+        // 上次进程未取得最终结果，恢复为待检查；重新读取后只领取仍可领取的邮件。
+        attemptedDateKey = '';
+        lastResult = '';
+        lastError = '';
+        lastClaimed = 0;
+    }
+}
+function persistState() {
+    const file = getStateFile();
+    if (!file)
+        return true;
+    try {
+        writeJsonFileAtomic(file, {
+            version: STATE_VERSION,
+            dateKey: attemptedDateKey,
+            attemptedAt: lastCheckAt,
+            result: lastResult,
+            lastError,
+            claimed: lastClaimed,
+        });
+        return true;
+    }
+    catch {
+        // 状态保存失败时由调用方停止本次检查，并展示存储错误。
+        return false;
+    }
+}
+/** 上次结果对应的下次检查冷却；running 表示正在执行，返回 Infinity 挡住重入。 */
+function cooldownMsFor(result) {
+    if (result === 'running')
+        return Infinity;
+    if (result === 'error' || result === 'partial')
+        return CHECK_RETRY_COOLDOWN_MS;
+    if (result === 'ok' || result === 'none')
+        return CHECK_DONE_COOLDOWN_MS;
+    return 0;
+}
+/** 距上次检查是否已超过对应冷却间隔；跨日时用更短的重试间隔兜底。 */
+function isCheckDue(nowMs = Date.now()) {
+    loadState();
+    if (lastResult === 'running' && attemptedDateKey === getSystemDateKey())
+        return false;
+    let cooldown = cooldownMsFor(lastResult);
+    if (attemptedDateKey !== getSystemDateKey() && cooldown > CHECK_RETRY_COOLDOWN_MS) {
+        cooldown = CHECK_RETRY_COOLDOWN_MS;
+    }
+    return nowMs - lastCheckAt >= cooldown;
+}
+/** 配置当前账号；切换账号时重新加载该账号的最近检查状态。 */
+function configureEmailClaim(options = {}) {
+    // hour 选项已废弃（邮箱改为周期检查），保留入参兼容旧调用方，不再参与判断。
+    if (options.accountId !== undefined) {
+        const nextAccountId = String(options.accountId || '');
+        if (nextAccountId !== stateAccountId) {
+            stateAccountId = nextAccountId;
+            attemptedDateKey = '';
+            lastCheckAt = 0;
+            lastResult = '';
+            lastError = '';
+            lastClaimed = 0;
+            stateLoaded = false;
+            loadState();
+        }
+    }
+}
+/** 下一次到期的本地时间戳；执行中返回 0 以外的未来值无意义，由 result='running' 展示。 */
+function getNextCheckAt(nowMs = Date.now()) {
+    loadState();
+    if (isCheckDue(nowMs))
+        return 0;
+    if (lastResult === 'running')
+        return 0;
+    return lastCheckAt + cooldownMsFor(lastResult);
+}
+function markAttempted() {
+    attemptedDateKey = getSystemDateKey();
+    lastCheckAt = Date.now();
+    lastResult = 'running';
+    lastError = '';
+    lastClaimed = 0;
+    if (!persistState()) {
+        // 本次检查状态无法保存，停止请求并展示错误。
+        lastResult = 'error';
+        lastError = '无法保存邮箱检查状态';
+        return false;
+    }
+    return true;
+}
+function finishAttempt(result, error = '', claimed = 0) {
+    lastCheckAt = Date.now();
+    lastResult = result;
+    lastError = error;
+    lastClaimed = claimed;
+    persistState();
+}
+/** 仅供测试重置内存状态；不会删除真实账号的落盘文件。 */
+function resetEmailClaimStateForTest() {
+    stateAccountId = '';
+    attemptedDateKey = '';
+    lastCheckAt = 0;
+    lastResult = '';
+    lastError = '';
+    lastClaimed = 0;
+    stateLoaded = false;
+}
+async function getEmailList(boxType = 1) {
+    const body = types.GetEmailListRequest.encode(types.GetEmailListRequest.create({
+        box_type: normalizeBoxType(boxType),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.emailpb.EmailService', 'GetEmailList', body);
+    return types.GetEmailListReply.decode(replyBody);
+}
+async function claimEmail(boxType = 1, emailId = '') {
+    const body = types.ClaimEmailRequest.encode(types.ClaimEmailRequest.create({
+        box_type: normalizeBoxType(boxType),
+        email_id: String(emailId || ''),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.emailpb.EmailService', 'ClaimEmail', body);
+    return types.ClaimEmailReply.decode(replyBody);
+}
+async function batchClaimEmail(boxType = 1, emailIds = []) {
+    const body = types.BatchClaimEmailRequest.encode(types.BatchClaimEmailRequest.create({
+        box_type: normalizeBoxType(boxType),
+        email_ids: emailIds.map(String).filter(Boolean),
+    })).finish();
+    // BatchClaimEmail 有正式响应。等待回包后才能把邮件计入已领取，
+    // 否则发送成功但网关返回业务错误时会被误判为成功。
+    const { body: replyBody } = await sendMsgAsync('gamepb.emailpb.EmailService', 'BatchClaimEmail', body);
+    return types.BatchClaimEmailReply.decode(replyBody);
+}
+function collectClaimableEmails(reply) {
+    const emails = (reply && Array.isArray(reply.emails)) ? reply.emails : [];
+    return emails.filter((x) => x && x.id && x.has_reward === true && x.claimed !== true);
+}
+function normalizeBoxType(v) {
+    const n = Number(v);
+    return (n === 1 || n === 2) ? n : 1;
+}
+function getRewardSummary(items) {
+    const list = Array.isArray(items) ? items : [];
+    const summary = [];
+    for (const it of list) {
+        const id = toNum(it.id);
+        const count = toNum(it.count);
+        if (count <= 0)
+            continue;
+        if (id === 1 || id === 1001)
+            summary.push(`金币${count}`);
+        else if (id === 2 || id === 1101)
+            summary.push(`经验${count}`);
+        else if (id === 1002)
+            summary.push(`点券${count}`);
+        else
+            summary.push(`物品#${id}x${count}`);
+    }
+    return summary.join('/');
+}
+async function checkAndClaimEmails(force = false) {
+    // 不再区分自然日：只有执行中的检查能挡住重入，其余靠冷却间隔限流；
+    // force（登录/刷新 code 上线）忽略冷却立即检查。
+    loadState();
+    if (lastResult === 'running')
+        return { claimed: 0, rewardItems: 0, skipped: 'running' };
+    if (!force && !isCheckDue())
+        return { claimed: 0, rewardItems: 0, skipped: 'cooldown' };
+    // 先记录执行中，避免并发检查；只有取得最终结果后才结束当天检查。
+    if (!markAttempted()) {
+        log('邮箱', '无法保存邮箱检查状态，本次跳过以免重复请求', {
+            module: 'task',
+            event: DAILY_KEY,
+            result: 'error',
+        });
+        return { claimed: 0, rewardItems: 0, skipped: 'storage', error: '无法保存邮箱检查状态' };
+    }
+    try {
+        // 小游戏网关在同一账号上必须串行请求，避免两个邮箱列表请求并发造成回包停滞。
+        const failures = [];
+        const box1 = await getEmailList(1).catch((e) => { failures.push(e); return { emails: [] }; });
+        const box2 = await getEmailList(2).catch((e) => { failures.push(e); return { emails: [] }; });
+        const fromBox1 = (box1.emails || []).map((x) => ({ ...x, __boxType: 1 }));
+        const fromBox2 = (box2.emails || []).map((x) => ({ ...x, __boxType: 2 }));
+        const claimable = collectClaimableEmails({ emails: [...fromBox1, ...fromBox2] });
+        if (claimable.length === 0) {
+            if (failures.length > 0)
+                throw failures[0] || new Error('邮箱列表读取失败');
+            finishAttempt('none');
+            log('邮箱', '当前暂无可领取邮箱奖励', {
+                module: 'task',
+                event: DAILY_KEY,
+                result: 'none',
+            });
+            return { claimed: 0, rewardItems: 0 };
+        }
+        const rewards = [];
+        let claimed = 0;
+        // 先按邮箱类型尝试批量领取，失败则继续单领
+        const byBox = new Map();
+        const batchClaimed = new Set();
+        for (const m of claimable) {
+            const boxType = normalizeBoxType(m && m.__boxType);
+            if (!byBox.has(boxType))
+                byBox.set(boxType, []);
+            byBox.get(boxType).push(m);
+        }
+        for (const [boxType, list] of byBox.entries()) {
+            try {
+                const emailIds = list.map((item) => String((item && item.id) || '')).filter(Boolean);
+                if (emailIds.length > 0) {
+                    await batchClaimEmail(boxType, emailIds);
+                    for (const emailId of emailIds)
+                        batchClaimed.add(`${boxType}:${emailId}`);
+                    claimed += emailIds.length;
+                }
+            }
+            catch {
+                // 批量失败静默，继续单领
+            }
+        }
+        for (const m of claimable) {
+            const boxType = normalizeBoxType(m && m.__boxType);
+            if (batchClaimed.has(`${boxType}:${String(m.id || '')}`))
+                continue;
+            try {
+                const rep = await claimEmail(boxType, String(m.id || ''));
+                const { describeRewardItems } = require('../utils/reward-items');
+                require('./farm-reward-history').recordFarmReward(DAILY_KEY, describeRewardItems(rep.items), '邮箱奖励');
+                if (Array.isArray(rep.items) && rep.items.length > 0) {
+                    rewards.push(...rep.items);
+                }
+                claimed += 1;
+            }
+            catch {
+                // 单封失败静默
+            }
+        }
+        if (claimed > 0) {
+            const incomplete = claimed < claimable.length || failures.length > 0;
+            finishAttempt(incomplete ? 'partial' : 'ok', incomplete ? '部分邮件未能领取' : '', claimed);
+            const rewardStr = getRewardSummary(rewards);
+            const suffix = incomplete
+                ? `（${claimed}/${claimable.length} 封，部分失败）`
+                : (rewardStr ? ` → ${rewardStr}` : '');
+            log('邮箱', `[邮箱领取] 领取成功 ${claimed} 封${suffix}`, {
+                module: 'task',
+                event: DAILY_KEY,
+                result: incomplete ? 'partial' : 'ok',
+                count: claimed,
+                total: claimable.length,
+                listFailures: failures.length,
+            });
+        }
+        else {
+            finishAttempt('error', '本次没有邮件领取成功');
+            log('邮箱', '邮箱奖励领取失败：本次没有邮件领取成功', {
+                module: 'task',
+                event: DAILY_KEY,
+                result: 'error',
+                count: claimable.length,
+            });
+        }
+        return { claimed, rewardItems: rewards.length };
+    }
+    catch (e) {
+        const message = String(e?.message || e || 'unknown');
+        finishAttempt('error', message);
+        log('邮箱', `领取邮箱奖励失败: ${message}`, {
+            module: 'task',
+            event: DAILY_KEY,
+            result: 'error',
+        });
+        return { claimed: 0, rewardItems: 0, error: message };
+    }
+}
+async function batchDeleteEmail(boxType = 1, emailIds = []) {
+    const body = types.BatchDeleteEmailRequest.encode(types.BatchDeleteEmailRequest.create({
+        box_type: normalizeBoxType(boxType),
+        email_ids: emailIds.map(String),
+    })).finish();
+    const { body: replyBody } = await sendMsgAsync('gamepb.emailpb.EmailService', 'BatchDeleteEmail', body);
+    return types.BatchDeleteEmailReply.decode(replyBody);
+}
+module.exports = {
+    getEmailList,
+    claimEmail,
+    batchClaimEmail,
+    batchDeleteEmail,
+    checkAndClaimEmails,
+    configureEmailClaim,
+    getEmailDailyState: () => {
+        loadState();
+        const checkedToday = attemptedDateKey === getSystemDateKey();
+        const due = isCheckDue();
+        return {
+            key: DAILY_KEY,
+            // 周期检查模式下没有「当天已完成」：冷却未过视为刚完成，到期后自动重试。
+            doneToday: !due && checkedToday && (lastResult === 'ok' || lastResult === 'none'),
+            lastCheckAt,
+            nextCheckAt: getNextCheckAt(),
+            checkIntervalMs: due ? 0 : cooldownMsFor(lastResult),
+            // 已结束的结果跨日清除；尚在执行中的检查继续展示 running。
+            result: lastResult === 'running' || checkedToday ? lastResult : '',
+            lastError: checkedToday ? lastError : '',
+            claimed: checkedToday ? lastClaimed : 0,
+        };
+    },
+    resetEmailClaimStateForTest,
+};
+//# sourceMappingURL=email.js.map

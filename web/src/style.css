@@ -81,6 +81,9 @@ textarea * {
   --ui-toolbar-control-icon-size: 16px;
   --ui-toolbar-width-slack: 2px;
   --ui-radius-card: 14px;
+  /* 以薯换福活动的主价格色：浅色为暖橙红，深色提亮一档，保证深底可读。 */
+  --yshf-accent: #d1542a;
+  --yshf-accent-soft: #c26a3a;
   --ui-dialog-scroll-gap: 12px;
   --ui-settings-space: 12px;
   --ui-dialog-scroll-inset: 8px;
@@ -281,6 +284,8 @@ textarea * {
   --app-bg: var(--ui-bg);
   --chrome-bg: color-mix(in srgb, var(--ui-bg) 94%, transparent);
   --ui-table-head: #242a32;
+  --yshf-accent: #f09062;
+  --yshf-accent-soft: #e0a373;
 }
 
 .dark :is(.n-input, .n-input-number, .n-base-selection) {
@@ -953,6 +958,26 @@ th {
   min-width: 0;
   overflow-y: auto;
   border-radius: 0 0 var(--ui-radius-card) var(--ui-radius-card);
+}
+
+/* 内容区只有一张卡片时，省去内层卡片外壳，把内容直接放在内容区。
+   空状态使用 EmptyState 的 bare 模式，保留图标、文案和操作。 */
+.empty-state {
+  padding: 44px 20px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-card);
+  background: var(--ui-surface);
+  box-shadow:
+    inset 0 1px 0 var(--glass-highlight),
+    var(--ui-shadow-sm);
+}
+
+.empty-state--bare {
+  padding-block: 36px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* 资产卡片共用的当日净变化标记。 */
@@ -2241,8 +2266,7 @@ progress.ui-progress-track::-webkit-progress-bar {
   font-weight: normal;
 }
 
-.mall-typography .panel-titlebar :is(.n-button, .n-input, .n-base-selection) {
+.mall-typography .panel-titlebar .n-button {
   --n-font-size: var(--ui-content-item-font-height-tiny-12) !important;
-  --toolbar-font-size: var(--ui-content-item-font-height-tiny-12);
   font-weight: normal;
 }

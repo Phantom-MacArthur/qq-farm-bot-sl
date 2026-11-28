@@ -19,7 +19,6 @@ const RENEW_ICON_EXCEPTIONS = new Map([
   ['components/ui/RefreshButton.vue', '刷新按钮模板本身'],
   ['components/activity/gameplays/qixi/QixiActivityView.vue', '七夕页主题内的行内图标键（刷新好友）'],
   ['components/activity/center/AutumnActivityPage.vue', '空状态里的文字链「重新加载」'],
-  ['components/activity/center/MugePage.vue', '牧歌活动任务卡内的专用刷新控件'],
   ['components/PanelStatusBanner.vue', '新版就绪时重新载入面板'],
   ['views/SolarCalendar.vue', '空状态里的加载中占位图标'],
 ])
@@ -78,7 +77,7 @@ test('every refresh button goes through the template', () => {
     .filter(relative => /i-carbon-renew/.test(readFileSync(new URL(relative, srcDir), 'utf8')))
   assert.deepEqual(offenders, [], '这些文件绕过了 RefreshButton 模板，请改用 <RefreshButton>')
   const muge = readFileSync(new URL('components/activity/center/MugePage.vue', srcDir), 'utf8')
-  assert.equal([...muge.matchAll(/<NButton[^>]*:disabled="busy \|\| !currentAccountId"[^>]*aria-label="刷新活动"[^>]*@click="store\.request\(\)"/g)].length, 2)
+  assert.equal([...muge.matchAll(/<RefreshButton[^>]*title="刷新活动"[^>]*:disabled="busy \|\| !currentAccountId"[^>]*@click="refresh"/g)].length, 1)
   const update = readFileSync(new URL('components/PanelStatusBanner.vue', srcDir), 'utf8')
   assert.match(update, /@click="appUpdateStore\.applyPendingUpdate\(\)"[^]*?i-carbon-renew/)
 })
@@ -389,7 +388,7 @@ test('土地和图鉴读取失败提供反馈，后台轮询跳过读取失败�
   const farm = read('components/farm/FarmPanel.vue')
   const friends = read('views/Friends.vue')
   const illustrated = read('components/IllustratedPanel.vue')
-  assert.match(farm, /<OfflineState v-else-if="error" \/>/)
+  assert.match(farm, /<EmptyState v-else-if="error"[^>]*title="土地读取失败"[^>]*>\s*<NButton secondary @click="refreshFarm">\s*重新读取/)
   assert.match(illustrated, /<OfflineState v-else-if="isOffline" \/>[^]*?<EmptyState v-else-if="error"[^>]*title="图鉴加载失败"[^>]*>\s*<NButton secondary @click="refresh">重试<\/NButton>/)
   assert.match(friends, /<OfflineState v-else-if="friendLandsError\[friend\.gid\]" class="offline-state--inline" \/>/)
   assert.match(style, /\.offline-state:not\(\.offline-state--inline\)/)
@@ -419,7 +418,8 @@ test('商城：仅明确离线时显示统一提示，读取失败单独重试',
 
 test('活动离线时保留子菜单和标题栏，离线提示上下各留 12px', () => {
   const read = file => readFileSync(new URL(file, srcDir), 'utf8')
-  assert.match(read('components/activity/center/ActivityCenterContent.vue'), /<ActivityDirectoryPage\s+v-if="!selectedActivity \|\| isOffline"\s+:offline="isOffline"/)
+  assert.match(read('components/activity/center/ActivityCenterContent.vue'), /<ActivityDirectoryPage\s+v-if="!selectedActivity \|\| \(isOffline && selectedActivity !== 'yishuhuanfu'\)"\s+:offline="isOffline"/)
+  assert.match(read('components/activity/center/YishuHuanfuActivityPage.vue'), /const currentActivity = computed\(\(\) => offline\.value \? null : yishuHuanfu\.value\)/)
   const directory = read('components/activity/center/ActivityDirectoryPage.vue')
   assert.match(directory, /<PageTabs\b[^]*?<\/PageTabs>[^]*?class="activity-toolbar panel-titlebar panel-titlebar--flush\b[^"]*"[^]*?class="panel-scroll-body">\s*<OfflineState v-if="offline" \/>/)
   assert.match(directory, /:disabled="!currentAccountId \|\| offline"/)

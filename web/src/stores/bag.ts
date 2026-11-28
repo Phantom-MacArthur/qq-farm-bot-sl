@@ -8,7 +8,7 @@ export const useBagStore = defineStore('bag', () => {
   const originalItems = ref<any[]>([])
   const systemItems = ref<any[]>([])
   const loading = ref(false)
-  let pendingFetch: Promise<void> | null = null
+  let pendingFetch: Promise<any[] | undefined> | null = null
   let pendingAccountId = ''
 
   function clearBag() {
@@ -45,6 +45,7 @@ export const useBagStore = defineStore('bag', () => {
           allItems.value = Array.isArray(res.data.data.items) ? res.data.data.items : []
           originalItems.value = Array.isArray(res.data.data.originalItems) ? res.data.data.originalItems : []
           systemItems.value = Array.isArray(res.data.data.systemItems) ? res.data.data.systemItems : []
+          return dashboardItems.value
         }
         else if (res.data && res.data.ok === false && res.data.error) {
           allItems.value = []
@@ -66,7 +67,7 @@ export const useBagStore = defineStore('bag', () => {
     pendingFetch = request
     pendingAccountId = requestedId
     try {
-      await request
+      return await request
     }
     finally {
       if (pendingFetch === request) {

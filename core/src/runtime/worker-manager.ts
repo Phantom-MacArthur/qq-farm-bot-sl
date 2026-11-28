@@ -1,5 +1,6 @@
 export {};
 const { createScheduler } = require('../services/scheduler');
+const { getAccountRuntimeState, setAccountRuntimeState } = require('../services/account-runtime-state');
 
 const { BackendChildTracker } = require('@qq-farm-bot/session-contract');
 const { accountSessionKey, findAccountSession, listHostedSessions, stopHostedAccount } = require('../session/ipc');
@@ -7,9 +8,17 @@ const { getRuntimePaths } = require('../config/runtime-paths');
 const path = require('node:path');
 
 const DEFAULT_API_CALL_TIMEOUT_MS = 10000;
+const STORED_CODE_RETRY_DELAY_MS = 3000;
+const STORED_CODE_RETRY_WINDOW_MS = 10 * 60_000;
 // 好友现场天气需要逐个 Enter/Leave，单批最多 5 位好友；
 // 好友列表只读缓存或拉一次名单，给的余量少一些。
 const API_CALL_TIMEOUTS_MS: Record<string, number> = {
+    getLands: 60000,
+    getSelfInteractionItems: 60000,
+    useSelfInteractionItemBatch: 120000,
+    doFarmOp: 120000,
+    fertilizeOwnLand: 60000,
+    fertilizeAllOwnLands: 120000,
     getPetDiary: 90000,
     operatePetDiary: 180000,
     getPetDiaryRecords: 30000,
@@ -36,10 +45,11 @@ interface WorkerManagerOptions {
     sendConfiguredPush?: (payload: any) => Promise<void> | void;
     addOrUpdateAccount: (acc: any) => any;
     deleteAccount: (id: string) => void;
-    scheduleAutoRelogin?: (accountId: string, reason?: string) => boolean;
-    refreshAccountCode?: (accountId: string, reason?: string) => Promise<boolean>;
+    getAccount?: (id: string) => any;
     onStatusSync?: (accountId: string, status: any, accountName?: string) => void;
     onWorkerLog?: (entry: any, accountId: string, accountName?: string) => void;
+    /** 账号掉线（断开 / 被踢下线）时回调，供账号保活安排自动重登。 */
+    onAccountOffline?: (accountId: string, accountName: string, reason: string) => void;
 }
 
 function createWorkerManager(options: WorkerManagerOptions) {
@@ -59,16 +69,24 @@ function createWorkerManager(options: WorkerManagerOptions) {
         triggerOfflineReminder,
         sendConfiguredPush,
         addOrUpdateAccount,
-        scheduleAutoRelogin,
-        refreshAccountCode,
+        getAccount,
         onStatusSync,
         onWorkerLog,
+        onAccountOffline,
     } = options;
-    const managerScheduler = createScheduler('worker_manager');
-    // 同一次失效可能同时收到 ws_400 和断开事件，凭证刷新必须全局只跑一次。
-    const credentialRefreshes = new Map<string, Promise<unknown>>();
-    const useThreadRuntime = runtimeMode === 'thread' && !(processRef as any).pkg && typeof WorkerThread === 'function';
 
+    function notifyOffline(accountId: string, accountName: string, reason: string): void {
+        if (typeof onAccountOffline !== 'function') return;
+        try {
+            onAccountOffline(accountId, accountName, reason);
+        } catch {
+            // 保活回调失败不能影响账号停止流程
+        }
+    }
+    const managerScheduler = createScheduler('worker_manager');
+    const pendingStoredCodeRetries = new Set<string>();
+    const storedCodeAttempts = new Map<string, Map<string, number>>();
+    const useThreadRuntime = runtimeMode === 'thread' && !(processRef as any).pkg && typeof WorkerThread === 'function';
     const managed = Boolean(processRef.env.FARM_SESSION_SOCKET);
     const tracker = managed && !useThreadRuntime ? new BackendChildTracker(path.join(getRuntimePaths().runtimeDir, 'backend-children.json')) : null;
     let shuttingDown = false;
@@ -113,10 +131,11 @@ function createWorkerManager(options: WorkerManagerOptions) {
         return createForkWorker(account);
     }
 
-    function startWorker(account: any, sessionId?: string): boolean {
+    function startWorker(account: any, sessionId?: string, retryingStoredCode = false): boolean {
         if (shuttingDown) return false;
         if (!account || !account.id) return false;
         if (workers[account.id]) return false;
+        cancelStoredCodeRetry(String(account.id));
 
         log('系统', `正在启动账号: ${account.name}`, { accountId: String(account.id), accountName: account.name });
 
@@ -128,6 +147,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             const reason = err && err.message ? err.message : String(err || 'unknown error');
             log('错误', `账号 ${account.name} 启动失败: ${reason}`, { accountId: String(account.id), accountName: account.name });
             addAccountLog('start_failed', `账号 ${account.name} 启动失败`, account.id, account.name, { reason });
+            setAccountRuntimeState(account.id, 'offline');
             return false;
         }
 
@@ -144,8 +164,10 @@ function createWorkerManager(options: WorkerManagerOptions) {
             stopping: false,
             disconnectedSince: 0,
             terminalHandled: false,
+            loginCode: account.code,
             wsError: null,
         };
+        setAccountRuntimeState(account.id, 'logging_in');
 
         const initialConfigSnapshot = buildConfigSnapshotForAccount(account.id);
         child.send({
@@ -189,6 +211,13 @@ function createWorkerManager(options: WorkerManagerOptions) {
 
             if (current && current.process === child) {
                 delete workers[account.id];
+                syncYishuShopAccounts();
+                if (current.stopping) {
+                    setAccountRuntimeState(account.id, 'stopped', { onlyFrom: ['stopping'] });
+                } else if (!current.terminalHandled) {
+                    setAccountRuntimeState(account.id, 'offline', { onlyFrom: ['logging_in', 'running'] });
+                    if (retryingStoredCode) notifyOffline(account.id, displayName, 'stored_code_retry_failed');
+                }
             }
         });
         return true;
@@ -203,11 +232,13 @@ function createWorkerManager(options: WorkerManagerOptions) {
     }
 
     function stopWorker(accountId: string): void {
+        cancelStoredCodeRetry(accountId);
         const worker = workers[accountId];
         if (!worker) return;
 
         const proc = worker.process;
         worker.stopping = true;
+        if (!worker.terminalHandled) setAccountRuntimeState(accountId, 'stopping');
         rejectWorkerRequests(accountId, worker, Object.assign(new Error('账号已离线'), { code: 'ACCOUNT_OFFLINE' }));
         worker.process.send({ type: 'stop' });
         managerScheduler.setTimeoutTask(`force_kill_${accountId}`, 1000, () => {
@@ -215,6 +246,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
             if (current && current.process === proc) {
                 current.process.kill();
                 delete workers[accountId];
+                setAccountRuntimeState(accountId, 'stopped', { onlyFrom: ['stopping'] });
             }
         });
     }
@@ -240,6 +272,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
     }
 
     async function stopAccountWorker(account: any) {
+        cancelStoredCodeRetry(String(account.id));
         if (!managed) { stopWorker(account.id); return; }
         const worker = workers[account.id];
         const key = worker?.accountKey || accountSessionKey(account);
@@ -249,7 +282,40 @@ function createWorkerManager(options: WorkerManagerOptions) {
 
     async function detachAllWorkers() {
         shuttingDown = true;
+        cancelAllStoredCodeRetries();
         await Promise.all(Object.values(workers).map(worker => endWorker(worker, 'detach')));
+    }
+
+    function cancelStoredCodeRetry(accountId: string): void {
+        pendingStoredCodeRetries.delete(accountId);
+        managerScheduler.clear(`stored_code_retry_${accountId}`);
+    }
+
+    function cancelAllStoredCodeRetries(): void {
+        for (const accountId of pendingStoredCodeRetries) cancelStoredCodeRetry(accountId);
+        storedCodeAttempts.clear();
+    }
+
+    function scheduleStoredCodeRetry(accountId: string, accountName: string, loginCode: unknown, reason: string): boolean {
+        if (!getAccount || typeof loginCode !== 'string' || !loginCode || getAccount(accountId)?.code !== loginCode) return false;
+        const now = Date.now();
+        const attempts = storedCodeAttempts.get(accountId) ?? new Map<string, number>();
+        for (const [code, at] of attempts) if (now - at >= STORED_CODE_RETRY_WINDOW_MS) attempts.delete(code);
+        if (attempts.has(loginCode)) return false;
+        pendingStoredCodeRetries.add(accountId);
+        setAccountRuntimeState(accountId, 'relogin_waiting', { reloginAt: now + STORED_CODE_RETRY_DELAY_MS });
+        managerScheduler.setTimeoutTask(`stored_code_retry_${accountId}`, STORED_CODE_RETRY_DELAY_MS, () => {
+            pendingStoredCodeRetries.delete(accountId);
+            if (shuttingDown) return;
+            const latest = getAccount(accountId);
+            if (!latest || latest.code !== loginCode) return;
+            attempts.set(loginCode, Date.now());
+            storedCodeAttempts.set(accountId, attempts);
+            if (!startWorker(latest, undefined, true)) {
+                notifyOffline(accountId, accountName, reason);
+            }
+        });
+        return true;
     }
 
     function restartWorker(account: any): void | Promise<void> {
@@ -302,12 +368,38 @@ function createWorkerManager(options: WorkerManagerOptions) {
         return error;
     }
 
+    function syncYishuShopAccounts(): void {
+        const online = Object.values(workers).flatMap((worker: any) => {
+            const profile = worker.status?.status;
+            const gid = String(profile?.gid || '');
+            if (worker.stopping || worker.terminalHandled || !worker.status?.connection?.connected || !/^[1-9]\d*$/.test(gid)) return [];
+            const platform = profile.platform === 'wechat' ? 'wx' : profile.platform;
+            return [{ worker, platform, shop: { gid, name: String(worker.name || profile.name || gid), avatar: String(profile.avatarUrl || ''), level: String(profile.level || '0') } }];
+        });
+        for (const entry of online) {
+            const accounts = online.filter(peer => peer.platform === entry.platform && peer.shop.gid !== entry.shop.gid).map(peer => peer.shop);
+            const key = JSON.stringify(accounts);
+            if (entry.worker.yishuShopAccountsKey === key) continue;
+            try {
+                entry.worker.process.send({ type: 'yishu_shop_accounts', accounts });
+                entry.worker.yishuShopAccountsKey = key;
+            } catch { /* Worker may have stopped since the status snapshot. */ }
+        }
+    }
+
     function handleWorkerMessage(accountId: string, sourceProcess: any, msg: any): void {
         const worker = workers[accountId];
         if (!worker || worker.process !== sourceProcess) return;
 
         if (msg.type === 'status_sync') {
             worker.status = normalizeStatusForPanel(msg.data, accountId, worker.name);
+            const connected = msg.data?.connection?.connected === true;
+            if (!worker.stopping && !worker.terminalHandled) {
+                const previous = getAccountRuntimeState(accountId)?.state;
+                if (connected && previous !== 'running') setAccountRuntimeState(accountId, 'running');
+                if (!connected && previous === 'running') setAccountRuntimeState(accountId, 'offline');
+            }
+            syncYishuShopAccounts();
             if (typeof onStatusSync === 'function') {
                 onStatusSync(accountId, worker.status, worker.name);
             }
@@ -344,7 +436,6 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 addOrUpdateAccount(accountUpdate);
             }
 
-            const connected = !!(msg.data && msg.data.connection && msg.data.connection.connected);
             if (connected) {
                 worker.disconnectedSince = 0;
                 worker.wsError = null;
@@ -384,28 +475,17 @@ function createWorkerManager(options: WorkerManagerOptions) {
                     accountId,
                     worker.name,
                 );
-                // Code 失效先当场刷一次，省掉一个重试间隔；刷失败再交给延迟重登排队。
-                if (typeof refreshAccountCode === 'function' && !credentialRefreshes.has(accountId)) {
-                    const task = Promise.resolve(refreshAccountCode(accountId, 'ws_400'))
-                        .then((ok) => {
-                            if (!ok && typeof scheduleAutoRelogin === 'function') {
-                                scheduleAutoRelogin(accountId, 'ws_400_refresh_failed');
-                            }
-                        })
-                        .catch((error: any) => {
-                            log('错误', `账号 ${worker.name} 刷新 Code 失败: ${error && error.message ? error.message : error}`, {
-                                accountId: String(accountId),
-                                accountName: worker.name,
-                            });
-                            if (typeof scheduleAutoRelogin === 'function') scheduleAutoRelogin(accountId, 'ws_400_refresh_failed');
-                        })
-                        .finally(() => { credentialRefreshes.delete(accountId); });
-                    credentialRefreshes.set(accountId, task);
+                if (!worker.stopping) {
+                    if (worker.status?.connection) worker.status.connection.connected = false;
+                    setAccountRuntimeState(accountId, 'offline', { onlyFrom: ['logging_in', 'running'] });
+                    notifyOffline(accountId, worker.name, 'ws_400');
                 }
             }
         } else if (msg.type === 'account_kicked') {
-            if (worker.terminalHandled) return;
+            if (worker.terminalHandled || worker.stopping) return;
             worker.terminalHandled = true;
+            if (worker.status?.connection) worker.status.connection.connected = false;
+            setAccountRuntimeState(accountId, 'offline', { onlyFrom: ['logging_in', 'running'] });
             const reason = msg.reason || '未知';
             const reasonCode = Number(msg.reasonCode) || 0;
             const diagnostics = msg.diagnostics || null;
@@ -419,15 +499,16 @@ function createWorkerManager(options: WorkerManagerOptions) {
             });
             addAccountLog('kickout_stop', `账号 ${worker.name} 被踢下线，已自动停止`, accountId, worker.name, { reason, reasonCode, diagnostics });
             stopWorker(accountId);
-            if (typeof scheduleAutoRelogin === 'function') scheduleAutoRelogin(accountId, `kickout:${reason}`);
+            notifyOffline(accountId, worker.name, `kickout:${reason}`);
         } else if (msg.type === 'account_disconnected') {
-            if (worker.terminalHandled) return;
+            if (worker.terminalHandled || worker.stopping) return;
             worker.terminalHandled = true;
             const source = String(msg.source || 'ws_close');
             const code = Number(msg.code) || 0;
             const reason = String(msg.reason || '连接已断开');
             const phase = String(msg.phase || 'unknown');
             if (worker.status?.connection) worker.status.connection.connected = false;
+            setAccountRuntimeState(accountId, 'offline', { onlyFrom: ['logging_in', 'running'] });
             rejectWorkerRequests(accountId, worker, Object.assign(new Error('账号连接已断开'), { code: 'GAME_OFFLINE' }));
             log('系统', `账号 ${worker.name} 连接已断开，已停止运行并等待 Helper 刷新 Code 或重新扫码`, {
                 accountId: String(accountId),
@@ -452,10 +533,10 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 { source, disconnectCode: code, reason, phase, connectionId: Number(msg.connectionId) || 0, diagnostics: msg.diagnostics || null },
             );
             stopWorker(accountId);
-            // 上面那句「等待 Helper 刷新 Code」不能只是日志：这里真的把恢复动作排进去。
-            if (typeof scheduleAutoRelogin === 'function') {
-                scheduleAutoRelogin(accountId, `disconnect:${source}:${phase}:${code}`);
-            }
+            const recoveryReason = `disconnect:${source}:${phase}:${code}`;
+            if (phase === 'online' && code !== 400 && worker.wsError?.code !== 400 && ['ws_close', 'ws_error'].includes(source)
+                && scheduleStoredCodeRetry(accountId, worker.name, worker.loginCode, recoveryReason)) return;
+            notifyOffline(accountId, worker.name, recoveryReason);
         } else if (msg.type === 'api_response') {
             const { id, result, error } = msg;
             managerScheduler.clear(`api_timeout_${accountId}_${id}`);
@@ -545,7 +626,8 @@ function createWorkerManager(options: WorkerManagerOptions) {
             const id = worker.reqId++;
             worker.requests.set(id, { resolve, reject });
 
-            const timeoutMs = API_CALL_TIMEOUTS_MS[method] || DEFAULT_API_CALL_TIMEOUT_MS;
+            const timeoutMs = method === 'doFarmOp' && args[0] === 'all'
+                ? 600000 : API_CALL_TIMEOUTS_MS[method] || DEFAULT_API_CALL_TIMEOUT_MS;
             managerScheduler.setTimeoutTask(`api_timeout_${accountId}_${id}`, timeoutMs, () => {
                 if (worker.requests.has(id)) {
                     worker.requests.delete(id);
@@ -553,7 +635,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
                 }
             });
 
-            worker.process.send({ type: 'api_call', id, method, args });
+            worker.process.send({ type: 'api_call', id, method, args, deadlineAt: Date.now() + timeoutMs });
         });
     }
 
@@ -561,6 +643,7 @@ function createWorkerManager(options: WorkerManagerOptions) {
         startWorker,
         stopWorker,
         restartWorker,
+        cancelStoredCodeRetry, cancelAllStoredCodeRetries,
         callWorkerApi, startAccountWorker, stopAccountWorker, detachAllWorkers,
     };
 }

@@ -1,0 +1,99 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const { getAccId, getOfflineErrorCode, handleApiError } = require('./middleware');
+const store = require('../../models/store');
+const ERROR_MESSAGES = {
+    INVALID_GOODS_ID: '商品信息无效，请刷新商城后重试',
+    INVALID_PURCHASE_COUNT: '购买数量必须是有效的正整数',
+    GOODS_NOT_FOUND: '商品已不在当前商城中，请刷新后重试',
+    GOODS_UNAVAILABLE: '商品当前不可购买',
+    PURCHASE_LIMIT_EXCEEDED: '购买数量超过剩余限购数量',
+    INSUFFICIENT_BALANCE: '货币余额不足，无法完成购买',
+    INVALID_MYSTERY_NPC_ID: '神秘商人信息无效，请刷新后重试',
+    MYSTERY_OFFER_STALE: '神秘商人货品已变化，请刷新后重试',
+    MYSTERY_PURCHASE_NOT_CONFIRMED: '购买结果未确认，请刷新后查看',
+};
+function friendlyError(error) {
+    const raw = String(error?.message || error || '操作失败');
+    const code = String(error?.code || raw.match(/\bcode=(\d+)\b/)?.[1] || 'COMMERCE_OPERATION_FAILED');
+    if (ERROR_MESSAGES[code])
+        return { code, message: ERROR_MESSAGES[code] };
+    const protocolMessage = String(error?.errorMessage || '').trim()
+        || raw.match(/\bcode=\d+\b(.*)$/)?.[1]?.trim();
+    if (protocolMessage)
+        return { code, message: protocolMessage };
+    if (raw.includes('请求超时') || raw === 'API Timeout') {
+        return { code: 'COMMERCE_TIMEOUT', message: '游戏服务响应超时，请稍后重试' };
+    }
+    return { code, message: raw || '操作失败，请刷新后重试' };
+}
+function mountCommerceRoutes(app, ctx) {
+    const withAccount = (handler) => {
+        return async (req, res) => {
+            const accountId = getAccId(ctx, req);
+            if (!accountId)
+                return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
+            try {
+                const data = await handler(accountId, req);
+                return res.json({ ok: true, data });
+            }
+            catch (error) {
+                if (getOfflineErrorCode(error))
+                    return handleApiError(res, error);
+                const result = friendlyError(error);
+                return res.json({ ok: false, error: result.message, errorMessage: result.message, errorCode: result.code });
+            }
+        };
+    };
+    app.get('/api/ranch/automation-options', (_req, res) => res.json({ ok: true, data: require('../../config/ranch-automation').RANCH_ANIMAL_OPTIONS }));
+    app.get('/api/ranch', withAccount((accountId, req) => ctx.provider.getRanchState(accountId, String(req.query.view || 'animals'), req.query.shopId === undefined ? undefined : Number(req.query.shopId), req.query.hostGid === undefined ? undefined : String(req.query.hostGid))));
+    app.post('/api/ranch/illustrated/clear-new', withAccount((accountId) => ctx.provider.clearRanchIllustratedNew(accountId)));
+    app.post('/api/ranch/:action/quote', withAccount((accountId, req) => ctx.provider.prepareRanchAction(accountId, String(req.params.action), req.body)));
+    app.post('/api/ranch/:action', withAccount((accountId, req) => ctx.provider.operateRanch(accountId, String(req.params.action), req.body)));
+    // 牧场拜访黑名单：非好友（服务端拒绝拜访）等不再巡查与展示。
+    app.get('/api/ranch-friend-blacklist', withAccount(async (accountId) => ({ gids: store.getRanchFriendBlacklist(accountId) })));
+    app.post('/api/ranch-friend-blacklist/toggle', withAccount(async (accountId, req) => {
+        const { gid: rawGid, blacklisted } = req.body || {};
+        const gid = Number(rawGid);
+        if (!Number.isSafeInteger(gid) || gid <= 0)
+            throw Object.assign(new Error('缺少有效的 gid'), { code: 'MISSING_GID' });
+        if (blacklisted !== undefined && typeof blacklisted !== 'boolean') {
+            throw Object.assign(new Error('无效的黑名单状态'), { code: 'INVALID_ARGUMENT' });
+        }
+        const current = store.getRanchFriendBlacklist(accountId);
+        const alreadyBlacklisted = current.includes(gid);
+        const wanted = blacklisted ?? !alreadyBlacklisted;
+        if (wanted === alreadyBlacklisted)
+            return { gids: current, blacklisted: wanted };
+        const next = store.setRanchFriendBlacklist(accountId, wanted ? [...current, gid] : current.filter((item) => item !== gid));
+        if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function')
+            ctx.provider.broadcastConfig(accountId);
+        return { gids: next, blacklisted: wanted };
+    }));
+    app.get('/api/solar-calendar', withAccount((accountId) => ctx.provider.getSolarCalendar(accountId)));
+    app.post('/api/solar-calendar/:action', withAccount((accountId, req) => ctx.provider.operateSolarCalendar(accountId, req.params.action, req.body)));
+    app.post('/api/illustrated/claim', withAccount((accountId, req) => ctx.provider.claimIllustratedRewards(accountId, req.body?.type)));
+    app.post('/api/illustrated/clear-new', withAccount((accountId, req) => ctx.provider.clearIllustratedNew(accountId, req.body?.fruitIds)));
+    app.get('/api/activities/milk-tea', withAccount((accountId, req) => ctx.provider.getMilkTeaActivity(accountId, req.query.page || 'shop', req.query)));
+    app.get('/api/activities/muge', withAccount((accountId) => ctx.provider.getMugeActivity(accountId)));
+    app.post('/api/activities/muge/:action', withAccount((accountId, req) => ctx.provider.operateMugeActivity(accountId, req.params.action, req.body)));
+    app.post('/api/activities/milk-tea/:action', withAccount((accountId, req) => ctx.provider.operateMilkTeaActivity(accountId, req.params.action, req.body)));
+    app.get('/api/activities/share-reward/:activityId', withAccount((accountId, req) => (ctx.provider.getShareRewardActivity(accountId, req.params.activityId))));
+    app.post('/api/activities/share-reward/:activityId/:action', withAccount((accountId, req) => (ctx.provider.operateShareRewardActivity(accountId, req.params.activityId, req.params.action, req.body))));
+    app.get('/api/activities/autumn/:key', withAccount((accountId, req) => (ctx.provider.getAutumnActivity(accountId, req.params.key))));
+    app.post('/api/activities/autumn/:key/:action', withAccount((accountId, req) => (ctx.provider.operateAutumnActivity(accountId, req.params.key, req.params.action, req.body))));
+    app.get('/api/props-shop', withAccount((accountId) => ctx.provider.getPropsShop(accountId)));
+    app.post('/api/props-shop/purchase', withAccount((accountId, req) => (ctx.provider.purchaseProps(accountId, req.body?.goodsId, req.body?.count, req.body?.expectedOffer))));
+    app.get('/api/pet-shop', withAccount((accountId) => ctx.provider.getPetShop(accountId)));
+    app.post('/api/pet-shop/purchase', withAccount((accountId, req) => (ctx.provider.purchasePetShop(accountId, req.body?.goodsId, req.body?.count, req.body?.expectedOffer))));
+    app.get('/api/game-mall', withAccount((accountId, req) => (ctx.provider.getMallCatalog(accountId, req.query.slotType, req.query.subSlotType))));
+    app.post('/api/game-mall/purchase', withAccount((accountId, req) => (ctx.provider.purchaseMallProduct(accountId, req.body?.goodsId, req.body?.count, req.body?.slotType, req.body?.expectedPrice))));
+    app.get('/api/mystery-shop', withAccount((accountId) => (ctx.provider.getMysteryShop(accountId))));
+    // 购买历史落盘在 data/mystery_shop_history/<accountId>.json，按账号分文件，
+    // 直接读即可，不必绕 worker（worker 未运行时也要能看到历史记录）。
+    // 本文件在 src/controllers/admin/ 下，到 services 要跨两级目录。
+    app.get('/api/mystery-shop/history', withAccount(async (accountId) => (require('../../services/mystery-shop').getMysteryShopHistory(accountId))));
+    app.post('/api/mystery-shop/purchase', withAccount((accountId, req) => (ctx.provider.purchaseMysteryOffer(accountId, req.body?.npcId))));
+}
+module.exports = { mountCommerceRoutes };
+//# sourceMappingURL=commerce-routes.js.map

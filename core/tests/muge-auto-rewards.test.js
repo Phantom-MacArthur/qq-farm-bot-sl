@@ -53,10 +53,12 @@ function createActivity() {
         },
         survey_claim_share_reward: () => { personality.survey.share_reward_claimed = true; },
     };
+    const notifications = [];
     const dependencies = {
         '../activity-data/muge-20261117.json': config,
         '../config/automation-modules': { MUGE_REWARD_KEYS },
         '../config/gameConfig': { getItemById: () => ({ name: '奖励' }), getItemImageById: () => '' },
+        './farm-activity-events': { emitFarmReward: (name, items) => notifications.push({ name, count: items.length }) },
         '../utils/utils': { getServerTimeSec: () => server.now, toNum: value => Number(value) || 0 },
         '../utils/proto': { types: {
             ActivityListRequest: { encode }, MugeListReply: { decode },
@@ -89,7 +91,7 @@ function createActivity() {
         require: name => dependencies[name],
     }, { filename });
     return {
-        enabled, operations, reports, server, survey: personality.survey,
+        enabled, operations, reports, notifications, server, survey: personality.survey,
         run: () => runMugeAutoRewards(key => effectiveAutomation(enabled)[key] === true, key => reports.push(key)),
     };
 }
@@ -104,6 +106,7 @@ test('claims the enabled rewards, unlocks handbook tiers, and preserves existing
     assert.deepEqual(activity.reports, [
         'muge_claim_celebration', 'muge_claim_friends', 'muge_claim_handbook', 'muge_claim_handbook', 'muge_claim_personality',
     ]);
+    assert.deepEqual(activity.notifications, Array.from({ length: 5 }, () => ({ name: '牧歌初启奖励', count: 1 })));
     for (const { id, options } of config.questions) {
         assert.equal(activity.survey.answers[id], previousAnswers[id] ?? options[0].value);
     }
@@ -135,8 +138,23 @@ test('honors the activity gate and blocks queued writes when a switch is disable
     };
     await activity.run();
     assert.deepEqual(activity.operations, []);
+    const requests = activity.server.requests;
     await activity.run();
     assert.deepEqual(activity.operations, []);
+    assert.equal(activity.server.requests, requests);
+});
+
+test('waits for the server-reported opening time before checking rewards again', async () => {
+    const activity = createActivity();
+    activity.enabled.muge_claim_celebration = true;
+    activity.server.now = 99;
+    await activity.run();
+    await activity.run();
+    assert.equal(activity.server.requests, 1);
+    assert.deepEqual(activity.operations, []);
+    activity.server.now = 100;
+    await activity.run();
+    assert.deepEqual(activity.operations, [85]);
 });
 
 test('persists individual reward settings and defaults to disabled for existing accounts', () => {

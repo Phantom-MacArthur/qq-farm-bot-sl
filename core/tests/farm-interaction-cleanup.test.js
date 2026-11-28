@@ -73,6 +73,14 @@ test('ordinary watering, weeding and bug removal targets stay unchanged', () => 
     assert.deepEqual(friendStatus.needBug, [3]);
 });
 
+test('own land details distinguish visible self-placed weeds from actionable tending', () => {
+    const land = growingLand(3, 0, { weed_owners: [9001] });
+    const detail = buildLandDetail(land, { ownGid: 9001 });
+    assert.equal(detail.needWeed, true);
+    assert.equal(detail.canTend, false);
+    assert.deepEqual(analyzeLands([land], false, 9001).needWeed, []);
+});
+
 test('qixi mutation uses official effect_name while keeping drought independent', () => {
     assert.equal(getMutantEffectById(1).icon, 'frozen');
     const effect = getMutantEffectById(13);

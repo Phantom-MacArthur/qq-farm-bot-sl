@@ -16,6 +16,8 @@ export interface Land {
   plantName?: string
   phaseName?: string
   seedImage?: string
+  /** 作物当前生长阶段的官方贴图（plant_images），缺失时回退 seedImage。 */
+  plantImage?: string
   status: string
   matureInSec: number
   needWater?: boolean
@@ -43,7 +45,17 @@ export interface FertilizeAllResult {
 }
 
 function userFacingFertilizeError(raw: unknown, fallback = '施肥失败') {
-  return getApiErrorMessage(raw, fallback)
+  return farmRequestError(raw, fallback)
+}
+
+function farmRequestError(cause: unknown, fallback: string) {
+  const code = (cause as { code?: string } | null)?.code
+  const message = getApiErrorMessage(cause, fallback)
+  if (code === 'ECONNABORTED' || code === 'ETIMEDOUT' || message === 'API Timeout')
+    return fallback
+  if (message === 'ACCOUNT_OFFLINE' || message === 'GAME_OFFLINE')
+    return '账号已断开游戏连接'
+  return message
 }
 
 // UseReply.land 是刚成功操作后的权威快照，短期内不允许被随后的 AllLands 旧快照覆盖。
@@ -198,24 +210,30 @@ export const useFarmStore = defineStore('farm', () => {
     farmRefreshError.value = ''
     const request = (async () => {
       try {
-        const { data } = await api.get('/api/lands', { headers: { 'x-account-id': accountId }, skipErrorToast: true } as any)
+        const { data } = await api.get('/api/lands', {
+          headers: { 'x-account-id': accountId },
+          params: { includeCareer: 0 },
+          timeout: 65000,
+          skipErrorToast: true,
+        } as any)
         if (!isCurrentFarmRead())
           return false
         if (data?.ok) {
           lands.value = applyLandOverlay(data.data.lands || [])
           socialEvents.value = Array.isArray(data.data.socialEvents) ? data.data.socialEvents : []
-          career.value = data.data.career || null
+          if ('career' in data.data)
+            career.value = data.data.career || null
           loaded.value = true
           return true
         }
         error.value = !loaded.value
-        farmRefreshError.value = '土地数据刷新失败'
+        farmRefreshError.value = farmRequestError(data, '土地刷新未及时完成，请重试')
         return false
       }
       catch (cause) {
         if (isCurrentFarmRead()) {
           error.value = !loaded.value
-          farmRefreshError.value = getApiErrorMessage(cause, '土地数据刷新失败')
+          farmRefreshError.value = farmRequestError(cause, '土地刷新未及时完成，请重试')
         }
         return false
       }
@@ -283,6 +301,7 @@ export const useFarmStore = defineStore('farm', () => {
     try {
       const res = await api.get('/api/farm/interaction-items', {
         headers: { 'x-account-id': requestedAccountId },
+        timeout: 65000,
         skipErrorToast: true,
       } as any)
       if (sequence !== farmInteractionReadVersion || !ownsFarmAccount(requestedAccountId))
@@ -322,6 +341,7 @@ export const useFarmStore = defineStore('farm', () => {
           landIds,
         }, {
           headers: { 'x-account-id': accountId },
+          timeout: 125000,
           skipErrorToast: true,
         } as any)
         if (!isCurrentFarmOperation())
@@ -387,6 +407,7 @@ export const useFarmStore = defineStore('farm', () => {
           fertilizerType,
         }, {
           headers: { 'x-account-id': accountId },
+          timeout: 65000,
           skipErrorToast: true,
         } as any)
         if (sequence !== farmFertilizerRequestVersion || !isCurrentFarmOperation())
@@ -427,6 +448,7 @@ export const useFarmStore = defineStore('farm', () => {
       try {
         const res = await api.post('/api/farm/fertilize-all', landIds ? { fertilizerType, landIds } : { fertilizerType }, {
           headers: { 'x-account-id': accountId },
+          timeout: 125000,
           skipErrorToast: true,
         } as any)
         if (sequence !== farmFertilizerRequestVersion || !isCurrentFarmOperation())
@@ -454,24 +476,30 @@ export const useFarmStore = defineStore('farm', () => {
     })
   }
 
-  async function operate(accountId: string, opType: string, landId: number | null = null) {
+  async function operate(accountId: string, opType: string, landId: number | number[] | null = null) {
     return runFarmWrite(accountId, async (isCurrentFarmOperation) => {
-      if (!accountId)
-        return false
-      const res = await api.post('/api/farm/operate', { opType, landId }, {
-        headers: { 'x-account-id': accountId }, skipErrorToast: true,
-      } as any)
-      if (!isCurrentFarmOperation())
-        return false
-      if (!res.data?.ok) {
-        throw new Error(getApiErrorMessage(res.data, '农场操作失败'))
+      try {
+        const res = await api.post('/api/farm/operate', { opType, landId }, {
+          headers: { 'x-account-id': accountId },
+          timeout: opType === 'all' ? 605000 : 125000,
+          skipErrorToast: true,
+        } as any)
+        if (!res.data?.ok)
+          throw res.data
+        const result = res.data?.data || { hadWork: false, actions: [] }
+        if (typeof result.message === 'string')
+          result.message = normalizeApiErrorMessage(result.message)
+        return result
       }
-      landOverlay = null
-      await fetchLands(accountId, true)
-      const result = res.data?.data || { hadWork: false, actions: [] }
-      if (result && typeof result.message === 'string')
-        result.message = normalizeApiErrorMessage(result.message)
-      return result
+      catch (cause) {
+        throw new Error(farmRequestError(cause, '农场操作未及时返回结果，请刷新土地核对'))
+      }
+      finally {
+        if (isCurrentFarmOperation()) {
+          landOverlay = null
+          void fetchLands(accountId, true)
+        }
+      }
     })
   }
 

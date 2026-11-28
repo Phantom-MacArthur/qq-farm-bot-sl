@@ -62,7 +62,7 @@ const {
 } = storeToRefs(farmStore)
 const { currentAccountId } = storeToRefs(accountStore)
 watch(() => farmStore.farmRefreshError, message => {
-  if (message && farmStore.loaded)
+  if (message && farmStore.loaded && !manualRefreshing.value)
     toast.error(message)
 })
 
@@ -80,7 +80,7 @@ const presence = useAccountPresence()
 const isOffline = computed(() => presence.value === 'offline')
 const currentAccountConnected = computed(() => presence.value === 'online')
 
-const operating = ref(false)
+const operating = ref<string | null>(null)
 const fertilizerConfirmVisible = ref(false)
 const bulkFertilizerType = ref<FertilizerType>('normal')
 const bulkFertilizerOptions = [{ label: '普通化肥', value: 'normal' }, { label: '有机化肥', value: 'organic' }]
@@ -94,8 +94,11 @@ watch(currentAccountId, () => {
   fertilizerUiSequence++
   fertilizerConfirmVisible.value = false
 })
-const farmingLandId = ref<number | null>(null)
 const manualRefreshing = ref(false)
+watch(() => farmStore.farmAccountSessionVersion, () => {
+  operating.value = null
+  manualRefreshing.value = false
+})
 
 const selectedInteractionItemId = ref<string>()
 const lastInteractionResults = ref<Record<string, FriendInteractionResultDto[]>>({})
@@ -124,7 +127,7 @@ const interactionItemPlaceholder = computed(() => {
   return interactionItems.value.length ? '选择道具' : '背包暂无可用道具'
 })
 
-const selectionBusy = computed(() => batchPending.value || farmStore.farmOperationPending || fertilizePending.value || interactionUsePending.value || operating.value)
+const selectionBusy = computed(() => batchPending.value || farmStore.farmOperationPending || fertilizePending.value || interactionUsePending.value || operating.value !== null)
 const selectionLimit = computed(() => batchAction.value === 'item' ? Math.max(0, Math.floor(Number(selectedInteractionItem.value?.count) || 0)) : Infinity)
 const selectionOptions = computed<Array<{ value: BatchAction, label: string, icon: string }>>(() => [
   ...(showManualFertilizerButtons.value
@@ -189,9 +192,7 @@ const socialCleanupLandId = computed(() => {
 function isLandFarmingCandidate(land: any) {
   if (!isValidFarmingLand(land))
     return false
-  return !!land?.needWater
-    || !!land?.needWeed
-    || !!land?.needBug
+  return (land?.canTend ?? Boolean(land?.needWater || land?.needWeed || land?.needBug))
     || !!land?.needInteractionCleanup
     || Number(land?.id) === socialCleanupLandId.value
 }
@@ -241,15 +242,21 @@ async function runGlobalOperate(opType: string) {
   const accountId = currentAccountId.value
   const accountSessionVersion = farmStore.farmAccountSessionVersion
   const label = GLOBAL_OP_LABELS[opType] || '打理'
-  if (!accountId || farmStore.farmOperationPending || operating.value || fertilizePending.value || farmingLandId.value !== null)
+  if (!accountId || selectionBusy.value)
     return
-  operating.value = true
+  operating.value = opType
   try {
     const result = await farmStore.operate(accountId, opType)
     // 中途切号不再回报，避免把上一个账号的结果贴到当前账号上
     if (!isCurrentFarmPage(accountId, accountSessionVersion))
       return
     const summary = opType === 'all' ? describeAllOperateSummary(result?.counts) : ''
+    const warnings = Array.isArray(result?.warnings) ? result.warnings.join('，') : ''
+    if (warnings) {
+      const detail = summary || describeOperateResult(result, label)
+      toast.warning(detail ? `${detail}。${warnings}` : warnings)
+      return
+    }
     if (summary) {
       if (result?.hadWork)
         toast.success(`${label}：${summary}`)
@@ -268,7 +275,7 @@ async function runGlobalOperate(opType: string) {
       toast.error(error instanceof Error ? error.message : `${label}失败`)
   }
   finally {
-    if (isCurrentFarmPage(accountId, accountSessionVersion)) operating.value = false
+    if (isCurrentFarmPage(accountId, accountSessionVersion)) operating.value = null
   }
 }
 
@@ -426,7 +433,9 @@ function enterSelecting() {
   if (selectionBusy.value)
     return
   selecting.value = true
-  if (batchAction.value !== 'item')
+  if (batchAction.value === 'item' && currentAccountConnected.value && currentAccountId.value)
+    void farmStore.fetchInteractionItems(currentAccountId.value)
+  else if (batchAction.value !== 'item')
     selectAllLands()
 }
 
@@ -434,7 +443,9 @@ function chooseBatchAction(action: BatchAction) {
   if (selectionBusy.value)
     return
   batchAction.value = action
-  if (action !== 'item')
+  if (action === 'item' && currentAccountConnected.value && currentAccountId.value)
+    void farmStore.fetchInteractionItems(currentAccountId.value)
+  else if (action !== 'item')
     selectAllLands()
 }
 
@@ -491,7 +502,7 @@ async function applySelection() {
   if (batchAction.value === 'normal' || batchAction.value === 'organic')
     await fertilizeSelected(batchAction.value)
   else if (batchAction.value === 'farming')
-    await farmSelected()
+    await operateSelected('clear', farmingTargets.value)
   else if (batchAction.value === 'remove')
     requestRemoveSelected()
   else if (batchAction.value === 'harvest' || batchAction.value === 'upgrade')
@@ -608,7 +619,7 @@ async function fertilizeSelected(fertilizerType: FertilizerType) {
 
 async function fertilizeFromCard(land: any) {
   const accountId = currentAccountId.value
-  if (!accountId || !currentAccountConnected.value || selectionBusy.value || farmingLandId.value !== null || !isNormalFertilizeCandidate(land))
+  if (!accountId || !currentAccountConnected.value || selectionBusy.value || !isNormalFertilizeCandidate(land))
     return
   const sequence = ++fertilizerUiSequence
   const result = await farmStore.fertilizeLand(accountId, Number(land.id), 'normal')
@@ -646,62 +657,38 @@ async function handleFertilizeAll() {
   toast.success(`已为 ${result.successCount} 株作物施肥${skipped}${remaining ? `，${remaining}` : ''}`)
 }
 
-/** 逐块务农，前一块结束再处理下一块；任一失败不影响其余地块。 */
-async function farmSelected() {
-  const targets = farmingTargets.value.map(land => Number(land.id)).filter(Boolean)
-  if (!currentAccountId.value || batchPending.value || operating.value || !targets.length)
+async function operateSelected(opType: 'clear' | 'harvest' | 'upgrade' | 'remove', targets: any[]) {
+  const landIds = targets.map(land => Number(land.id)).filter(Boolean)
+  if (!currentAccountId.value || selectionBusy.value || !landIds.length)
     return
   const accountId = currentAccountId.value
   const accountSessionVersion = farmStore.farmAccountSessionVersion
-  batchPending.value = true
-  let done = 0
-  let idle = 0
-  let failed = 0
-  try {
-    for (const landId of targets) {
-      if (!isCurrentFarmPage(accountId, accountSessionVersion)) return
-      farmingLandId.value = landId
-      try {
-        const result = await farmStore.operate(accountId, 'clear', landId)
-        if (result?.hadWork)
-          done++
-        else
-          idle++
-      }
-      catch {
-        failed++
-      }
+  const actionLabel = { clear: '务农', harvest: '收获', upgrade: '升级', remove: '铲除' }[opType]
+  if (opType === 'clear' || opType === 'harvest') {
+    try {
+      const result = await farmStore.operate(accountId, opType, landIds)
       if (!isCurrentFarmPage(accountId, accountSessionVersion))
         return
+      const count = Number(result?.counts?.[opType === 'clear' ? 'farming' : 'harvest']) || 0
+      const warnings = Array.isArray(result?.warnings) ? result.warnings.join('，') : ''
+      if (warnings)
+        toast.warning(`已${actionLabel} ${count} 块。${warnings}`)
+      else if (count)
+        toast.success(`已${actionLabel} ${count} 块`)
+      else
+        toast.info(`所选土地当前无需${actionLabel}`)
     }
-  }
-  finally {
-    farmingLandId.value = null
-    batchPending.value = false
-  }
-  const parts = [done && `${done} 块务农完成`, idle && `${idle} 块无需处理`, failed && `${failed} 块失败`].filter(Boolean).join('，')
-  if (failed)
-    toast.warning(parts)
-  else
-    toast.success(parts || '所选土地无需务农')
-}
-
-async function operateSelected(opType: 'harvest' | 'upgrade' | 'remove', targets: any[]) {
-  const landIds = targets.map(land => Number(land.id)).filter(Boolean)
-  if (!currentAccountId.value || batchPending.value || operating.value || !landIds.length)
+    catch (error) {
+      if (isCurrentFarmPage(accountId, accountSessionVersion))
+        toast.error(error instanceof Error ? error.message : `${actionLabel}失败`)
+    }
     return
-  const accountId = currentAccountId.value
-  const accountSessionVersion = farmStore.farmAccountSessionVersion
-  const actionLabel = { harvest: '收获', upgrade: '升级', remove: '铲除' }[opType]
+  }
   batchPending.value = true
   let done = 0
   let idle = 0
   let failed = 0
-  const isOperationCandidate = {
-    harvest: isHarvestCandidate,
-    upgrade: isUpgradeCandidate,
-    remove: isRemoveCandidate,
-  }[opType]
+  const isOperationCandidate = opType === 'upgrade' ? isUpgradeCandidate : isRemoveCandidate
   try {
     for (const landId of landIds) {
       if (!isCurrentFarmPage(accountId, accountSessionVersion)) return
@@ -782,33 +769,43 @@ async function executeUseInteractionItem() {
 
 async function refreshFarmData(readLands = true) {
   const accountId = currentAccountId.value
-  if (!accountId || !currentAccountConnected.value)
+  if (!accountId || !currentAccountConnected.value || farmStore.farmOperationPending)
     return
   await Promise.all([
     readLands ? farmStore.fetchLands(accountId) : undefined,
-    farmStore.fetchInteractionItems(accountId),
+    selecting.value && batchAction.value === 'item' ? farmStore.fetchInteractionItems(accountId) : undefined,
     settingStore.fetchSettings(accountId),
     bagStore.fetchBag(accountId),
   ])
 }
 
-/** 只有用户点击才走这个入口：仅驱动图标自己转圈，不让 Naive UI 替换 #icon 插槽。 */
 async function refreshFarm() {
-  if (manualRefreshing.value)
+  const accountId = currentAccountId.value
+  const accountSessionVersion = farmStore.farmAccountSessionVersion
+  if (!accountId || !currentAccountConnected.value || manualRefreshing.value || selectionBusy.value)
     return
 
   manualRefreshing.value = true
   try {
-    await refreshFarmData()
+    const refreshed = await farmStore.fetchLands(accountId)
+    if (!isCurrentFarmPage(accountId, accountSessionVersion))
+      return
+    if (refreshed) {
+      toast.success('土地状态已刷新')
+      void refreshFarmData(false)
+    }
+    else {
+      toast.error(farmStore.farmRefreshError || '土地刷新未完成')
+    }
   }
   finally {
-    manualRefreshing.value = false
+    if (isCurrentFarmPage(accountId, accountSessionVersion))
+      manualRefreshing.value = false
   }
 }
 
 watch(currentAccountId, () => {
   farmStore.clearFarmAccountState()
-  farmingLandId.value = null
   selectedInteractionItemId.value = undefined
   selecting.value = false
   selectedIds.value = []
@@ -871,7 +868,7 @@ onUnmounted(() => {
             v-if="!selecting"
             aria-label="施肥"
             title="施肥"
-            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountConnected || !loaded || !!error || !lands.some(isFertilizeCandidate)"
+            :disabled="selectionBusy || !currentAccountConnected || !loaded || !!error || !lands.some(isFertilizeCandidate)"
             @click="fertilizerConfirmVisible = true"
           >
             <span class="i-carbon-soil-moisture" />
@@ -881,7 +878,8 @@ onUnmounted(() => {
             v-for="op in (selecting ? [] : operations)"
             :key="op.type"
             :type="op.buttonType"
-            :disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountConnected"
+            :disabled="selectionBusy || !currentAccountConnected"
+            :loading="operating === op.type"
             :aria-label="op.label"
             :title="op.label"
             @click="handleOperate(op.type)"
@@ -906,7 +904,7 @@ onUnmounted(() => {
             class="farm-refresh"
             size="medium"
             :loading="manualRefreshing"
-            :disabled="selectionBusy || !currentAccountId || !currentAccountConnected || !!error"
+            :disabled="selectionBusy || manualRefreshing || !currentAccountConnected"
             @click="refreshFarm"
           />
         </div>
@@ -934,7 +932,11 @@ onUnmounted(() => {
             <div class="i-svg-spinners-90-ring-with-bg text-4xl text-green-500" />
           </div>
 
-          <OfflineState v-else-if="error" />
+          <EmptyState v-else-if="error" bare title="土地读取失败" :description="farmStore.farmRefreshError" icon="i-carbon-warning-alt">
+            <NButton secondary @click="refreshFarm">
+              重新读取
+            </NButton>
+          </EmptyState>
 
           <EmptyState v-else-if="!loaded" bare title="尚未读取土地" icon="i-carbon-data-view-alt">
             <NButton secondary @click="refreshFarm">
@@ -1011,7 +1013,7 @@ onUnmounted(() => {
                 :selected="isLandSelected(land)"
                 :selection-disabled="!canSelectLand(land)"
                 :selection-label="selectReason(land)"
-                :farm-disabled="operating || fertilizePending || farmingLandId !== null || !currentAccountConnected"
+                :farm-disabled="selectionBusy || !currentAccountConnected"
                 @open="detailLandId = $event.id"
                 @select="toggleLand(land)"
                 @farm="handleOperate('clear')"

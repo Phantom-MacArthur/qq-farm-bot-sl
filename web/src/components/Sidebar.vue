@@ -6,8 +6,9 @@ import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import api from '@/api'
 import AccountModal from '@/components/AccountModal.vue'
+import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 import { useRoute } from 'vue-router'
-import { getSpaceMenu } from '@/router/menu'
+import { getSpaceMenu, isRanchRoute } from '@/router/menu'
 import { useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
 import { useAppUpdateStore } from '@/stores/app-update'
@@ -169,9 +170,11 @@ const connectionStatus = computed(() => {
 })
 
 const navItems = computed(() => {
-  return getSpaceMenu(route.meta.gameSpace === 'ranch')
+  const inRanch = isRanchRoute(route)
+  return getSpaceMenu(inRanch)
     .map(item => ({
       path: item.path ? `/${item.path}` : '/',
+      to: { name: item.name, query: inRanch && item.meta?.settingsPage ? { space: 'ranch' } : {} },
       label: item.label,
       icon: item.icon,
     }))
@@ -181,7 +184,7 @@ const navItems = computed(() => {
 <template>
   <aside
     id="app-sidebar"
-    class="app-sidebar h-full w-[150px] flex shrink-0 flex-col"
+    class="app-sidebar w-[150px] flex shrink-0 flex-col"
     :class="{ 'is-collapsed': isSidebarCollapsed, 'is-auto-collapsed': sidebarAutoCollapsed }"
     aria-label="主导航"
   >
@@ -213,7 +216,7 @@ const navItems = computed(() => {
       >
         <template #trigger>
           <router-link
-            :to="item.path"
+            :to="item.to"
             class="sidebar-nav__link group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-colors duration-150"
             :active-class="item.path === '/' ? '' : 'font-medium'"
             :style="{
@@ -256,8 +259,9 @@ const navItems = computed(() => {
           </NTooltip>
           <span v-show="!isSidebarCollapsed" class="sidebar-footer__uptime">{{ uptime }}</span>
         </div>
+        <ThemeSwitcher />
         <a
-          class="sidebar-footer__github"
+          class="sidebar-footer__action"
           href="https://github.com/liyangpengs/qq-farm-bot"
           target="_blank"
           rel="noopener noreferrer"
@@ -266,7 +270,7 @@ const navItems = computed(() => {
           <span class="sidebar-footer__icon">
             <span class="i-carbon-logo-github text-xl" />
           </span>
-          <span v-show="!isSidebarCollapsed" class="sidebar-footer__github-label">github</span>
+          <span v-show="!isSidebarCollapsed">github</span>
         </a>
       </div>
     </div>
@@ -282,6 +286,8 @@ const navItems = computed(() => {
 
 <style scoped>
 .app-sidebar {
+  /* 外壳的横向滚动条会占用布局高度，侧栏底部仍与视口对齐。 */
+  height: 100dvh;
   color: var(--ui-ink);
   border-right: 1px solid var(--ui-border);
   background: color-mix(in srgb, var(--ui-bg) 84%, transparent);
@@ -301,12 +307,14 @@ const navItems = computed(() => {
 }
 
 .sidebar-nav__link:focus-visible,
-.sidebar-footer__icon:focus-visible {
+.sidebar-footer :deep(.sidebar-footer__action:focus-visible),
+.sidebar-footer :deep(.sidebar-footer__icon:focus-visible) {
   outline: 2px solid color-mix(in srgb, var(--ui-primary) 55%, transparent);
   outline-offset: 2px;
 }
 
 .sidebar-footer {
+  flex-shrink: 0;
   border-top: 1px solid var(--ui-border);
   background: color-mix(in srgb, var(--ui-bg-soft) 58%, transparent);
 }
@@ -332,7 +340,7 @@ const navItems = computed(() => {
   white-space: nowrap;
 }
 
-.sidebar-footer__github {
+.sidebar-footer :deep(.sidebar-footer__action) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -343,15 +351,11 @@ const navItems = computed(() => {
   white-space: nowrap;
 }
 
-.sidebar-footer__github:hover {
+.sidebar-footer :deep(.sidebar-footer__action:hover) {
   color: var(--ui-primary);
 }
 
-.sidebar-footer__github-label {
-  min-width: 0;
-}
-
-.sidebar-footer__icon {
+.sidebar-footer :deep(.sidebar-footer__icon) {
   position: relative;
   width: 20px;
   height: 20px;
@@ -368,7 +372,7 @@ const navItems = computed(() => {
     background-color 0.15s ease;
 }
 
-.sidebar-footer__icon:hover {
+.sidebar-footer :deep(.sidebar-footer__icon:hover) {
   color: var(--ui-primary);
   background: var(--ui-primary-soft);
 }
@@ -456,9 +460,5 @@ nav a:hover {
 
 .app-sidebar.is-collapsed .sidebar-nav::-webkit-scrollbar {
   width: 0;
-}
-
-.app-sidebar.is-collapsed .sidebar-footer {
-  padding: 12px 24px;
 }
 </style>

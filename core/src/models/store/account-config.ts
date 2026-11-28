@@ -1,18 +1,19 @@
 import { effectiveAutomation } from '../../config/automation-modules';
 import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, FertilizerLandType, IntervalConfig, PlantingStrategy, QuietHoursConfig } from '../../types/config';
-import { normalizeFertilizerLandStrategies } from '../../config/fertilizer-strategy';
 export {};
 
 const sharedState = require('./shared-state');
 const { assertEmailClaimHour } = require('../../utils/hour-of-day');
-const { normalizeRanchSetting, migrateRanchMarketAutomation } = require('../../config/ranch-automation');
+// 集市兑换迁移只在写入路径跑；条目归一统一走 shared-state.normalizeAutomationValue
+// （它内部已委托 normalizeRanchSetting 处理 ranch 键，无需在此单独引入）。
+const { migrateRanchMarketAutomation } = require('../../config/ranch-automation');
 const { readKnownFriendGidsCache, writeKnownFriendGidsCache } = require('./gid-cache');
 
 const {
     globalConfig,
     normalizeAccountConfig,
+    normalizeAutomationValue,
     cloneAccountConfig,
-    normalizeFertilizerMode,
     normalizeFertilizerLandTypes,
     normalizeKnownFriendGids,
     normalizeKnownFriendGidSyncCooldownSec,
@@ -21,6 +22,7 @@ const {
     normalizeBagSeedPriority,
     normalizeBagSeedLandTypes,
     normalizeBagSeedFallbackStrategy,
+    normalizeRankedSeedFallbackStrategy,
     normalizeIntervals,
     normalizeTimeString,
     normalizeAutoAcceptFriendMinLevel,
@@ -76,6 +78,7 @@ function ensureAccountConfig(accountId: unknown, options: { persist?: boolean } 
     const id = sharedState.resolveAccountId(accountId);
     if (!id) return null;
     if (globalConfig.accountConfigs[id]) {
+        if (options.persist !== false) sharedState.configStorage.restoreMissingFiles(id);
         return cloneAccountConfig(globalConfig.accountConfigs[id]);
     }
     const next = cloneAccountConfig(sharedState.DEFAULT_ACCOUNT_CONFIG);
@@ -121,6 +124,7 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         bagSeedMultiLandReservationEnabled: !!cfg.bagSeedMultiLandReservationEnabled,
         bagSeedLandTypes: cloneBagSeedLandTypes(cfg.bagSeedLandTypes),
         bagSeedFallbackStrategy: cfg.bagSeedFallbackStrategy,
+        rankedSeedFallbackStrategy: cfg.rankedSeedFallbackStrategy,
         autoAcceptFriendMinLevel: cfg.autoAcceptFriendMinLevel,
         autoAcceptRequireOwnLevel: !!cfg.autoAcceptRequireOwnLevel,
         ui: { ...globalConfig.ui },
@@ -145,19 +149,7 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
     if (cfg.automation && typeof cfg.automation === 'object') {
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(cfg.automation))) {
             if ((next.automation as any)[k] === undefined) continue;
-            if (k === 'fertilizer') {
-                next.automation.fertilizer = normalizeFertilizerMode(v, next.automation.fertilizer);
-            } else if (k === 'fertilizer_land_types') {
-                (next.automation as any)[k] = normalizeFertilizerLandTypes(v, next.automation.fertilizer_land_types);
-            } else if (k === 'fertilizer_land_strategies') {
-                next.automation.fertilizer_land_strategies = normalizeFertilizerLandStrategies(v);
-            } else if (k.startsWith('ranch_')) {
-                (next.automation as any)[k] = normalizeRanchSetting(k, v);
-            } else if (k === 'fertilizer_smart_seconds') {
-                (next.automation as any)[k] = Math.max(30, Math.min(3600, Number(v) || 300));
-            } else {
-                (next.automation as any)[k] = !!v;
-            }
+            (next.automation as any)[k] = normalizeAutomationValue(k, v, (next.automation as any)[k]);
         }
     }
 
@@ -267,8 +259,11 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
         next.bagSeedLandTypes = normalizeBagSeedLandTypes(cfg.bagSeedLandTypes);
     }
 
-    if (cfg.bagSeedFallbackStrategy !== undefined && cfg.bagSeedFallbackStrategy !== null) {
-        next.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(cfg.bagSeedFallbackStrategy, next.bagSeedFallbackStrategy);
+    next.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(
+        cfg.bagSeedFallbackStrategy ?? next.bagSeedFallbackStrategy, next.bagSeedFallbackStrategy, next.plantingStrategy,
+    );
+    if (cfg.rankedSeedFallbackStrategy !== undefined && cfg.rankedSeedFallbackStrategy !== null) {
+        next.rankedSeedFallbackStrategy = normalizeRankedSeedFallbackStrategy(cfg.rankedSeedFallbackStrategy);
     }
 
     if (cfg.autoAcceptFriendMinLevel !== undefined && cfg.autoAcceptFriendMinLevel !== null) {
@@ -318,7 +313,8 @@ function getBagSeedLandTypes(accountId?: unknown): Record<string, FertilizerLand
 }
 
 function getBagSeedFallbackStrategy(accountId?: unknown): BagSeedFallbackStrategy {
-    return normalizeBagSeedFallbackStrategy(getAccountConfigSnapshot(accountId).bagSeedFallbackStrategy);
+    const config = getAccountConfigSnapshot(accountId);
+    return normalizeBagSeedFallbackStrategy(config.bagSeedFallbackStrategy, 'level', config.plantingStrategy);
 }
 
 function getIntervals(accountId?: unknown): IntervalConfig {
@@ -491,6 +487,7 @@ module.exports = {
     getBagSeedMultiLandReservationEnabled,
     getBagSeedLandTypes,
     getBagSeedFallbackStrategy,
+    getRankedSeedFallbackStrategy: (accountId?: unknown) => getAccountConfigSnapshot(accountId).rankedSeedFallbackStrategy,
     getIntervals,
     getFriendQuietHours,
     getKnownFriendGids,

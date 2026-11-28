@@ -20,6 +20,7 @@ const { mountFarmRoutes } = require('./farm-routes');
 const { mountFriendRoutes } = require('./friend-routes');
 const { mountActivityCenterRoutes } = require('./activity-center-routes');
 const { mountCommerceRoutes } = require('./commerce-routes');
+const { mountSystemUpdateRoutes } = require('./system-update-routes');
 const { readWebBuildInfo } = require('./web-version');
 const { mountWxLoginRoutes } = require('./wx-login-routes');
 const { mountQqLoginRoutes } = require('./qq-login-routes');
@@ -143,6 +144,7 @@ function startAdminServer(dataProvider: any): void {
     mountCommerceRoutes(app, ctx);
     mountCaptureRoutes(app, ctx);
     mountActivityUpdateRoutes(app, ctx);
+    mountSystemUpdateRoutes(app);
 
     // SPA fallback
     app.get('*', (req: any, res: any) => {

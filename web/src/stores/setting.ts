@@ -88,6 +88,24 @@ export interface AutomationConfig {
   mall_coupon_gift_buy?: boolean
   skip_own_weed_bug?: boolean
   show_manual_fertilizer?: boolean
+  solar_calendar_claim_events?: boolean
+  solar_calendar_claim_seasons?: boolean
+  solar_calendar_answer_quiz?: boolean
+  yishu_claim_seed?: boolean
+  yishu_share?: boolean
+  yishu_auto_sell?: boolean
+  yishu_plant?: boolean
+  yishu_harvest?: boolean
+  yishu_use_unshared_price?: boolean
+  yishu_sell_mode?: string
+  yishu_claim_commission?: boolean
+  yishu_sell_fallback_own?: boolean
+  yishu_scan_friend_limit?: number
+  yishu_scan_interval_minutes?: number
+  yishu_sell_min_count?: number
+  yishu_sell_min_price?: number
+  /** 到点之后才开始卖薯（"HH:MM"，空串 = 不限）。 */
+  yishu_sell_after_time?: string
 }
 
 export interface IntervalsConfig {
@@ -115,6 +133,13 @@ export interface OfflineChannelCredential {
   wxPusherUid: string
 }
 
+export const FARM_ACTIVITY_OPTIONS = [
+  { value: 'cropHarvest', label: '收获作物' },
+  { value: 'animalHarvest', label: '收获动物' },
+  { value: 'sale', label: '出售成功' },
+  { value: 'reward', label: '领取奖励' },
+] as const
+
 export interface OfflineConfig {
   channel: string
   endpoint: string
@@ -124,8 +149,9 @@ export interface OfflineConfig {
   channelCredentials: Record<string, OfflineChannelCredential>
   title: string
   msg: string
-  notificationTypes: { offline: boolean, mysteryArrival: boolean, mysteryPurchase: boolean }
+  notificationTypes: { offline: boolean, mysteryArrival: boolean, mysteryPurchase: boolean, farmActivity: boolean }
   mysteryMessages: { mysteryArrival: string, mysteryPurchase: string }
+  farmActivityEvents: typeof FARM_ACTIVITY_OPTIONS[number]['value'][]
 }
 
 export interface UIConfig {
@@ -145,6 +171,7 @@ export interface SettingsState {
   bagSeedMultiLandReservationEnabled: boolean
   bagSeedLandTypes: Record<string, string[]>
   bagSeedFallbackStrategy: string
+  rankedSeedFallbackStrategy: string
   intervals: IntervalsConfig
   friendQuietHours: FriendQuietHoursConfig
   automation: AutomationConfig
@@ -170,6 +197,7 @@ type SaveableSettingsKey
     | 'bagSeedMultiLandReservationEnabled'
     | 'bagSeedLandTypes'
     | 'bagSeedFallbackStrategy'
+    | 'rankedSeedFallbackStrategy'
     | 'intervals'
     | 'friendQuietHours'
     | 'automation'
@@ -194,6 +222,7 @@ const SAVEABLE_SETTINGS_KEYS: SaveableSettingsKey[] = [
   'bagSeedMultiLandReservationEnabled',
   'bagSeedLandTypes',
   'bagSeedFallbackStrategy',
+  'rankedSeedFallbackStrategy',
   'intervals',
   'friendQuietHours',
   'automation',
@@ -218,6 +247,7 @@ function createDefaultSettings(): SettingsState {
     bagSeedMultiLandReservationEnabled: false,
     bagSeedLandTypes: {},
     bagSeedFallbackStrategy: 'level',
+    rankedSeedFallbackStrategy: '',
     intervals: {},
     friendQuietHours: { enabled: false, start: '23:00', end: '07:00', continueFarm: true },
     automation: {},
@@ -236,8 +266,9 @@ function createDefaultSettings(): SettingsState {
       },
       title: '',
       msg: '账号下线',
-      notificationTypes: { offline: true, mysteryArrival: false, mysteryPurchase: false },
+      notificationTypes: { offline: true, mysteryArrival: false, mysteryPurchase: false, farmActivity: false },
       mysteryMessages: { mysteryArrival: '神秘商人到访', mysteryPurchase: '神秘商人到访' },
+      farmActivityEvents: FARM_ACTIVITY_OPTIONS.map(option => option.value),
     },
     stealDelaySeconds: 0,
     plantDelaySeconds: 0,
@@ -296,6 +327,7 @@ export const useSettingStore = defineStore('setting', () => {
       bagSeedMultiLandReservationEnabled: data.bagSeedMultiLandReservationEnabled ?? defaults.bagSeedMultiLandReservationEnabled,
       bagSeedLandTypes: cloneValue(data.bagSeedLandTypes ?? defaults.bagSeedLandTypes),
       bagSeedFallbackStrategy: data.bagSeedFallbackStrategy ?? defaults.bagSeedFallbackStrategy,
+      rankedSeedFallbackStrategy: data.rankedSeedFallbackStrategy ?? defaults.rankedSeedFallbackStrategy,
       intervals: cloneValue(data.intervals || defaults.intervals),
       friendQuietHours: {
         ...defaults.friendQuietHours,
@@ -308,6 +340,7 @@ export const useSettingStore = defineStore('setting', () => {
         ...(cloneValue(data.offlineReminder) || {}),
         notificationTypes: { ...defaults.offlineReminder.notificationTypes, ...data.offlineReminder?.notificationTypes },
         mysteryMessages: { ...defaults.offlineReminder.mysteryMessages, ...data.offlineReminder?.mysteryMessages },
+        farmActivityEvents: cloneValue(data.offlineReminder?.farmActivityEvents ?? defaults.offlineReminder.farmActivityEvents),
         channelCredentials: {
           ...defaults.offlineReminder.channelCredentials,
           ...((cloneValue(data.offlineReminder) || {}).channelCredentials || {}),
@@ -393,6 +426,16 @@ export const useSettingStore = defineStore('setting', () => {
         headers: { 'x-account-id': accountId },
         timeout: 15000,
       })
+      if ((data?.ok || data?.saved) && ['preferred', 'bag_priority', 'illustrated'].includes(payload.plantingStrategy || '')
+        && payload.bagSeedFallbackStrategy === 'illustrated'
+        && data.data?.bagSeedFallbackStrategy !== 'illustrated') {
+        return { ok: false, error: '后端未确认图鉴第二策略已保存，请更新后端后重试' }
+      }
+      if ((data?.ok || data?.saved) && payload.rankedSeedFallbackStrategy !== undefined
+        && payload.rankedSeedFallbackStrategy !== settings.value.rankedSeedFallbackStrategy
+        && data.data?.rankedSeedFallbackStrategy !== payload.rankedSeedFallbackStrategy) {
+        return { ok: false, error: '后端未确认第二优先策略已保存，请更新后端后重试' }
+      }
       if (!data?.ok) {
         if (data?.saved && (!latestRequestedAccountId || latestRequestedAccountId === accountId)) {
           loadedAccountId.value = accountId

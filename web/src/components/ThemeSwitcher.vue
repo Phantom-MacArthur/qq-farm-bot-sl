@@ -1,28 +1,26 @@
 <script setup lang="ts">
-import { NButton } from 'naive-ui/es/button'
-import { NDropdown } from 'naive-ui/es/dropdown'
+import { computed } from 'vue'
 import { useAppStore } from '@/stores/app'
 
 const app = useAppStore()
-const labels = { system: '跟随系统', light: '浅色', dark: '深色' }
-const options = [
-  { label: labels.system, key: 'system' },
-  { label: labels.light, key: 'light' },
-  { label: labels.dark, key: 'dark' },
-]
-function selectTheme(key: string) {
-  app.setThemeMode(key as keyof typeof labels)
-}
+const themes = {
+  system: { label: '跟随系统', next: 'light' },
+  light: { label: '浅色', next: 'dark' },
+  dark: { label: '深色', next: 'system' },
+} as const
+const currentTheme = computed(() => themes[app.themeMode] ?? themes.system)
 </script>
 
 <template>
-  <NDropdown trigger="click" :options="options" :value="app.themeMode" @select="selectTheme">
-    <NButton quaternary :title="`当前主题：${labels[app.themeMode]}`" :aria-label="`主题：${labels[app.themeMode]}，选择主题`">
-      <template #icon>
-        <span :class="app.themeMode === 'system' ? 'i-carbon-laptop' : app.themeMode === 'light' ? 'i-carbon-sun' : 'i-carbon-moon'" />
-      </template>
-      {{ labels[app.themeMode] }}
-      <span class="i-carbon-chevron-down ml-1 text-xs" aria-hidden="true" />
-    </NButton>
-  </NDropdown>
+  <button
+    type="button"
+    class="sidebar-footer__action cursor-pointer border-0 bg-transparent p-0"
+    :aria-label="`当前主题：${currentTheme.label}，切换到${themes[currentTheme.next].label}`"
+    @click="app.setThemeMode(currentTheme.next)"
+  >
+    <span class="sidebar-footer__icon" aria-hidden="true">
+      <span class="i-carbon-color-palette text-xl" />
+    </span>
+    <span v-show="!app.sidebarCollapsed">{{ currentTheme.label }}</span>
+  </button>
 </template>

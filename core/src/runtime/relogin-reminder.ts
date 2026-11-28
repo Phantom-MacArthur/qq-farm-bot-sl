@@ -1,14 +1,12 @@
 import type { PushNotification } from '../config/notification-types';
 import type { OfflineReminder } from '../types/config';
-import { normalizeNotificationTypes } from '../config/notification-types';
+import { normalizeFarmActivityEvents, normalizeNotificationTypes } from '../config/notification-types';
 
 export {};
 
 interface ReloginReminderOptions {
     store: any;
-    sendPushooMessage: (payload: any) => Promise<any>;
-    sendWxPusherMessage?: (payload: any) => Promise<any>;
-    sendWxPusherWechatMessage?: (payload: any) => Promise<any>;
+    sendNotification: (payload: any) => Promise<any>;
     log: (tag: string, msg: string, extra?: any) => void;
 }
 
@@ -20,7 +18,7 @@ interface OfflineReminderPayload {
 }
 
 function createReloginReminderService(options: ReloginReminderOptions) {
-    const { store, sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage, log } = options;
+    const { store, sendNotification, log } = options;
 
     // 按渠道从 channelCredentials 解析 token / wxPusherUid；
     // 若分渠道凭据暂缺，兼容回退到旧版顶层 token / wxPusherUid 字段。
@@ -53,14 +51,21 @@ function createReloginReminderService(options: ReloginReminderOptions) {
         const accountName = String(payload.accountName || '').trim();
         const account = store.getOfflineReminder?.(accountId);
         const enabled = normalizeNotificationTypes(account?.notificationTypes);
-        const notification = payload.candidates ? payload.candidates.find(item => enabled[item.type]) : payload;
+        const notification = payload.candidates ? payload.candidates.find(item => enabled[item.type]
+            && (item.type !== 'farmActivity' || normalizeFarmActivityEvents(account?.farmActivityEvents).includes(item.activity))) : payload;
         if (!notification) return;
         const baseTitle = String(notification.title || '').trim();
-        const custom = 'type' in notification && notification.type !== 'offline'
-            ? account?.mysteryMessages?.[notification.type] : '';
         const content = String(notification.content || '').trim();
-        const appendAccountName = payload.appendAccountName !== false;
-        const title = [appendAccountName && accountName ? `${baseTitle} ${accountName}` : baseTitle, String(custom || '').trim()].filter(Boolean).join(' ');
+        const type = 'type' in notification ? notification.type : undefined;
+        let title: string;
+        if (type === 'farmActivity') {
+            const profile = store.getAccounts?.()?.accounts?.find((item: { id: string }) => String(item.id) === accountId);
+            title = String(profile?.nick || '').trim() || String(profile?.name || '').trim() || accountName || baseTitle;
+        } else {
+            const custom = type === 'mysteryArrival' || type === 'mysteryPurchase' ? account?.mysteryMessages?.[type] : '';
+            const namedTitle = payload.appendAccountName !== false && accountName ? `${baseTitle} ${accountName}` : baseTitle;
+            title = [namedTitle, String(custom || '').trim()].filter(Boolean).join(' ');
+        }
         const logLabel = String(payload.logLabel || '事件提醒').trim() || '事件提醒';
         try {
             const channelCfg = resolvePushChannel(account);
@@ -83,14 +88,7 @@ function createReloginReminderService(options: ReloginReminderOptions) {
                 content,
             };
 
-            let result: any;
-            if (channelCfg.channel === 'wxpusher' && typeof sendWxPusherMessage === 'function') {
-                result = await sendWxPusherMessage(basePayload);
-            } else if (channelCfg.channel === 'wxpusher_wechat' && typeof sendWxPusherWechatMessage === 'function') {
-                result = await sendWxPusherWechatMessage(basePayload);
-            } else {
-                result = await sendPushooMessage(basePayload);
-            }
+            const result = await sendNotification(basePayload);
 
             if (result?.ok) {
                 log('系统', `${logLabel}发送成功: ${accountName || accountId || title}`);

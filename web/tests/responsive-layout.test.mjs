@@ -136,6 +136,13 @@ test('右侧16px包含滚动条占位，页头与正文共用同一补偿值', (
   assert.match(layout, /\.page-scroll\s*\{[^}]*padding: 0 var\(--page-pad-end\) var\(--page-pad-bottom, var\(--page-pad\)\) var\(--page-pad\)/)
 })
 
+test('侧栏底部以视口高度为准，横向滚动条和折叠状态不改变底部图标的垂直位置', () => {
+  const sidebar = readSource('components/Sidebar.vue')
+  assert.match(sidebar, /\.app-sidebar\s*\{[^}]*height: 100dvh;/)
+  assert.match(sidebar, /\.sidebar-footer\s*\{[^}]*flex-shrink: 0;/)
+  assert.doesNotMatch(sidebar, /\.app-sidebar\.is-collapsed\s+\.sidebar-footer\s*\{/)
+})
+
 test('固定标题栏面板按内容取高，底部留白包含外层横向滚动条', () => {
   const style = readSource('style.css')
   assert.match(style, /\.page-scroll:has\(\.panel-scroll-layout\)\s*\{[^}]*--page-pad-bottom: max\(0px, calc\(var\(--page-pad, 16px\) - var\(--page-bottom-inset, 0px\)\)\)/)

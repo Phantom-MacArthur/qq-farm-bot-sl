@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import type { GameSpace } from '@/components/space-transition'
+import type { RouteLocationRaw } from 'vue-router'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, nextTick, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getSpaceMenu } from '@/router/menu'
+import { getSpaceMenu, isRanchRoute } from '@/router/menu'
 import { useAccountStore } from '@/stores/account'
 import { useAppStore } from '@/stores/app'
 import { useRanchStore } from '@/stores/ranch'
@@ -17,7 +18,7 @@ const router = useRouter()
 const app = useAppStore()
 const ranch = useRanchStore()
 const { currentAccountId } = storeToRefs(useAccountStore())
-const inRanch = computed(() => route.meta.gameSpace === 'ranch')
+const inRanch = computed(() => isRanchRoute(route))
 const label = computed(() => inRanch.value ? '去农场' : '去牧场')
 
 const frame = () => new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
@@ -46,7 +47,10 @@ async function waitForDestination(target: GameSpace) {
   await frame()
 }
 
-function destinationOf(target: GameSpace) {
+function destinationOf(target: GameSpace): RouteLocationRaw {
+  if (route.meta.settingsPage) {
+    return { path: route.path, query: { ...route.query, space: target === 'ranch' ? 'ranch' : undefined }, hash: route.hash }
+  }
   if (route.name === 'farm' || route.name === 'ranch')
     return target === 'ranch' ? '/ranch' : '/farm'
   const baseName = String(route.name || 'dashboard').replace(/^ranch-/, '')

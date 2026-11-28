@@ -1,65 +1,72 @@
 <script setup lang="ts">
 import type { ActivityDirectoryItemDto } from '@/stores/activity-center'
+import type { RouteLocationRaw } from 'vue-router'
 import { useNow } from '@vueuse/core'
 import { NModal } from 'naive-ui/es/modal'
 import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import api from '@/api'
 import { resolveActivityGameplay } from '@/components/activity/gameplays'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
 import { normalizeActivityDirectory } from '@/stores/activity-center'
-import { MUGE_REWARD_OPTIONS } from '@/utils/account-feature-modules'
+import { MUGE_REWARD_OPTIONS, SOLAR_REWARD_OPTIONS, YISHU_ACTIVITY_OPTIONS, yishuAutomationDraft } from '@/utils/account-feature-modules'
+import YishuAutomationFields from './YishuAutomationFields.vue'
 
 const props = defineProps<{ accountId: string, connected: boolean }>()
 const automation = defineModel<Record<string, any>>({ required: true })
+const router = useRouter()
 const now = useNow({ interval: 1000 })
 const sources = [
-  '/api/activity-center/activities',
-  '/api/activity-center/ranch-activities',
+  { path: '/api/activity-center/activities', routeName: 'activity-center' },
+  { path: '/api/activity-center/ranch-activities', routeName: 'ranch-activity-center' },
 ] as const
-const directories = ref<Array<{
+const directories = ref<Partial<Record<typeof sources[number]['routeName'], {
   items: ActivityDirectoryItemDto[]
   clockOffset: number
-}>>([])
-const loading = ref(false)
+}>>>({})
 const failed = ref(false)
 
 watch([() => props.accountId, () => props.connected], async ([accountId, connected], _, onCleanup) => {
-  directories.value = []
+  directories.value = {}
   failed.value = false
-  loading.value = false
   if (!accountId || !connected)
     return
 
   const controller = new AbortController()
   onCleanup(() => controller.abort())
-  loading.value = true
-  const results = await Promise.allSettled(sources.map(async (path) => {
-    const { data } = await api.get(path, {
-      headers: { 'x-account-id': accountId },
-      signal: controller.signal,
-      skipErrorToast: true,
-    } as any)
-    if (!data?.ok || !Array.isArray(data.data?.activities))
-      throw new Error('活动读取失败')
-    const serverTime = Number(data.data.serverTime)
-    return {
-      items: normalizeActivityDirectory(data.data.activities),
-      clockOffset: serverTime > 0 ? serverTime * 1000 - Date.now() : 0,
+  await Promise.all(sources.map(async ({ path, routeName }) => {
+    try {
+      const { data } = await api.get(path, {
+        headers: { 'x-account-id': accountId },
+        signal: controller.signal,
+        skipErrorToast: true,
+      } as any)
+      if (controller.signal.aborted)
+        return
+      if (!data?.ok || !Array.isArray(data.data?.activities))
+        throw new Error('活动读取失败')
+      const serverTime = Number(data.data.serverTime)
+      directories.value[routeName] = {
+        items: normalizeActivityDirectory(data.data.activities),
+        clockOffset: serverTime > 0 ? serverTime * 1000 - Date.now() : 0,
+      }
+    }
+    catch {
+      if (!controller.signal.aborted)
+        failed.value = true
     }
   }))
-  if (controller.signal.aborted)
-    return
-  directories.value = results.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
-  failed.value = results.some(result => result.status === 'rejected')
-  loading.value = false
 }, { immediate: true })
 
 const activeActivities = computed(() => {
   const seen = new Set<string>()
-  return directories.value.flatMap(({ items, clockOffset }) => {
-    const serverNow = now.value.getTime() + clockOffset
-    return items.flatMap((activity) => {
+  return sources.flatMap(({ routeName }) => {
+    const directory = directories.value[routeName]
+    if (!directory)
+      return []
+    const serverNow = now.value.getTime() + directory.clockOffset
+    return directory.items.flatMap((activity) => {
       if (!activity.id || !activity.name || seen.has(activity.id)
         || activity.startTime !== null && serverNow < activity.startTime
         || activity.endTime !== null && serverNow >= activity.endTime)
@@ -67,26 +74,45 @@ const activeActivities = computed(() => {
       if (resolveActivityGameplay(activity)?.module.key !== 'muge')
         return []
       seen.add(activity.id)
-      return [{ id: activity.id, name: activity.name }]
+      return [{
+        id: activity.id,
+        name: activity.name,
+        kind: 'muge',
+        to: { name: routeName, query: { activity: 'muge' } },
+      } satisfies SettingsActivity]
     })
   })
 })
 
-type SettingsActivity = typeof activeActivities.value[number]
+const activityOptions = {
+  muge: MUGE_REWARD_OPTIONS,
+  solar: SOLAR_REWARD_OPTIONS,
+  yishu: YISHU_ACTIVITY_OPTIONS,
+}
+type SettingsActivity = { id: string, name: string, kind: keyof typeof activityOptions, to: RouteLocationRaw }
+const calendarSettings: SettingsActivity = { id: 'solar', name: '节令日历', kind: 'solar', to: { name: 'solar-calendar' } }
+const yishuSettings: SettingsActivity = {
+  id: 'yishu',
+  name: '以薯换福',
+  kind: 'yishu',
+  to: { name: 'activity-center', query: { activity: 'yishuhuanfu' } },
+}
 const selectedActivity = ref<SettingsActivity | null>(null)
-const mugeDraft = ref<Record<typeof MUGE_REWARD_OPTIONS[number]['key'], boolean>>({
-  muge_claim_celebration: false,
-  muge_claim_friends: false,
-  muge_claim_handbook: false,
-  muge_claim_personality: false,
-})
+const options = computed(() => selectedActivity.value ? activityOptions[selectedActivity.value.kind] : [])
+const switches = ref<Record<string, boolean>>({})
+const yishuDraft = ref<Record<string, any>>({})
+watch(() => props.accountId, () => { selectedActivity.value = null }, { flush: 'sync' })
+
 function openSettings(activity: SettingsActivity) {
-  for (const { key } of MUGE_REWARD_OPTIONS)
-    mugeDraft.value[key] = automation.value[key] === true
+  switches.value = Object.fromEntries(activityOptions[activity.kind].map(({ key }) => [key, automation.value[key] === true]))
+  if (activity.kind === 'yishu')
+    yishuDraft.value = yishuAutomationDraft(automation.value)
   selectedActivity.value = activity
 }
 function confirmSettings() {
-  Object.assign(automation.value, mugeDraft.value)
+  if (!selectedActivity.value)
+    return
+  Object.assign(automation.value, selectedActivity.value.kind === 'yishu' ? yishuDraft.value : switches.value)
   selectedActivity.value = null
 }
 </script>
@@ -94,30 +120,38 @@ function confirmSettings() {
 <template>
   <section class="settings-group space-y-2">
     <h4 class="settings-group__title">活动设置</h4>
-    <div v-if="activeActivities.length" class="flex flex-wrap gap-2">
-      <BaseButton v-for="activity in activeActivities" :key="activity.id" variant="secondary" size="sm" @click="openSettings(activity)">
-        {{ activity.name }}
-      </BaseButton>
+    <div class="flex flex-wrap gap-2">
+      <div v-for="activity in [calendarSettings, yishuSettings, ...activeActivities]" :key="activity.id" class="inline-flex items-center gap-1">
+        <BaseButton variant="secondary" size="sm" :to="router.resolve(activity.to).fullPath">
+          <span class="font-normal">{{ activity.name }}</span>
+        </BaseButton>
+        <BaseButton variant="ghost" size="sm" :aria-label="`${activity.name}自动化设置`" @click="openSettings(activity)">
+          <span class="font-normal">设置</span>
+        </BaseButton>
+      </div>
     </div>
-    <p v-if="!connected || loading || failed || !activeActivities.length" :class="connected && !loading && failed ? 'settings-error' : 'settings-note'" role="status">
-      {{ !connected ? '账号上线后显示进行中的活动' : loading ? '正在读取活动…' : failed ? (activeActivities.length ? '部分活动读取失败' : '活动读取失败') : '当前没有已适配的进行中活动' }}
+    <p v-if="!connected || failed" :class="connected ? 'settings-error' : 'settings-note'" role="status">
+      {{ !connected ? '账号上线后显示进行中的牧歌活动' : '部分活动目录读取失败' }}
     </p>
   </section>
   <NModal
     :show="selectedActivity !== null"
     @update:show="!$event && (selectedActivity = null)"
   >
-    <section class="settings-dialog max-w-[480px] w-[92vw]" role="dialog" aria-modal="true" :aria-label="selectedActivity?.name">
+    <div class="settings-dialog max-w-[480px] w-[92vw]" role="dialog" aria-modal="true" :aria-label="selectedActivity?.name">
       <header class="settings-dialog__header border-b">
         <h3 class="settings-dialog__title">{{ selectedActivity?.name }}</h3>
       </header>
-      <div class="settings-dialog__body grid grid-cols-2 gap-2">
-        <BaseSwitch v-for="option in MUGE_REWARD_OPTIONS" :key="option.key" v-model="mugeDraft[option.key]" :label="option.label" :aria-label="option.label" />
+      <div class="settings-dialog__body space-y-3">
+        <YishuAutomationFields v-if="selectedActivity?.kind === 'yishu'" v-model="yishuDraft" />
+        <div v-else class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <BaseSwitch v-for="option in options" :key="option.key" v-model="switches[option.key]" :label="option.label" :aria-label="option.label" />
+        </div>
       </div>
       <footer class="settings-dialog__footer flex justify-end gap-2 border-t">
-        <BaseButton size="sm" @click="confirmSettings">保存</BaseButton>
+        <BaseButton size="sm" @click="confirmSettings">确定</BaseButton>
         <BaseButton variant="secondary" size="sm" @click="selectedActivity = null">取消</BaseButton>
       </footer>
-    </section>
+    </div>
   </NModal>
 </template>

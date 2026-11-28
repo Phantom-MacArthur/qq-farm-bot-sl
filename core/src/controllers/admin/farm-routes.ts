@@ -129,7 +129,7 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         if (!id) return res.status(400).json({ ok: false });
 
         try {
-            const data = await ctx.provider.getLands(id);
+            const data = await ctx.provider.getLands(id, req.query.includeCareer !== '0');
             res.json({ ok: true, data });
         } catch (e: any) {
             handleApiError(res, e);
@@ -433,6 +433,16 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
+    app.get('/api/daily-completion', async (req: Request, res: Response) => {
+        const id = getAccId(ctx, req);
+        if (!id) return res.status(400).json({ ok: false });
+        try {
+            res.json({ ok: true, data: await ctx.provider.getDailyCompletion(id) });
+        } catch (error) {
+            handleApiError(res, error);
+        }
+    });
+
     // API: 启动账号
     app.post('/api/accounts/:id/start', async (req: Request, res: Response) => {
         try {
@@ -440,9 +450,14 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
 
             const ok = await ctx.provider.startAccount(accountId);
             if (!ok) {
-                return res.status(404).json({ ok: false, error: 'Account not found' });
+                if (!accountId) return res.status(404).json({ ok: false, error: '账号不存在' });
+                return res.status(409).json({
+                    ok: false,
+                    error: '账号启动失败或已取消，请查看账号状态',
+                    data: { runtime: ctx.provider.getAccountRuntime?.(accountId), serverTime: Date.now() },
+                });
             }
-            res.json({ ok: true });
+            res.json({ ok: true, data: { runtime: ctx.provider.getAccountRuntime?.(accountId), serverTime: Date.now() } });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -457,7 +472,7 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
             if (!ok) {
                 return res.status(404).json({ ok: false, error: 'Account not found' });
             }
-            res.json({ ok: true });
+            res.json({ ok: true, data: { runtime: ctx.provider.getAccountRuntime?.(accountId), serverTime: Date.now() } });
         } catch (e: any) {
             handleApiError(res, e);
         }
@@ -498,7 +513,7 @@ function mountFarmRoutes(app: Application, ctx: AdminContext): void {
         if (!id) return res.status(400).json({ ok: false });
 
         try {
-            const { opType, landId } = req.body; // landId 将支持的操作限定到单块土地
+            const { opType, landId } = req.body; // 收获和务农也支持传入地块编号数组
             const data = await ctx.provider.doFarmOp(id, opType, landId);
             res.json({ ok: true, data });
         } catch (e: any) {

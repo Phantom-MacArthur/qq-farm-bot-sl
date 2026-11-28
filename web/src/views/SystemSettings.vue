@@ -5,6 +5,7 @@ import { computed, onMounted, ref } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import PageTabs from '@/components/PageTabs.vue'
 import AutoCodeRefreshCard from '@/components/settings/AutoCodeRefreshCard.vue'
+import SystemUpdatePanel from '@/components/settings/SystemUpdatePanel.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
@@ -25,12 +26,13 @@ function showAlert(message: string, type: 'primary' | 'danger' = 'primary') {
   toast.success(message)
 }
 
-type SystemTab = 'refresh' | 'login' | 'environment'
+type SystemTab = 'refresh' | 'login' | 'environment' | 'update'
 const activeSystemTab = ref<SystemTab>('refresh')
 const systemTabs = [
   { key: 'refresh', label: '定时刷新', icon: 'i-carbon-time' },
   { key: 'login', label: '登录设置', icon: 'i-carbon-login' },
   { key: 'environment', label: '运行环境', icon: 'i-carbon-settings-adjust' },
+  { key: 'update', label: '版本更新', icon: 'i-carbon-upgrade' },
 ] as const
 function setActiveSystemTab(value: string) {
   if (systemTabs.some(tab => tab.key === value))
@@ -108,8 +110,6 @@ async function saveAutoCodeRefreshSettings() {
     return
   autoCodeRefreshSaving.value = true
   try {
-    localAutoCodeRefresh.value.intervalMinutes = Math.max(1, Math.min(1440, Math.round(Number(localAutoCodeRefresh.value.intervalMinutes) || 2)))
-    localAutoCodeRefresh.value.maxRetries = Math.max(1, Math.min(100, Math.round(Number(localAutoCodeRefresh.value.maxRetries) || 8)))
     const result = await settingStore.saveAutoCodeRefresh(localAutoCodeRefresh.value)
     if (!result.ok)
       throw new Error(result.error || '保存失败')
@@ -346,6 +346,8 @@ onMounted(async () => {
         <!-- 系统设置 -->
         <div class="space-y-4">
           <div class="system-settings-content flex flex-col gap-3">
+            <SystemUpdatePanel v-if="activeSystemTab === 'update'" />
+
             <section v-if="activeSystemTab === 'environment'" class="page-card-surface rounded-lg margin-shell"><span class="margin-content !m-3">
               <div class="panel-titlebar mb-4 justify-between margin-shell"><span class="margin-content">
                 <div class="ml-auto flex shrink-0 items-center gap-2">

@@ -2,57 +2,27 @@
 import { useIntervalFn } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { NTooltip } from 'naive-ui/es/tooltip'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import api from '@/api'
+import { computed, ref, watch } from 'vue'
 import RunLogPanel from '@/components/RunLogPanel.vue'
 import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useAccountPresence } from '@/composables/useReconnectRefresh'
 import { useAccountStore } from '@/stores/account'
-import { useBagStore } from '@/stores/bag'
+import { useOverviewStore } from '@/stores/overview'
 import { useStatusStore } from '@/stores/status'
 import { formatCompactAmount, formatNumber } from '@/utils/format-number'
 
 const statusStore = useStatusStore()
 const accountStore = useAccountStore()
-const bagStore = useBagStore()
+const overviewStore = useOverviewStore()
 const {
   status,
   realtimeConnected,
 } = storeToRefs(statusStore)
 const { currentAccountId } = storeToRefs(accountStore)
+const { ranch: activeRanch, diamond: diamondBalance, fertilizerItems } = storeToRefs(overviewStore)
 const presence = useAccountPresence()
 const isOnline = computed(() => presence.value === 'online')
 const isOffline = computed(() => presence.value === 'offline')
-const ranchSnapshot = ref<any>(null)
-const ranchAccountId = ref('')
-const diamondBalance = ref<number | null>(null)
-let ranchRequestVersion = 0
-let diamondRequestVersion = 0
-
-async function refreshRanch() {
-  const id = String(currentAccountId.value || '')
-  if (!id || !isOnline.value)
-    return
-  const version = ++ranchRequestVersion
-  try {
-    const { data } = await api.get('/api/ranch', {
-      params: { view: 'animals' },
-      headers: { 'x-account-id': id },
-      timeout: 45000,
-      skipErrorToast: true,
-    } as any)
-    if (data?.ok && data.data && version === ranchRequestVersion && id === String(currentAccountId.value || '')) {
-      ranchSnapshot.value = data.data
-      ranchAccountId.value = id
-    }
-  }
-  catch {
-    // 保留本账号最后一次成功读取的快照，等待下一次轮询。
-  }
-}
-const { dashboardItems } = storeToRefs(bagStore)
-const lastBagFetchAt = ref(0)
-const bagAccountId = ref('')
 
 /**
  * 方案B：保留上一次有效的种植经验。
@@ -87,7 +57,6 @@ watch(
 const showPlantExp = computed(() => !!status.value?.connection?.connected && cachedPlantExp.value !== null)
 const plantExpValue = computed(() => cachedPlantExp.value ?? 0)
 
-const activeRanch = computed(() => ranchAccountId.value === String(currentAccountId.value || '') ? ranchSnapshot.value : null)
 const facilitySummaries = computed(() => [6, 7, 8].map((type) => {
   const facility = activeRanch.value?.facilities?.find((item: any) => Number(item.moduleType) === type)
   return {
@@ -126,7 +95,7 @@ function experienceHint(row: { current: number | null, needed: number | null }) 
 const todayAssetGains = computed<Record<string, number | null>>(() => {
   const id = String(currentAccountId.value || '')
   const farm = String(status.value?.accountId || '') === id ? status.value?.todayAssetGains : null
-  const ranch = ranchAccountId.value === id ? activeRanch.value?.todayAssetGains : null
+  const ranch = activeRanch.value?.todayAssetGains
   const ranchKeys = ['ranchCoupon', 'pinecone', 'grass', 'dung', 'canNormal', 'canOrganic']
   return { ...farm, ...Object.fromEntries(ranchKeys.filter(key => ranch?.[key] !== null && ranch?.[key] !== undefined).map(key => [key, ranch[key]])) }
 })
@@ -135,8 +104,7 @@ const assetTiles = computed(() => {
   const ranch = activeRanch.value
   const currency = (id: number) => ranch?.unlocked ? ranch.currencies?.find((item: any) => Number(item.id) === id)?.count : null
   const bucket = (id: number) => ranch?.unlocked ? ranch.buckets?.find((item: any) => Number(item.id) === id)?.seconds : null
-  const fertilizer = (id: number) => bagAccountId.value === String(currentAccountId.value || '')
-    ? dashboardItems.value.find((item: any) => Number(item.id) === id)?.count : null
+  const fertilizer = (id: number) => fertilizerItems.value.find(item => Number(item.id) === id)?.count
   return [
     { key: 'gold', label: '金币', icon: '/game-config/resource-icons/gold.png', raw: farm?.gold },
     { key: 'coupon', label: '点券', icon: '/game-config/resource-icons/coupon.png', raw: farm?.coupon },
@@ -180,72 +148,27 @@ function getExpPercent(p: any) {
   return Math.min(100, Math.max(0, (p.current / p.needed) * 100))
 }
 
-async function refreshBag(force = false) {
-  if (!currentAccountId.value || !isOnline.value)
-    return
-
-  const now = Date.now()
-  if (!force && now - lastBagFetchAt.value < 2500)
-    return
-  lastBagFetchAt.value = now
-  const id = String(currentAccountId.value)
-  await bagStore.fetchBag(id)
-  if (id === String(currentAccountId.value || ''))
-    bagAccountId.value = id
-}
-
-async function refreshDiamond() {
-  const id = String(currentAccountId.value || '')
-  if (!id || !isOnline.value)
-    return
-  const version = ++diamondRequestVersion
-  try {
-    const { data } = await api.get('/api/diamond', {
-      headers: { 'x-account-id': id },
-      skipErrorToast: true,
-    } as any)
-    const balance = Number(data.data?.diamond)
-    if (data?.ok && data.data?.diamond != null && Number.isFinite(balance) && version === diamondRequestVersion && id === String(currentAccountId.value || ''))
-      diamondBalance.value = Math.max(0, balance)
-  }
-  catch {
-    // 未获取成功时仍保持 --，下次上线重试。
-  }
-}
-
-async function refresh() {
+function refreshStatus() {
   const accountId = String(currentAccountId.value || '')
-  if (!accountId)
-    return
-  if (!realtimeConnected.value)
-    await statusStore.fetchStatus(accountId)
-  if (accountId === String(currentAccountId.value || ''))
-    await refreshBag()
+  if (accountId && !realtimeConnected.value)
+    void statusStore.fetchStatus(accountId)
 }
 
 watch(currentAccountId, () => {
-  ranchRequestVersion++
-  diamondRequestVersion++
-  ranchSnapshot.value = null
-  ranchAccountId.value = ''
-  diamondBalance.value = null
-  bagAccountId.value = ''
-  lastBagFetchAt.value = 0
   cachedPlantExp.value = null
-  refresh()
-  refreshBag(true)
-  refreshDiamond()
-  refreshRanch()
 })
 
-// 上线及每 30 秒刷新牧场只读快照，不触碰牧场其他页面共用的 store。
-watch(isOnline, (connected) => {
-  if (connected) {
-    refreshBag(true)
-    refreshDiamond()
-    refreshRanch()
-  }
-})
+watch([currentAccountId, isOnline], ([accountId, online], [previousAccountId]) => {
+  if (accountId !== previousAccountId)
+    refreshStatus()
+  if (!accountId || !online)
+    return
+  const id = String(accountId)
+  const minInterval = accountId === previousAccountId ? 0 : undefined
+  void overviewStore.refreshRanch(id, minInterval)
+  void overviewStore.refreshDiamond(id, minInterval)
+  void overviewStore.refreshFertilizer(id, minInterval)
+}, { immediate: true })
 
 function operationsEqual(next: Record<string, unknown> | null | undefined, prev: Record<string, unknown> | null | undefined) {
   const nextOperations = next || {}
@@ -256,25 +179,23 @@ function operationsEqual(next: Record<string, unknown> | null | undefined, prev:
 }
 
 watch(() => status.value?.operations, (next, prev) => {
-  if (!realtimeConnected.value || operationsEqual(next, prev))
+  if (isOnline.value && realtimeConnected.value && !operationsEqual(next, prev))
+    void overviewStore.refreshFertilizer(String(currentAccountId.value), 2500)
+})
+
+useIntervalFn(() => {
+  refreshStatus()
+  if (isOnline.value)
+    void overviewStore.refreshFertilizer(String(currentAccountId.value))
+}, 10000)
+useIntervalFn(() => {
+  if (!isOnline.value)
     return
-  refreshBag()
-})
-
-onMounted(async () => {
-  await refresh()
-  refreshDiamond()
-  refreshRanch()
-})
-
-onBeforeUnmount(() => {
-  ranchRequestVersion++
-  diamondRequestVersion++
-})
-
-// WebSocket 断开时轮询账号状态。
-useIntervalFn(refresh, 10000)
-useIntervalFn(refreshRanch, 30000)
+  const id = String(currentAccountId.value)
+  void overviewStore.refreshRanch(id)
+  if (diamondBalance.value === null)
+    void overviewStore.refreshDiamond(id)
+}, 30000)
 </script>
 
 <template>

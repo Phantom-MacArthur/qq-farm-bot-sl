@@ -1,4 +1,5 @@
 import config from '../activity-data/solar-calendar.json';
+import { emitFarmReward } from './farm-activity-events';
 export {};
 
 const { sendMsgAsync } = require('../utils/network');
@@ -76,6 +77,7 @@ async function perform(action: string, input: any) {
     const updated = action === 'season' ? reply.updated_season : reply.updated_event;
     if (!updated || toNum(updated.id) !== id) throw new Error('操作回包不完整，请刷新确认结果，勿重复提交');
     const result = { rewards: rewards(reply.rewards), correct: action === 'answer' ? !!reply.correct : undefined };
+    if (result.correct !== false) emitFarmReward('节令日历奖励', result.rewards);
     try { return { ...result, calendar: await getSolarCalendar() }; }
     catch { return { ...result, calendar: null, refreshRequired: true }; }
 }

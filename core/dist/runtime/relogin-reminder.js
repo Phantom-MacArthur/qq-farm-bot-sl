@@ -1,0 +1,115 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const notification_types_1 = require("../config/notification-types");
+function createReloginReminderService(options) {
+    const { store, sendNotification, log } = options;
+    // 按渠道从 channelCredentials 解析 token / wxPusherUid；
+    // 若分渠道凭据暂缺，兼容回退到旧版顶层 token / wxPusherUid 字段。
+    function resolvePushChannel(cfg) {
+        if (!cfg)
+            return { ok: false, reason: '未找到账号推送通知配置' };
+        const channel = String(cfg.channel || '').trim().toLowerCase();
+        if (!channel)
+            return { ok: false, reason: '账号推送通知配置不完整' };
+        const credentials = (cfg.channelCredentials && typeof cfg.channelCredentials === 'object')
+            ? cfg.channelCredentials
+            : {};
+        const entry = credentials[channel] || {};
+        const token = String(entry.token || cfg.token || '').trim();
+        const wxPusherUid = String(entry.wxPusherUid || cfg.wxPusherUid || '').trim();
+        const endpoint = String(cfg.endpoint || '').trim();
+        const secret = String(cfg.secret || '').trim();
+        if (channel === 'webhook' && !endpoint)
+            return { ok: false, reason: 'Webhook 渠道未设置接口地址' };
+        if (channel === 'dingtalk' && !endpoint && !token)
+            return { ok: false, reason: '钉钉渠道未设置 Webhook 地址' };
+        if (channel !== 'webhook' && channel !== 'dingtalk' && !token)
+            return { ok: false, reason: '账号推送渠道未设置 Token' };
+        if (channel === 'wxpusher_wechat' && !wxPusherUid)
+            return { ok: false, reason: 'WxPusher 渠道未设置接收者 UID' };
+        return { ok: true, channel, token, wxPusherUid, endpoint, secret };
+    }
+    async function sendConfiguredPush(payload = {}) {
+        const accountId = String(payload.accountId || '').trim();
+        const accountName = String(payload.accountName || '').trim();
+        const account = store.getOfflineReminder?.(accountId);
+        const enabled = (0, notification_types_1.normalizeNotificationTypes)(account?.notificationTypes);
+        const notification = payload.candidates ? payload.candidates.find(item => enabled[item.type]
+            && (item.type !== 'farmActivity' || (0, notification_types_1.normalizeFarmActivityEvents)(account?.farmActivityEvents).includes(item.activity))) : payload;
+        if (!notification)
+            return;
+        const baseTitle = String(notification.title || '').trim();
+        const content = String(notification.content || '').trim();
+        const type = 'type' in notification ? notification.type : undefined;
+        let title;
+        if (type === 'farmActivity') {
+            const profile = store.getAccounts?.()?.accounts?.find((item) => String(item.id) === accountId);
+            title = String(profile?.nick || '').trim() || String(profile?.name || '').trim() || accountName || baseTitle;
+        }
+        else {
+            const custom = type === 'mysteryArrival' || type === 'mysteryPurchase' ? account?.mysteryMessages?.[type] : '';
+            const namedTitle = payload.appendAccountName !== false && accountName ? `${baseTitle} ${accountName}` : baseTitle;
+            title = [namedTitle, String(custom || '').trim()].filter(Boolean).join(' ');
+        }
+        const logLabel = String(payload.logLabel || '事件提醒').trim() || '事件提醒';
+        try {
+            const channelCfg = resolvePushChannel(account);
+            if (channelCfg.ok === false) {
+                log('错误', channelCfg.reason);
+                return;
+            }
+            if (!title || !content) {
+                log('错误', '推送标题或内容为空');
+                return;
+            }
+            const basePayload = {
+                channel: channelCfg.channel,
+                endpoint: channelCfg.endpoint,
+                token: channelCfg.token,
+                secret: channelCfg.secret,
+                wxPusherUid: channelCfg.wxPusherUid,
+                title,
+                content,
+            };
+            const result = await sendNotification(basePayload);
+            if (result?.ok) {
+                log('系统', `${logLabel}发送成功: ${accountName || accountId || title}`);
+            }
+            else {
+                log('错误', `${logLabel}发送失败: ${result?.msg || 'unknown'}`);
+            }
+        }
+        catch (e) {
+            log('错误', `${logLabel}发送异常: ${e.message}`);
+        }
+    }
+    async function triggerOfflineReminder(payload = {}) {
+        try {
+            const accountId = String(payload.accountId || '').trim();
+            const accountName = String(payload.accountName || '').trim();
+            const reason = String(payload.reason || 'unknown');
+            log('系统', `触发下线提醒: 账号=${accountName || accountId}, 原因=${reason}`, { accountId, accountName, reason });
+            const cfg = store.getOfflineReminder?.(accountId);
+            if (cfg?.notificationTypes?.offline === false)
+                return;
+            if (!cfg) {
+                log('错误', '未找到下线提醒配置');
+                return;
+            }
+            // 内容栏作为标题后缀，正文保留下线事件说明。
+            const baseTitle = [String(cfg.title || '').trim() || accountName || '农场下线', String(cfg.msg || '').trim()].filter(Boolean).join(' ');
+            const content = '农场下线';
+            if (!baseTitle || !content) {
+                log('错误', '下线提醒配置不完整');
+                return;
+            }
+            await sendConfiguredPush({ title: baseTitle, content, accountId, accountName, logLabel: '下线提醒', appendAccountName: false });
+        }
+        catch (e) {
+            log('错误', `下线提醒发送异常: ${e.message}`);
+        }
+    }
+    return { triggerOfflineReminder, sendConfiguredPush };
+}
+module.exports = { createReloginReminderService };
+//# sourceMappingURL=relogin-reminder.js.map

@@ -1,4 +1,4 @@
-export {};
+import { beginDailyCheck, isDailyComplete, recordDailyMark } from './daily-completion';
 const { Buffer } = require('node:buffer');
 /**
  * 商城自动购买
@@ -320,6 +320,11 @@ function isDailyFreeGift(goods: any): boolean {
         && toNum(goods.price?.count) === 0 && Number(goods.goods_id || 0) > 0;
 }
 
+function dailyPurchaseExhausted(limit: any, additional = 0): boolean {
+    const cap = toNum(limit?.limit_count);
+    return toNum(limit?.limit_type) === 1 && cap > 0 && toNum(limit?.bought_count) + additional >= cap;
+}
+
 function getFreeGiftRewardPreview(goods: any[]) {
     const dailyBenefit = goods.filter(item => String(item?.name || '').trim() === '每日福利'
         && item.is_free === true && toNum(item.price?.count) === 0);
@@ -330,16 +335,26 @@ function getFreeGiftRewardPreview(goods: any[]) {
 
 async function buyFreeGifts(force: boolean = false): Promise<number> {
     const now: number = Date.now();
-    if (!force && isDoneTodayByKey(freeGiftDoneDateKey)) return 0;
+    if (isDailyComplete('farm_free_gifts')) return 0;
+    const check = beginDailyCheck('farm_free_gifts');
+    if (!check && !force && isDoneTodayByKey(freeGiftDoneDateKey)) return 0;
     if (!force && now - freeGiftLastCheckAt < BUY_COOLDOWN_MS) return 0;
     freeGiftLastCheckAt = now;
 
     try {
         const goods: any[] = await getMallGoodsList(1);
         freeGiftPreview = { date: getSystemDateKey(), rewards: getFreeGiftRewardPreview(goods) };
-        const free = goods.filter(g => isDailyFreeGift(g) && g.is_available === true);
+        const catalog = goods.filter(isDailyFreeGift);
+        const knownClaimed = (g: any) => isDailyComplete('farm_free_gifts', String(g.goods_id));
+        for (const g of catalog) {
+            if (dailyPurchaseExhausted(g.purchase_limit)) recordDailyMark(check, 'completed', { item: String(g.goods_id) });
+        }
+        const finishCatalog = () => {
+            if (catalog.length && catalog.every(knownClaimed)) recordDailyMark(check, 'completed');
+        };
+        const free = catalog.filter(g => g.is_available === true && !knownClaimed(g) && !dailyPurchaseExhausted(g.purchase_limit));
         if (!free.length) {
-            freeGiftDoneDateKey = getSystemDateKey();
+            finishCatalog();
             log('商城', '今日暂无可领取免费礼包', {
                 module: 'task',
                 event: FREE_GIFTS_DAILY_KEY,
@@ -354,6 +369,9 @@ async function buyFreeGifts(force: boolean = false): Promise<number> {
             try {
                 const receipt = await purchaseMallGoods(Number(g.goods_id || 0), 1);
                 bought += 1;
+                if (dailyPurchaseExhausted(receipt.purchase_limit) || dailyPurchaseExhausted(g.purchase_limit, 1)) {
+                    recordDailyMark(check, 'completed', { item: String(g.goods_id) });
+                }
                 const rewards = describeRewardItems(receipt.reward_items);
                 recordFarmReward('mall_free_gifts', rewards, g.name);
                 receivedRewards.push(...(rewards.length ? rewards : describeRewardItems(g.reward_items)));
@@ -361,7 +379,8 @@ async function buyFreeGifts(force: boolean = false): Promise<number> {
                 // 单个失败跳过
             }
         }
-        freeGiftDoneDateKey = getSystemDateKey();
+        finishCatalog();
+        if (bought === free.length) freeGiftDoneDateKey = getSystemDateKey();
         if (bought > 0) {
             freeGiftLastAt = Date.now();
             freeGiftRewards = receivedRewards;
@@ -624,7 +643,7 @@ module.exports = {
     }),
     getFreeGiftDailyState: () => ({
         key: FREE_GIFTS_DAILY_KEY,
-        doneToday: freeGiftDoneDateKey === getSystemDateKey(),
+        doneToday: freeGiftDoneDateKey === getSystemDateKey() || isDailyComplete('farm_free_gifts'),
         lastCheckAt: freeGiftLastCheckAt,
         lastClaimAt: freeGiftLastAt,
         rewards: freeGiftRewards.length && freeGiftLastAt > 0 && getSystemDateKey(freeGiftLastAt) === getSystemDateKey()

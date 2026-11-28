@@ -9,4 +9,13 @@ command -v node >/dev/null 2>&1 || {
     exit 1
 }
 
-exec node "$SCRIPT_DIR/tools/service-control.mjs" start "$@"
+# 兼容旧参数：--prebuilt 使用已准备的构建产物并跳过编译。
+args=()
+for arg in "$@"; do
+    case "$arg" in
+        --prebuilt) args+=("--skip-build") ;;
+        *) args+=("$arg") ;;
+    esac
+done
+
+exec node "$SCRIPT_DIR/tools/service-control.mjs" start "${args[@]}"

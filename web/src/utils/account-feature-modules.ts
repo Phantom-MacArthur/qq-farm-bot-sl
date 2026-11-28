@@ -8,6 +8,69 @@ export const MUGE_REWARD_OPTIONS = [
   { key: 'muge_claim_personality', label: '领取牧场人格奖励' },
 ] as const
 
+export const SOLAR_REWARD_OPTIONS = [
+  { key: 'solar_calendar_claim_events', label: '自动领取节令奖励' },
+  { key: 'solar_calendar_claim_seasons', label: '自动领取季度奖励' },
+  { key: 'solar_calendar_answer_quiz', label: '自动回答有官方答案的节令题' },
+] as const
+
+export const YISHU_ACTIVITY_OPTIONS = [
+  { key: 'yishu_claim_seed', label: '每日领取红薯种子' },
+  { key: 'yishu_plant', label: '空地优先种红薯' },
+  { key: 'yishu_harvest', label: '自动收获成熟红薯' },
+  { key: 'yishu_share', label: '每日分享铺子' },
+  { key: 'yishu_claim_commission', label: '领取收购提成' },
+] as const
+
+export const YISHU_SELL_DEFAULTS = {
+  yishu_scan_friend_limit: 200,
+  yishu_scan_interval_minutes: 30,
+  yishu_sell_min_count: 1,
+  yishu_sell_min_price: 450,
+  yishu_sell_after_time: '12:00',
+  yishu_sell_mode: '',
+  yishu_use_unshared_price: false,
+}
+
+export const YISHU_AUTOMATION_DEFAULTS = {
+  yishu_claim_seed: true,
+  yishu_plant: true,
+  yishu_harvest: true,
+  yishu_share: true,
+  yishu_claim_commission: true,
+  yishu_auto_sell: true,
+  ...YISHU_SELL_DEFAULTS,
+}
+
+export const YISHU_SELL_MODES = [
+  { value: 'off', label: '不询价也不卖薯' },
+  { value: 'manual', label: '仅询价' },
+  { value: 'scan', label: '询价但不卖薯' },
+  { value: 'auto', label: '自动询价并卖薯' },
+] as const
+
+export function yishuSellMode(automation: Record<string, any>) {
+  if (automation.yishu_sell_mode === 'confirm')
+    return 'scan'
+  const mode = YISHU_SELL_MODES.find(option => option.value === automation.yishu_sell_mode)
+  return mode?.value ?? (automation.yishu_auto_sell === false ? 'off' : 'auto')
+}
+
+export function yishuAutomationDraft(automation: Record<string, any>) {
+  return {
+    ...Object.fromEntries(Object.entries(YISHU_AUTOMATION_DEFAULTS).map(([key, value]) => [key, automation[key] ?? value])),
+    yishu_sell_mode: yishuSellMode(automation),
+    yishu_sell_after_time: automation.yishu_sell_after_time || YISHU_SELL_DEFAULTS.yishu_sell_after_time,
+  }
+}
+
+export const ACTIVITY_AUTOMATION_DEFAULTS = {
+  solar_calendar_claim_events: false,
+  solar_calendar_claim_seasons: false,
+  solar_calendar_answer_quiz: false,
+  ...YISHU_AUTOMATION_DEFAULTS,
+}
+
 export interface FeatureModuleMeta {
   key: FeatureModuleKey
   title: string
@@ -139,6 +202,7 @@ const MODULE_AUTOMATION_KEYS: Record<FeatureModuleKey, string[]> = {
     'ranch_task', 'ranch_illustrated', 'ranch_share', 'ranch_daily_benefit', 'ranch_coupon_gift_buy',
     'ranch_market_organic_poop', 'ranch_market_organic_pinecone',
     ...MUGE_REWARD_OPTIONS.map(option => option.key),
+    ...Object.keys(ACTIVITY_AUTOMATION_DEFAULTS),
   ],
 }
 
@@ -147,8 +211,16 @@ export function getModuleAutomation(key: FeatureModuleKey, automation: Record<st
   return Object.fromEntries(fields.filter(field => Object.prototype.hasOwnProperty.call(automation, field)).map(field => [field, automation[field]]))
 }
 
-const ACTIVITY_REWARD_KEYS = ['farm_illustrated', ...MUGE_REWARD_OPTIONS.map(option => option.key)] as const
-type ActivityRewardSettings = Partial<Record<typeof ACTIVITY_REWARD_KEYS[number], boolean>>
+const ACTIVITY_REWARD_KEYS = [
+  'farm_illustrated',
+  ...MUGE_REWARD_OPTIONS.map(option => option.key),
+  ...SOLAR_REWARD_OPTIONS.map(option => option.key),
+  ...YISHU_ACTIVITY_OPTIONS.map(option => option.key),
+  'yishu_auto_sell',
+  'yishu_sell_mode',
+  'yishu_use_unshared_price',
+] as const
+type ActivityRewardSettings = Partial<Record<typeof ACTIVITY_REWARD_KEYS[number], boolean | string>>
 
 export function wereActivityRewardSettingsSaved(requested: ActivityRewardSettings | undefined, saved: ActivityRewardSettings | undefined): boolean {
   return ACTIVITY_REWARD_KEYS.every(key => requested?.[key] === undefined || requested[key] === saved?.[key])

@@ -14,6 +14,7 @@ core/data/logs/*
 core/data/*.json
 !core/data/.gitkeep
 web/dist
+core/client.js
 web/node_modules
 coverage
 .nyc_output
@@ -26,6 +27,7 @@ docs/performance-analysis/
 **/tests/
 
 /runtime/
+/account/
 /releases/
 /packages/*/dist/
 .turbo/

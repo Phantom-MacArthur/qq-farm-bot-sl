@@ -1,0 +1,341 @@
+"use strict";
+Object.defineProperty(exports, "__esModule", { value: true });
+const notification_types_1 = require("../../config/notification-types");
+const { DEFAULT_CLIENT_VERSION, DEFAULT_WX_CLIENT_VERSION, DEFAULT_TIME_ZONE, DEFAULT_AUTO_CODE_REFRESH: DEFAULT_OFFLINE_RECOVERY, normalizeAutoCodeRefresh: normalizeOfflineRecovery, normalizeTimeZone, resolveClientVersionUpdatedAt } = require('../../config/config');
+const sharedState = require('./shared-state');
+const { getSavedAutomation } = require('./account-config');
+const { PUSHOO_CHANNELS, OFFLINE_PUSH_CHANNELS, defaultChannelCredentials, DEFAULT_OFFLINE_REMINDER, DEFAULT_LOGIN_SETTINGS, DEFAULT_CAPTURE_SETTINGS, DEFAULT_AUTO_CODE_REFRESH, globalConfig, normalizeAccountConfig, cloneAccountConfig, DEFAULT_ACCOUNT_CONFIG, } = sharedState;
+function normalizeOfflineReminder(input) {
+    const src = (input && typeof input === 'object') ? input : {};
+    const rawChannel = (src.channel !== undefined && src.channel !== null)
+        ? String(src.channel).trim().toLowerCase()
+        : '';
+    const channelSet = new Set(OFFLINE_PUSH_CHANNELS);
+    const endpoint = (src.endpoint !== undefined && src.endpoint !== null)
+        ? String(src.endpoint).trim()
+        : DEFAULT_OFFLINE_REMINDER.endpoint;
+    const migratedChannel = rawChannel
+        || (PUSHOO_CHANNELS.has(String(endpoint || '').trim().toLowerCase())
+            ? String(endpoint || '').trim().toLowerCase()
+            : DEFAULT_OFFLINE_REMINDER.channel);
+    const channel = channelSet.has(migratedChannel)
+        ? migratedChannel
+        : DEFAULT_OFFLINE_REMINDER.channel;
+    const token = (src.token !== undefined && src.token !== null)
+        ? String(src.token).trim()
+        : DEFAULT_OFFLINE_REMINDER.token;
+    const secret = (src.secret !== undefined && src.secret !== null)
+        ? String(src.secret).trim()
+        : DEFAULT_OFFLINE_REMINDER.secret;
+    const title = (src.title !== undefined && src.title !== null)
+        ? String(src.title).trim()
+        : DEFAULT_OFFLINE_REMINDER.title;
+    const msg = (src.msg !== undefined && src.msg !== null)
+        ? String(src.msg).trim()
+        : DEFAULT_OFFLINE_REMINDER.msg;
+    const wxPusherUid = (src.wxPusherUid !== undefined && src.wxPusherUid !== null)
+        ? String(src.wxPusherUid).trim()
+        : DEFAULT_OFFLINE_REMINDER.wxPusherUid;
+    // 分渠道凭据：以 4 个支持的渠道为固定键，叠加已有数据；
+    // 旧版若已配置 token/wxPusherUid 且对应渠道尚未填写，则作为该渠道凭据迁移。
+    const credentialsInput = (src.channelCredentials && typeof src.channelCredentials === 'object')
+        ? src.channelCredentials
+        : {};
+    const channelCredentials = defaultChannelCredentials();
+    for (const key of OFFLINE_PUSH_CHANNELS) {
+        const entry = credentialsInput[key];
+        if (entry && typeof entry === 'object') {
+            channelCredentials[key] = {
+                token: String(entry.token ?? '').trim(),
+                wxPusherUid: String(entry.wxPusherUid ?? '').trim(),
+            };
+        }
+        if (!channelCredentials[key].token && key === channel) {
+            channelCredentials[key].token = token;
+        }
+        if (!channelCredentials[key].wxPusherUid && key === channel) {
+            channelCredentials[key].wxPusherUid = wxPusherUid;
+        }
+    }
+    const notificationTypes = { farmActivity: false };
+    for (const key of ['offline', 'mysteryArrival', 'mysteryPurchase', 'farmActivity']) {
+        const value = src.notificationTypes?.[key];
+        if (typeof value === 'boolean')
+            notificationTypes[key] = value;
+    }
+    return {
+        channel,
+        endpoint,
+        token,
+        secret,
+        wxPusherUid,
+        channelCredentials,
+        title,
+        msg,
+        notificationTypes,
+        farmActivityEvents: (0, notification_types_1.normalizeFarmActivityEvents)(src.farmActivityEvents),
+        mysteryMessages: {
+            mysteryArrival: typeof src.mysteryMessages?.mysteryArrival === 'string' ? src.mysteryMessages.mysteryArrival.trim() : '神秘商人到访',
+            mysteryPurchase: typeof src.mysteryMessages?.mysteryPurchase === 'string' ? src.mysteryMessages.mysteryPurchase.trim() : '神秘商人到访',
+        },
+    };
+}
+function saveGlobalConfig(changes = {}) {
+    const next = { ...globalConfig, ...changes };
+    const fallback = normalizeAccountConfig(next.defaultAccountConfig, DEFAULT_ACCOUNT_CONFIG);
+    next.defaultAccountConfig = cloneAccountConfig(fallback);
+    // Publish memory only after persistence succeeds. Account documents have their
+    // own write path, so a global setting never scans or serializes all accounts.
+    sharedState.configStorage.saveGlobal(next);
+    Object.assign(globalConfig, next);
+    sharedState.accountFallbackConfig = fallback;
+}
+function getUI() {
+    return { ...globalConfig.ui };
+}
+function setUITheme(theme) {
+    const t = String(theme || '').toLowerCase();
+    const next = (t === 'light') ? 'light' : 'dark';
+    saveGlobalConfig({ ui: { ...globalConfig.ui, theme: next } });
+    return getUI();
+}
+function getOfflineReminder(accountId) {
+    const id = String(accountId || '').trim();
+    if (!id)
+        return normalizeOfflineReminder({});
+    const stored = globalConfig.accountOfflineReminders?.[id];
+    const config = normalizeOfflineReminder(stored);
+    const flags = (0, notification_types_1.normalizeNotificationTypes)(globalConfig.pushNotifications?.notificationTypes);
+    const automation = getSavedAutomation(id);
+    return {
+        ...config,
+        notificationTypes: {
+            offline: flags.offline,
+            mysteryArrival: flags.mysteryArrival && automation.mystery_shop_arrival_notify === true,
+            mysteryPurchase: flags.mysteryPurchase && automation.mystery_shop_purchase_notify === true,
+            ...config.notificationTypes,
+        },
+    };
+}
+function normalizeLoginSettings(input) {
+    const src = (input && typeof input === 'object') ? input : {};
+    return {
+        wechatQrLogin: typeof src.wechatQrLogin === 'boolean' ? src.wechatQrLogin : DEFAULT_LOGIN_SETTINGS.wechatQrLogin,
+        qqQrLogin: typeof src.qqQrLogin === 'boolean' ? src.qqQrLogin : DEFAULT_LOGIN_SETTINGS.qqQrLogin,
+        napCatEndpoint: typeof src.napCatEndpoint === 'string' ? src.napCatEndpoint.trim() : DEFAULT_LOGIN_SETTINGS.napCatEndpoint,
+        napCatSignature: typeof src.napCatSignature === 'string' ? src.napCatSignature.trim() : DEFAULT_LOGIN_SETTINGS.napCatSignature,
+    };
+}
+function getLoginSettings() {
+    return normalizeLoginSettings(globalConfig.loginSettings);
+}
+function setLoginSettings(cfg) {
+    const next = normalizeLoginSettings({ ...getLoginSettings(), ...(cfg || {}) });
+    // 部署侧已经自带 NapCat（compose 的 napcat profile 会注入 NAPCAT_LOGIN_ENABLED，
+    // 并且 NAPCAT_WEBUI_URL / NAPCAT_OPENAUTH_URL 就是取码链路真正使用的地址）时，
+    // 不再要求面板里重复填地址和签名——运行时取码只读这两个环境变量。
+    const napCatProvidedByHost = process.env.NAPCAT_LOGIN_ENABLED === 'true' || !!process.env.NAPCAT_WEBUI_URL;
+    if (next.qqQrLogin && !napCatProvidedByHost && (!next.napCatEndpoint || !next.napCatSignature)) {
+        throw new Error('开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名');
+    }
+    saveGlobalConfig({ loginSettings: next });
+    return getLoginSettings();
+}
+function normalizeAutoCodeRefresh(input) {
+    const src = (input && typeof input === 'object') ? input : {};
+    const intervalMinutes = Number(src.intervalMinutes);
+    const maxRetries = Number(src.maxRetries);
+    return {
+        enabled: src.enabled !== false,
+        intervalMinutes: Math.max(1, Math.min(1440, Number.isFinite(intervalMinutes)
+            ? Math.round(intervalMinutes)
+            : DEFAULT_AUTO_CODE_REFRESH.intervalMinutes)),
+        maxRetries: Math.max(1, Math.min(100, Number.isFinite(maxRetries)
+            ? Math.round(maxRetries)
+            : DEFAULT_AUTO_CODE_REFRESH.maxRetries)),
+    };
+}
+function getAutoCodeRefresh() {
+    return { ...normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh), enabled: normalizeOfflineRecovery(globalConfig.systemConfig?.autoCodeRefresh ?? globalConfig.autoCodeRefresh).offlineEnabled };
+}
+function setAutoCodeRefresh(cfg) {
+    const next = normalizeAutoCodeRefresh({ ...getAutoCodeRefresh(), ...(cfg || {}) });
+    const systemConfig = globalConfig.systemConfig;
+    saveGlobalConfig({ autoCodeRefresh: next, ...(systemConfig ? { systemConfig: { ...systemConfig, autoCodeRefresh: normalizeOfflineRecovery(next) } } : {}) });
+    return getAutoCodeRefresh();
+}
+function normalizeCaptureSettings(input) {
+    const src = (input && typeof input === 'object') ? input : {};
+    return {
+        enabled: typeof src.enabled === 'boolean' ? src.enabled : DEFAULT_CAPTURE_SETTINGS.enabled,
+        autoImportQqGids: typeof src.autoImportQqGids === 'boolean'
+            ? src.autoImportQqGids
+            : DEFAULT_CAPTURE_SETTINGS.autoImportQqGids,
+    };
+}
+function getCaptureSettings() {
+    return normalizeCaptureSettings(globalConfig.captureSettings);
+}
+function setCaptureSettings(cfg) {
+    const next = normalizeCaptureSettings({ ...getCaptureSettings(), ...(cfg || {}) });
+    saveGlobalConfig({ captureSettings: next });
+    return getCaptureSettings();
+}
+function setOfflineReminder(cfg, accountId) {
+    const id = String(accountId || '').trim();
+    if (!id)
+        throw new Error('下线提醒必须关联当前账号');
+    if (!globalConfig.accountOfflineReminders)
+        globalConfig.accountOfflineReminders = {};
+    const current = normalizeOfflineReminder(globalConfig.accountOfflineReminders[id] || {});
+    const next = normalizeOfflineReminder({
+        ...current,
+        ...cfg,
+        notificationTypes: { ...current.notificationTypes, ...cfg?.notificationTypes },
+        mysteryMessages: { ...current.mysteryMessages, ...cfg?.mysteryMessages },
+    });
+    saveGlobalConfig({
+        accountOfflineReminders: {
+            ...globalConfig.accountOfflineReminders,
+            [id]: next,
+        },
+    });
+    return getOfflineReminder(id);
+}
+function getOfflineReminderDefault() {
+    return globalConfig.offlineReminderDefault
+        ? normalizeOfflineReminder(globalConfig.offlineReminderDefault)
+        : null;
+}
+function setOfflineReminderDefault(cfg) {
+    const next = normalizeOfflineReminder(cfg || {});
+    saveGlobalConfig({ offlineReminderDefault: next });
+    return getOfflineReminderDefault();
+}
+function applyOfflineReminderDefault(accountId) {
+    const def = getOfflineReminderDefault();
+    if (!def)
+        return null;
+    return setOfflineReminder(def, accountId);
+}
+function getSystemConfig() {
+    if (!globalConfig.systemConfig)
+        return null;
+    const config = globalConfig.systemConfig;
+    return {
+        ...config,
+        // 旧配置没有该字段时默认开启，保证升级后重启自动生效。
+        autoCodeRefresh: normalizeOfflineRecovery(config.autoCodeRefresh ?? globalConfig.autoCodeRefresh),
+        // 旧配置没有该字段时默认开启：升级前用户从没关过这个开关。
+        autoStartAccounts: config.autoStartAccounts !== false,
+    };
+}
+function setSystemConfig(config) {
+    if (!config || typeof config !== 'object')
+        return null;
+    const DEFAULT_DEVICE_INFO = {
+        os: 'Windows',
+        clientVersion: DEFAULT_CLIENT_VERSION,
+        sysSoftware: 'Windows',
+        network: 'wifi',
+        memory: '16384',
+        deviceId: 'DESKTOP-PC<WPC>',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36 MicroMessenger/7.0.20.1781(0x6700143B) NetType/WIFI MiniProgramEnv/Windows WindowsWechat/WMPF WindowsWechat(0x63090a13)',
+    };
+    const current = globalConfig.systemConfig;
+    const srcDevice = {
+        ...(current?.deviceInfo || {}),
+        ...((config.deviceInfo && typeof config.deviceInfo === 'object') ? config.deviceInfo : {}),
+    };
+    const topVersion = String(config.clientVersion || '').trim();
+    const deviceVersion = String(config.deviceInfo?.clientVersion || '').trim();
+    const requestedVersion = deviceVersion || topVersion || current?.clientVersion;
+    const clientVersion = requestedVersion || DEFAULT_DEVICE_INFO.clientVersion;
+    const currentVersion = String(globalConfig.systemConfig?.clientVersion || DEFAULT_DEVICE_INFO.clientVersion).trim();
+    const currentUpdatedAt = Number(globalConfig.systemConfig?.clientVersionUpdatedAt);
+    const clientVersionUpdatedAt = resolveClientVersionUpdatedAt(clientVersion, currentVersion, currentUpdatedAt, config.clientVersionUpdatedAt);
+    // Older API clients may omit the new field; never copy the QQ version into it.
+    const currentWxVersion = globalConfig.systemConfig?.wxClientVersion || DEFAULT_WX_CLIENT_VERSION;
+    const wxClientVersion = config.wxClientVersion === undefined
+        ? currentWxVersion : (String(config.wxClientVersion || '').trim() || DEFAULT_WX_CLIENT_VERSION);
+    const wxClientVersionUpdatedAt = resolveClientVersionUpdatedAt(wxClientVersion, currentWxVersion, globalConfig.systemConfig?.wxClientVersionUpdatedAt, config.wxClientVersionUpdatedAt, Date.now(), 'wx');
+    const deviceInfo = {
+        os: String(srcDevice.os || DEFAULT_DEVICE_INFO.os).trim(),
+        clientVersion,
+        sysSoftware: String(srcDevice.sysSoftware || DEFAULT_DEVICE_INFO.sysSoftware).trim(),
+        network: String(srcDevice.network || DEFAULT_DEVICE_INFO.network).trim(),
+        memory: String(srcDevice.memory || DEFAULT_DEVICE_INFO.memory).trim(),
+        deviceId: String(srcDevice.deviceId || DEFAULT_DEVICE_INFO.deviceId).trim(),
+        userAgent: String(srcDevice.userAgent || DEFAULT_DEVICE_INFO.userAgent).trim(),
+    };
+    const next = {
+        serverUrl: String(config.serverUrl ?? current?.serverUrl ?? '').trim(),
+        clientVersion: deviceInfo.clientVersion,
+        clientVersionUpdatedAt,
+        wxClientVersion,
+        wxClientVersionUpdatedAt,
+        platform: String(config.platform || current?.platform || 'qq').trim(),
+        os: deviceInfo.os,
+        timeZone: normalizeTimeZone(config.timeZone || current?.timeZone || DEFAULT_TIME_ZONE),
+        deviceInfo,
+        // 只改账号保活时不要把其它系统设置清零：缺字段时沿用已保存的值。
+        autoCodeRefresh: normalizeOfflineRecovery(config.autoCodeRefresh === undefined
+            ? (current?.autoCodeRefresh ?? globalConfig.autoCodeRefresh ?? DEFAULT_OFFLINE_RECOVERY)
+            : config.autoCodeRefresh),
+        // 同上：缺字段沿用已保存值，避免只保存保活配置时把自动登录关掉。
+        autoStartAccounts: config.autoStartAccounts === undefined
+            ? (current?.autoStartAccounts !== false)
+            : config.autoStartAccounts === true,
+    };
+    saveGlobalConfig({ systemConfig: next });
+    return { ...globalConfig.systemConfig };
+}
+// Initialize on load
+const { loadGlobalConfig } = sharedState;
+loadGlobalConfig();
+// Apply offlineReminder normalization after load
+{
+    const raw = globalConfig.accountOfflineReminders;
+    const normalized = {};
+    if (raw && typeof raw === 'object') {
+        for (const key of Object.keys(raw)) {
+            normalized[key] = normalizeOfflineReminder(raw[key]);
+        }
+    }
+    // 迁移旧版全局 offlineReminder（若已有数据）到 _default 但仍保留为模板字段。
+    const legacy = globalConfig.offlineReminder;
+    if (legacy && typeof legacy === 'object') {
+        if (!globalConfig.offlineReminderDefault)
+            globalConfig.offlineReminderDefault = normalizeOfflineReminder(legacy);
+        delete globalConfig.offlineReminder;
+    }
+    globalConfig.accountOfflineReminders = normalized;
+}
+globalConfig.loginSettings = normalizeLoginSettings(globalConfig.loginSettings);
+globalConfig.captureSettings = normalizeCaptureSettings(globalConfig.captureSettings);
+globalConfig.autoCodeRefresh = normalizeAutoCodeRefresh(globalConfig.autoCodeRefresh);
+if (sharedState.systemConfigMigrated && !process.env.FARM_ACCOUNT_ID) {
+    saveGlobalConfig();
+    sharedState.systemConfigMigrated = false;
+}
+module.exports = {
+    saveGlobalConfig,
+    getUI,
+    setUITheme,
+    getLoginSettings,
+    setLoginSettings,
+    getCaptureSettings,
+    setCaptureSettings,
+    normalizeCaptureSettings,
+    getAutoCodeRefresh,
+    setAutoCodeRefresh,
+    normalizeAutoCodeRefresh,
+    getOfflineReminder,
+    setOfflineReminder,
+    getOfflineReminderDefault,
+    setOfflineReminderDefault,
+    applyOfflineReminderDefault,
+    getSystemConfig,
+    setSystemConfig,
+};
+//# sourceMappingURL=global-config.js.map

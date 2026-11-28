@@ -9,6 +9,7 @@ const {
     getPlantExp,
     getPlantById,
     getSeedImageBySeedId,
+    getPlantPhaseImage,
     getPlantGrowTime,
     getPlantGrowPhases,
     getItemById,
@@ -283,7 +284,7 @@ function getPlantInteractionEffects(plant: any): any[] {
     return effects;
 }
 
-function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: Map<number, any>; nowSec?: number } = {}): any {
+function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: Map<number, any>; nowSec?: number; ownGid?: number } = {}): any {
     const nowSec = Number(options.nowSec) || getServerTimeSec();
     const friendMode = !!options.friendMode;
     const landsMap = options.landsMap instanceof Map ? options.landsMap : buildLandMap([land]);
@@ -388,6 +389,7 @@ function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: 
     const matureBegin = maturePhase ? toTimeSec(maturePhase.begin_time) : 0;
     const matureInSec = matureBegin > nowSec ? matureBegin - nowSec : 0;
     const statusFlags = getPlantStatusFlags(plant, currentPhase, nowSec);
+    const farmingFlags = getPlantStatusFlags(plant, currentPhase, nowSec, { ownGid: options.ownGid, ignoreOwnEffects: true });
     let status = 'growing';
     if (phaseVal === PlantPhase.MATURE) status = friendMode ? (plant.stealable ? 'stealable' : 'harvested') : 'harvestable';
     else if (phaseVal === PlantPhase.DEAD) status = 'dead';
@@ -406,6 +408,9 @@ function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: 
         plantName,
         seedId,
         seedImage: seedId > 0 ? getSeedImageBySeedId(seedId) : '',
+        // 作物当前阶段的官方贴图（plant_images/Crop_*）：变异形态查不到时回退到原作物。
+        plantImage: getPlantPhaseImage(displayPlantId, toNum(currentPhase.image_phase) || phaseVal)
+            || getPlantPhaseImage(plantId, toNum(currentPhase.image_phase) || phaseVal),
         phaseName: currentPhase.phaseName || PHASE_NAMES[phaseVal] || '',
         currentSeason,
         totalSeason,
@@ -416,6 +421,8 @@ function buildLandDetail(land: any, options: { friendMode?: boolean; landsMap?: 
         needWater: statusFlags.needWater,
         needWeed: statusFlags.needWeed,
         needBug: statusFlags.needBug,
+        canTend: phaseVal !== PlantPhase.MATURE && phaseVal !== PlantPhase.DEAD
+            && (farmingFlags.needWater || farmingFlags.needWeed || farmingFlags.needBug),
         stealable: !!plant.stealable,
         plantSize,
         rarity: toNum(plant?.rarity ?? plant?.rare_level ?? plant?.rarity_level),
@@ -811,41 +818,10 @@ function analyzeLands(lands: any[], debug?: boolean, ownGid?: number): {
             continue;
         }
 
-        const dryNum = toNum(plant.dry_num);
-        const dryTime = toTimeSec(currentPhase.dry_time);
-        if (dryNum > 0 || (dryTime > 0 && dryTime <= nowSec)) {
-            result.needWater.push(id);
-        }
-
-        const weedsTime = toTimeSec(currentPhase.weeds_time);
-        let hasWeeds = weedsTime > 0 && weedsTime <= nowSec;
-        if (!hasWeeds && plant.weed_owners && plant.weed_owners.length > 0) {
-            // 如果指定了 ownGid，检查是否只有自己放的草
-            if (ownGid) {
-                const isOwnWeeds = plant.weed_owners.every((id: any) => toNum(id) === ownGid);
-                hasWeeds = !isOwnWeeds; // 只有自己放的草 → 不需要除
-            } else {
-                hasWeeds = true;
-            }
-        }
-        if (hasWeeds) {
-            result.needWeed.push(id);
-        }
-
-        const insectTime = toTimeSec(currentPhase.insect_time);
-        let hasBugs = insectTime > 0 && insectTime <= nowSec;
-        if (!hasBugs && plant.insect_owners && plant.insect_owners.length > 0) {
-            // 如果指定了 ownGid，检查是否只有自己放的虫
-            if (ownGid) {
-                const isOwnBugs = plant.insect_owners.every((id: any) => toNum(id) === ownGid);
-                hasBugs = !isOwnBugs; // 只有自己放的虫 → 不需要除
-            } else {
-                hasBugs = true;
-            }
-        }
-        if (hasBugs) {
-            result.needBug.push(id);
-        }
+        const flags = getPlantStatusFlags(plant, currentPhase, nowSec, { ownGid, ignoreOwnEffects: true });
+        if (flags.needWater) result.needWater.push(id);
+        if (flags.needWeed) result.needWeed.push(id);
+        if (flags.needBug) result.needBug.push(id);
 
         result.growing.push(id);
     }

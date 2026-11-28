@@ -187,8 +187,8 @@ function submitCollect() {
     emit('collect', selectedFriendGid.value)
 }
 
-function openInteractionItem(path: string, itemId: string) {
-  void router.push({ path, query: { interactionItem: itemId } })
+function openInteractionItem(name: 'farm' | 'friends', itemId: string) {
+  void router.push({ name, query: { interactionItem: itemId } })
 }
 
 // 好友列表重载后，选中的好友已经不在列表里就清空选择。
@@ -322,22 +322,22 @@ watch(friendList, (friends) => {
         <span>主动道具按目标使用，闪电感应为被动加成</span>
       </header>
       <div class="weather-items">
-        <button type="button" class="weather-item" @click="openInteractionItem('/farm', '5003')">
+        <button type="button" class="weather-item" @click="openInteractionItem('farm', '5003')">
           <img :src="activity.inventory.lightningMutationBottle.image" alt="">
           <span><strong>闪电变异瓶</strong><small>我的未成熟 1×1 作物 · 库存 {{ activity.inventory.known ? activity.inventory.lightningMutationBottle.count : '--' }}</small></span>
           <em>去我的农场</em>
         </button>
-        <button type="button" class="weather-item" @click="openInteractionItem('/friends', '5004')">
+        <button type="button" class="weather-item" @click="openInteractionItem('friends', '5004')">
           <img :src="activity.inventory.lightningAttractBottle.image" alt="">
           <span><strong>霹雳引雷瓶</strong><small>好友作物变雷击木，售价 ×1.5 · 库存 {{ activity.inventory.known ? activity.inventory.lightningAttractBottle.count : '--' }}</small></span>
           <em>去好友</em>
         </button>
-        <button type="button" class="weather-item" @click="openInteractionItem('/friends', '5005')">
+        <button type="button" class="weather-item" @click="openInteractionItem('friends', '5005')">
           <img :src="activity.inventory.frogBottle.image" alt="">
           <span><strong>青蛙使坏瓶</strong><small>好友农场整体放青蛙，获得 30 经验 · 库存 {{ activity.inventory.known ? activity.inventory.frogBottle.count : '--' }}</small></span>
           <em>去好友</em>
         </button>
-        <button type="button" class="weather-item" @click="openInteractionItem('/friends', '5006')">
+        <button type="button" class="weather-item" @click="openInteractionItem('friends', '5006')">
           <img :src="activity.inventory.darkCloudBottle.image" alt="">
           <span><strong>乌云使坏瓶</strong><small>好友作物放乌云，获得 30 经验 · 库存 {{ activity.inventory.known ? activity.inventory.darkCloudBottle.count : '--' }}</small></span>
           <em>去好友</em>

@@ -20,17 +20,186 @@ const {
     resolveAccId,
 } = require('./middleware');
 
+/** 账号列表对外投影：只下发「能否免扫码续期」的判定结果与续期账本，不下发凭证明文。 */
+function toPublicAccountsPayload(data: any, canPreflight: (a: any) => boolean, stats: Record<string, any>, canRecover: (a: any) => boolean): any {
+    const PRIVATE_CREDENTIAL_KEYS = ['refreshtoken', 'accesstoken', 'loginBuffer'];
+    const emptyPublicStats = () => ({ date: '', lastSuccessAt: 0, lastFailureAt: 0, successesToday: 0, failuresToday: 0 });
+    const accounts = Array.isArray(data && data.accounts) ? data.accounts : [];
+    return {
+        ...(data || {}),
+        accounts: accounts.map((account: any) => {
+            const safe: any = { ...(account || {}) };
+            for (const key of PRIVATE_CREDENTIAL_KEYS) delete safe[key];
+            safe.wxPreflightSupported = typeof canPreflight === 'function' ? !!canPreflight(account) : false;
+            // QQ 账号不走微信续期机制，不下发这个字段，避免面板误渲染。
+            if (String(safe.platform || '') === 'wx') {
+                // 「能不能滚 token」和「掉线后能不能免扫码自愈」不是同一件事：只有
+                // loginBuffer 的账号滚不了 token（wxPreflightSupported=false），但换 Code
+                // 完全没问题，掉线重登照样会成功并写进自动续期账本。两个标记分开下发，
+                // 面板才不会把「有账本但滚不了 token」的账号整段隐藏。
+                safe.wxCanRecover = typeof canRecover === 'function' ? !!canRecover(account) : false;
+                const recorded = stats && stats[String(safe.id ?? '')];
+                safe.wxPreflightStats = recorded && typeof recorded === 'object'
+                    ? { ...emptyPublicStats(), ...recorded }
+                    : emptyPublicStats();
+            }
+            return safe;
+        }),
+    };
+}
+
+/** 账号 Code 自动监听：聚合微信凭证到期与 QQ 掉线日志，给出每账号的补 Code 状态。 */
+function buildProviderCodeHealth(ctx: AdminContext): any {
+    const { buildCodeHealthSnapshot } = require('../../services/code-watch');
+    const accounts = store.getAccounts().accounts || [];
+    const rawLogs = ctx.provider.getAccountLogs ? ctx.provider.getAccountLogs(200) : [];
+    return buildCodeHealthSnapshot(accounts, {
+        accountLogs: Array.isArray(rawLogs) ? rawLogs : [],
+        isAccountRunning: (id: string) => ctx.provider.getAccountRuntime?.(id)?.online
+            ?? !!ctx.provider.isAccountRunning?.(id),
+    });
+}
+
 function mountAccountRoutes(app: Application, ctx: AdminContext): void {
 
     // API: 账号管理
     app.get('/api/accounts', (req: Request, res: Response) => {
         try {
             const data = ctx.provider.getAccounts();
-            res.json({ ok: true, data });
+            // 只把「能不能免扫码恢复」的判定结果发给浏览器，不下发长效凭证明文。
+            // 两个口径都要发：wxPreflightSupported = 能滚 token（wxid + refreshtoken），
+            // wxCanRecover = 掉线后能免扫码换 Code（再加上只有 loginBuffer 的情况），
+            // 后者与 wx-keepalive 的 canRecoverAccount 完全同一个函数。
+            // 同时附带自动续期账本快照（仅时间戳与次数），供卡片显示无人值守结果。
+            const { hasWxCredential } = require('../../services/wx-credential');
+            const { canRecoverAccount } = require('../../services/wx-keepalive');
+            const { getPreflightStatsSnapshot } = require('../../services/preflight-stats');
+            res.json({
+                ok: true,
+                data: toPublicAccountsPayload(data, hasWxCredential, getPreflightStatsSnapshot(), canRecoverAccount),
+            });
         } catch (e: any) {
             handleApiError(res, e);
         }
     });
+
+    // API: Code 自动监听快照（账号管理页 10 秒轮询；路由必须在 :id 之前注册）
+    app.get('/api/accounts/code-health', (_req: Request, res: Response) => {
+        try {
+            res.json({ ok: true, data: buildProviderCodeHealth(ctx) });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 手动续期（全链路：滚 token -> 换 loginBuffer -> 换游戏 Code）
+    app.post('/api/accounts/:id/renew', async (req: Request, res: Response) => {
+        try {
+            const { refreshAndMaybeRestart } = require('../../services/wx-keepalive');
+            const accountId = resolveAccId(ctx, req.params.id) || String(req.params.id || '');
+            const ok = await refreshAndMaybeRestart(accountId, 'manual');
+            res.json({ ok, data: { accountId, renewed: !!ok } });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 刷新 Code（只换 Code，不滚 token 不重启连接）
+    app.post('/api/accounts/:id/refresh-code', async (req: Request, res: Response) => {
+        try {
+            const { ensureFreshGameCode } = require('../../services/wx-credential');
+            const accountId = resolveAccId(ctx, req.params.id) || String(req.params.id || '');
+            const result = await ensureFreshGameCode(accountId);
+            res.json({ ok: !!result, data: result });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 自动补 Code（微信免扫码换码 / QQ 尽力重签），失败则引导重新扫码或手填 Code
+    app.post('/api/accounts/:id/auto-fix-code', async (req: Request, res: Response) => {
+        try {
+            const { autoFixAccountCode } = require('../../services/code-watch');
+            const { ensureFreshGameCode } = require('../../services/wx-credential');
+            const { tryRefreshQqGameCode } = require('../../services/qq-credential');
+            const accountId = resolveAccId(ctx, req.params.id) || String(req.params.id || '');
+            const accounts = ctx.provider.getAccounts().accounts || [];
+            const health = buildProviderCodeHealth(ctx);
+            const target = (health.items || []).find((entry: any) => String(entry.accountId) === accountId);
+            const result = await autoFixAccountCode(accountId, {
+                getAccount: (id: string) => accounts.find((account: any) => String(account.id) === id) || null,
+                latestLogAction: String(target && target.latestLogAction || ''),
+                ensureFreshGameCode,
+                tryRefreshQqGameCode,
+                isAccountRunning: (id: string) => !!(ctx.provider.isAccountRunning && ctx.provider.isAccountRunning(id)),
+                restartAccount: (id: string) => ctx.provider.restartAccount(id),
+                addAccountLog: (...args: any[]) => {
+                    if (ctx.provider.addAccountLog) ctx.provider.addAccountLog(...args);
+                },
+            });
+            res.json({ ok: result.ok, ...(result.ok ? {} : { error: result.error }), data: result });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    });
+
+    // API: 续期微信授权（批量）。返回每个账号的结果，前端据此提示成功/失败数量。
+    // 与启动前换码一致：优先用长效 loginBuffer 直接换 Code，只有失效时才滚动
+    // refreshtoken，避免每次点按钮都消耗一次性滚动凭证导致失败。
+    async function refreshWxCredentials(req: Request, res: Response): Promise<any> {
+        try {
+            const { hasRenewableCredential, ensureFreshGameCode } = require('../../services/wx-credential');
+            const accounts = (ctx.provider.getAccounts().accounts || []);
+            const wxAccounts = accounts.filter((account: any) => String(account.platform || '') === 'wx');
+            const targetAccounts = wxAccounts.filter((account: any) => hasRenewableCredential(account));
+            if (targetAccounts.length === 0) {
+                return res.json({
+                    ok: false,
+                    error: wxAccounts.length === 0 ? '当前没有微信账号' : '没有可续期的微信账号，请重新扫码登录',
+                    data: { total: 0, success: 0, failed: 0, skipped: wxAccounts.length },
+                });
+            }
+
+            const results: any[] = [];
+            for (const account of targetAccounts) {
+                const result = await ensureFreshGameCode(account.id);
+                results.push({
+                    accountId: String(account.id),
+                    name: result.accountName,
+                    ok: result.ok,
+                    error: result.ok ? '' : (result.error || '续期失败'),
+                });
+            }
+
+            const success = results.filter(item => item.ok).length;
+            const failed = results.length - success;
+            if (ctx.provider.addAccountLog) {
+                const detail = results.map(item => `${item.name}${item.ok ? '✓' : '✗'}`).join('、');
+                ctx.provider.addAccountLog(
+                    failed === 0 ? 'refresh_wx_credentials' : 'refresh_wx_credentials_failed',
+                    `续期微信授权：成功 ${success} 个，失败 ${failed} 个（${detail}）`,
+                    '',
+                    '',
+                );
+            }
+            res.json({
+                ok: failed === 0,
+                ...(failed > 0 ? { error: `${failed} 个账号续期失败` } : {}),
+                data: {
+                    total: results.length,
+                    success,
+                    failed,
+                    skipped: wxAccounts.length - targetAccounts.length,
+                    results,
+                },
+            });
+        } catch (e: any) {
+            handleApiError(res, e);
+        }
+    }
+
+    app.post('/api/accounts/refresh-wx-credentials', refreshWxCredentials);
+    app.post('/api/accounts/refresh-wx-codes', refreshWxCredentials);
 
     // API: 更新账号备注（兼容旧接口）
     app.post('/api/account/remark', (req: Request, res: Response) => {
@@ -97,14 +266,23 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
 
             // 只有携带尚未消费的待绑定扫码会话时才能写入凭证。
             let boundWxInfo: any = null;
-            if (wxSessionId && payload.wxid) {
-                boundWxInfo = wxLoginAdapter.peekPendingWxInfo(wxSessionId, String(payload.wxid));
+            if (wxSessionId) {
+                if (isUpdate && !oldAccount) {
+                    return res.status(404).json({ ok: false, error: '待重新登录的账号不存在' });
+                }
+                boundWxInfo = wxLoginAdapter.peekPendingWxInfo(wxSessionId, String(payload.wxid || ''), oldAccount?.id);
                 if (!boundWxInfo) {
-                    return res.status(400).json({ ok: false, error: '扫码会话已过期，请重新扫码后保存' });
+                    return res.status(400).json({ ok: false, error: '扫码会话已失效或与当前账号不匹配，请重新扫码后保存' });
                 }
                 payload.loginBuffer = boundWxInfo.loginBuffer;
                 payload.refreshtoken = boundWxInfo.refreshtoken;
                 payload.accesstoken = boundWxInfo.accesstoken;
+                payload.expires_in = boundWxInfo.expiresIn ?? 0;
+                payload.expires_at = boundWxInfo.expiresAt ?? 0;
+                payload.wxCredentialRefreshedAt = Date.now();
+                payload.wxCredentialLastAttemptAt = payload.wxCredentialRefreshedAt;
+                payload.wxCredentialRefreshError = '';
+                payload.wxCredentialNeedsRescan = false;
             } else if (isUpdate && payload.wxid !== undefined && String(oldAccount?.wxid || '') !== String(payload.wxid || '')) {
                 // 换绑微信号却没带新会话时，必须清掉旧凭证，否则会用上一个微信号的登录凭据操作该账号。
                 payload.loginBuffer = '';
@@ -123,9 +301,26 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 }
             }
 
-            const data = addOrUpdateAccount(payload);
-            if (boundWxInfo) {
-                wxLoginAdapter.consumePendingWxInfo(wxSessionId, String(payload.wxid || ''));
+            function persistAccount() {
+                const data = addOrUpdateAccount(payload);
+                if (boundWxInfo) {
+                    wxLoginAdapter.consumePendingWxInfo(wxSessionId, boundWxInfo.wxid, oldAccount?.id);
+                }
+                return data;
+            }
+            let data;
+            if (boundWxInfo && oldAccount) {
+                const { withAccountCredentialLock } = require('../../services/wx-credential');
+                data = await withAccountCredentialLock(oldAccount.id, () => {
+                    const exists = (store.getAccounts().accounts || []).some((a: any) => a.id === oldAccount.id);
+                    const pending = wxLoginAdapter.peekPendingWxInfo(wxSessionId, boundWxInfo.wxid, oldAccount.id);
+                    return exists && pending ? persistAccount() : null;
+                });
+                if (!data) {
+                    return res.status(400).json({ ok: false, error: '账号或扫码会话已失效，请刷新后重新扫码' });
+                }
+            } else {
+                data = persistAccount();
             }
             if (ctx.provider.addAccountLog) {
                 const accountId = isUpdate ? String(payload.id) : String((data.accounts.at(-1) || {}).id || '');
@@ -150,8 +345,8 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                         }
                     });
                 }
-            } else if (isRemarkRelogin) {
-                // Adding with an existing remark is a relogin operation, including for stopped accounts.
+            } else if (isRemarkRelogin || boundWxInfo) {
+                // 扫码重登也适用于已停止的账号，编辑时用账号 ID 定向更新。
                 await ctx.provider.restartAccount(payload.id);
             } else if (wasRunning && !onlyRemarkChanged) {
                 // 如果是更新，且之前在运行，且不是仅修改备注，则重启
@@ -169,6 +364,12 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
 
             const before = ctx.provider.getAccounts();
             const target = findAccountByRef(before.accounts || [], req.params.id);
+            // 账号要被删掉，任何一条「等待重登」的定时器都必须先撤掉，
+            // 否则到点它会用一个已经不存在的账号去换 Code 并把进程拉起来。
+            try {
+                const { cancelPendingRelogin } = require('../../services/wx-keepalive');
+                cancelPendingRelogin(resolvedId);
+            } catch { /* 保活模块不可用时不影响删除 */ }
             await ctx.provider.stopAccount(resolvedId);
             // 先拆调度再删账号：一旦记录没了，就再也没人能根据 id 找到这个账号的任务了。
             if (ctx.provider && typeof ctx.provider.unscheduleAutoCodeRefresh === 'function') {
@@ -383,8 +584,9 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const token = String(entry.token || cfg.token || '').trim();
             const wxPusherUid = String(entry.wxPusherUid || cfg.wxPusherUid || '').trim();
             // 与真实下线推送保持一致：标题取账号备注，不再单独配置。
-            const accountName = String((ctx.provider.getAccounts().accounts || [])
-                .find((a: any) => String(a?.id) === String(accountId))?.name || '').trim();
+            const account = (ctx.provider.getAccounts().accounts || []).find((a: any) => String(a?.id) === String(accountId));
+            const accountName = String(account?.name || '').trim();
+            const accountNick = String(account?.nick || '').trim() || accountName;
             const titleBase = String(cfg.title || '').trim() || accountName || '农场下线';
             const msgBase = String(cfg.msg || '').trim();
 
@@ -406,25 +608,24 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
 
             const now = new Date();
             const ts = now.toISOString().replace('T', ' ').slice(0, 19);
-            const { sendPushooMessage, sendWxPusherMessage, sendWxPusherWechatMessage } = require('../../services/push');
+            const { sendNotification } = require('../../services/push');
             const notifications = [
                 { type: 'offline', label: '账号下线', content: msgBase },
                 { type: 'mysteryArrival', label: '神秘商店到访', content: String(cfg.mysteryMessages?.mysteryArrival || '').trim() },
                 { type: 'mysteryPurchase', label: '神秘商店购买', content: String(cfg.mysteryMessages?.mysteryPurchase || '').trim() },
+                { type: 'farmActivity', label: '农牧场动态', content: '' },
             ];
             const results = [];
             for (const notification of notifications) {
                 try {
                     const payload = {
                         channel, endpoint, token, secret, wxPusherUid,
-                        title: [`${titleBase}（${notification.label}测试）`, notification.content].filter(Boolean).join(' '),
+                        title: notification.type === 'farmActivity'
+                            ? accountNick || notification.label
+                            : [`${titleBase}（${notification.label}测试）`, notification.content].filter(Boolean).join(' '),
                         content: `这是一条${notification.label}测试消息。\n时间: ${ts}`,
                     };
-                    const ret = channel === 'wxpusher'
-                        ? await sendWxPusherMessage(payload)
-                        : channel === 'wxpusher_wechat'
-                            ? await sendWxPusherWechatMessage(payload)
-                            : await sendPushooMessage(payload);
+                    const ret = await sendNotification(payload);
                     results.push({
                         type: notification.type,
                         label: notification.label,
@@ -439,11 +640,11 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             if (failures.length) {
                 return res.status(400).json({
                     ok: false,
-                    error: `测试完成，${results.length - failures.length}/3 条成功；${failures.map(result => `${result.label}：${result.error}`).join('；')}`,
+                    error: `测试完成，${results.length - failures.length}/${results.length} 条成功；${failures.map(result => `${result.label}：${result.error}`).join('；')}`,
                     data: results,
                 });
             }
-            return res.json({ ok: true, data: results, message: '三类测试通知均发送成功' });
+            return res.json({ ok: true, data: results, message: '全部测试通知已发送' });
         } catch (e: any) {
             return handleApiError(res, e);
         }
@@ -472,6 +673,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             const bagSeedMultiLandReservationEnabled = id && (typeof store.getBagSeedMultiLandReservationEnabled === 'function') ? store.getBagSeedMultiLandReservationEnabled(id) : false;
             const bagSeedLandTypes = id && (typeof store.getBagSeedLandTypes === 'function') ? store.getBagSeedLandTypes(id) : {};
             const bagSeedFallbackStrategy = id && (typeof store.getBagSeedFallbackStrategy === 'function') ? store.getBagSeedFallbackStrategy(id) : 'level';
+            const rankedSeedFallbackStrategy = id ? store.getRankedSeedFallbackStrategy(id) : '';
             const autoAcceptFriendMinLevel = id && (typeof store.getAutoAcceptFriendMinLevel === 'function') ? store.getAutoAcceptFriendMinLevel(id) : 0;
             const autoAcceptRequireOwnLevel = id && (typeof store.getAutoAcceptRequireOwnLevel === 'function') ? store.getAutoAcceptRequireOwnLevel(id) : false;
             const ui = store.getUI();
@@ -479,13 +681,12 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
                 ? store.getOfflineReminder(id)
                 : (store.getOfflineReminderDefault ? store.getOfflineReminderDefault() : null)
                     || { channel: 'wxpusher', endpoint: '', token: '', secret: '', wxPusherUid: '', channelCredentials: {}, title: '', msg: '农场下线' };
-            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, fertilizerBuyNormalCheckIntervalMinutes, bagSeedPriority, bagSeedMultiLandReservationEnabled, bagSeedLandTypes, bagSeedFallbackStrategy, autoAcceptFriendMinLevel, autoAcceptRequireOwnLevel, ui, offlineReminder } });
+            res.json({ ok: true, data: { intervals, strategy, preferredSeed, friendQuietHours, automation, stealDelaySeconds, plantDelaySeconds, fertilizerBuyOrganicCount, fertilizerBuyOrganicThresholdHours, fertilizerBuyNormalCount, fertilizerBuyNormalThresholdHours, fertilizerBuyCheckIntervalMinutes, fertilizerBuyNormalCheckIntervalMinutes, bagSeedPriority, bagSeedMultiLandReservationEnabled, bagSeedLandTypes, bagSeedFallbackStrategy, rankedSeedFallbackStrategy, autoAcceptFriendMinLevel, autoAcceptRequireOwnLevel, ui, offlineReminder } });
         } catch (e: any) {
             handleApiError(res, e);
         }
     });
 
-    // API: 获取默认配置
     app.get('/api/settings/default', (_req: Request, res: Response) => {
         try {
             const defaultConfig = store.getDefaultAccountConfig ? store.getDefaultAccountConfig() : null;
@@ -646,9 +847,17 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
 
     app.post('/api/settings/system-config', (req: Request, res: Response) => {
         try {
-            const { serverUrl, clientVersion, wxClientVersion, platform, os, timeZone, deviceInfo } = req.body || {};
-            const saved = store.setSystemConfig({ serverUrl, clientVersion, wxClientVersion, platform, os, timeZone, deviceInfo });
+            const { serverUrl, clientVersion, wxClientVersion, platform, os, timeZone, deviceInfo, autoCodeRefresh, autoStartAccounts } = req.body || {};
+            const saved = store.setSystemConfig({ serverUrl, clientVersion, wxClientVersion, platform, os, timeZone, deviceInfo, autoCodeRefresh, autoStartAccounts });
             updateRuntimeConfig(saved);
+            // 掉线重登策略改了要让保活模块重新读一次配置并写进系统日志；
+            // ctx.provider 是 data-provider 的产物，没有这个方法，直接调保活模块。
+            if (autoCodeRefresh !== undefined) {
+                try {
+                    const { applyWxKeepAliveConfig } = require('../../services/wx-keepalive');
+                    applyWxKeepAliveConfig();
+                } catch { /* 保活模块不可用时不影响配置保存 */ }
+            }
             if (ctx.provider && typeof ctx.provider.broadcastConfig === 'function') {
                 ctx.provider.broadcastConfig('');
             }

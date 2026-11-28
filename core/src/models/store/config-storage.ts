@@ -82,12 +82,35 @@ function createConfigStorage(storeFile: string) {
         let json: string;
         try { json = JSON.stringify(document, null, 2); }
         catch (error: any) { throw storageError('保存', storeFile, error); }
-        if (json !== globalJson) {
+        if (json !== globalJson || !fs.existsSync(storeFile)) {
             try { writeTextFileAtomic(storeFile, json); }
             catch (error: any) { throw storageError('保存', storeFile, error); }
         }
         globalDocument = document;
         globalJson = json;
+    }
+
+    function restoreMissingFiles(id: string): void {
+        if (!split) return;
+        const formatFile = path.join(accountDir, FORMAT_FILE);
+        const formatMissing = !fs.existsSync(formatFile);
+        const globalMissing = !fs.existsSync(storeFile);
+
+        function restore(file: string, json: string): void {
+            if (fs.existsSync(file)) return;
+            try { writeTextFileAtomic(file, json); }
+            catch (error: any) { throw storageError('保存', file, error); }
+        }
+
+        // Only restore documents this process has already loaded or saved.
+        // If the split layout lost its marker, publish it after the account files.
+        const accounts = formatMissing || globalMissing ? accountJson.keys() : [id];
+        for (const accountId of accounts) {
+            const json = accountJson.get(accountId);
+            if (json !== undefined) restore(path.join(accountDir, accountFilename(accountId)), json);
+        }
+        if (globalMissing && globalJson !== null) restore(storeFile, globalJson);
+        if (formatMissing) restore(formatFile, JSON.stringify({ version: FORMAT_VERSION }, null, 2));
     }
 
     function publishSplit(configs: Record<string, any>, backup: boolean): Record<string, any> {
@@ -151,7 +174,9 @@ function createConfigStorage(storeFile: string) {
             file = path.join(accountDir, accountFilename(id));
             assertObject(config, file);
             const json = JSON.stringify(config, null, 2);
-            if (!split) {
+            if (split) {
+                restoreMissingFiles(id);
+            } else {
                 publishSplit({ [id]: config }, false);
             }
             if (globalDocument.accountConfigStorageVersion !== FORMAT_VERSION) saveGlobal(globalDocument);
@@ -172,7 +197,7 @@ function createConfigStorage(storeFile: string) {
         accountJson.delete(id);
     }
 
-    return { load, saveGlobal, saveAccount, removeAccount };
+    return { load, saveGlobal, saveAccount, removeAccount, restoreMissingFiles };
 }
 
 module.exports = { createConfigStorage };

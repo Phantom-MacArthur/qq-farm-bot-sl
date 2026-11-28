@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import RanchCareerPanel from '@/components/ranch/RanchCareerPanel.vue'
 import { NButton } from 'naive-ui/es/button'
 import { storeToRefs } from 'pinia'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
@@ -74,7 +73,7 @@ function toggleAnimal(animal: any) {
 }
 watch(currentAccountId, () => { releaseConfirm.value = false; selecting.value = false; selectedIds.value = [] })
 async function runToolbarAction(action: ToolbarAction) {
-  if (disabled.value || selectionBusy.value || (selecting.value && !selectedIds.value.length))
+  if (operationHint(action))
     return
   const accountId = String(currentAccountId.value || '')
   if (!accountId)
@@ -265,6 +264,60 @@ watch([deliveryAt, disabled], ([deadline, blocked], _, onCleanup) => {
   onCleanup(() => clearTimeout(timer))
 }, { immediate: true })
 
+const availabilityHint = computed(() => {
+  if (!currentAccountId.value)
+    return '请先选择账号'
+  if (loading.value)
+    return '正在读取牧场'
+  if (selectionBusy.value || disabled.value)
+    return '请先完成当前牧场操作'
+  if (!state.value)
+    return '牧场数据尚未就绪'
+  if (!state.value.unlocked)
+    return '牧场尚未开放'
+})
+
+function operationHint(action: ToolbarAction) {
+  if (availabilityHint.value || action === 'all')
+    return availabilityHint.value
+  const selected = selecting.value ? new Set(selectedIds.value) : null
+  if (selected && !selected.size)
+    return selectingFacilities.value ? '请勾选要操作的设施' : '请勾选要操作的动物'
+
+  const targets = animals.value.filter(({ animal }) => !selected || selected.has(animalKey(animal)))
+  switch (action) {
+    case 'feed': {
+      const feedable = targets.filter(({ animal }) => animal.canFeed)
+      if (!feedable.length)
+        return '当前没有可喂养的动物'
+      if (feedable.every(({ animal }) => animal.limitedCanUsed))
+        return '可喂养的动物本轮已用普通罐头'
+      if (!buckets.value.some(bucket => bucket.id === 7003 && Number(bucket.seconds) > 0))
+        return '普通罐头桶可用时长不足'
+      break
+    }
+    case 'harvest':
+      if (!targets.some(({ animal }) => animal.canHarvest || animal.canProduce) && (selected || !shelves.value.length))
+        return selected ? '所选动物暂无可收获或可生产的产物' : '当前没有可收获的产物或可生产的动物'
+      break
+    case 'clean':
+      if (selected ? !eligibleFacilities.value.some(facility => selected.has(String(facility.id))) : !hazards.value)
+        return '栏舍暂无可清理的污物'
+      break
+    case 'upgrade':
+      if (!state.value?.facilities?.some((facility: any) => [6, 7].includes(Number(facility.moduleType))
+        && facility.active && facility.next?.available && (!selected || selected.has(String(facility.id)))))
+        return '当前没有可升级的窝或棚'
+      break
+    case 'release':
+      if (!targets.some(({ animal }) => animal.canRelease))
+        return '所选动物暂不可放生'
+      break
+  }
+}
+
+const visibleActions = computed(() => toolbarActions.map(action => ({ ...action, hint: operationHint(action.key) })))
+const selectionHint = computed(() => selecting.value ? operationHint(selectionAction.value) : undefined)
 const summary = computed(() => [
   { key: 'harvest', label: '可收获', icon: 'i-carbon-wheat', value: animals.value.filter(({ animal }) => animal.canHarvest).length },
   { key: 'produce', label: '可生产', icon: 'i-carbon-circle-dash', value: animals.value.filter(({ animal }) => animal.canProduce).length },
@@ -303,9 +356,14 @@ function target(animal: any) {
     <div class="ranch-animal-panel page-card-surface farm-card rounded-2xl panel-scroll-layout margin-shell"><span class="!m-0 margin-content">
         <div class="ranch-head panel-titlebar panel-titlebar--flush margin-shell"><span class="margin-content">
           <div class="ranch-actions">
-            <NButton v-for="action in (selecting ? [] : toolbarActions)" :key="action.key" :type="action.key === 'all' ? 'primary' : 'default'" :disabled="disabled || selectionBusy" @click="runToolbarAction(action.key)">
-              <span :class="action.icon" />{{ action.label }}
-            </NButton>
+            <template v-if="!selecting">
+              <span v-for="action in visibleActions" :key="action.key" class="ranch-action-slot"
+                :title="action.hint" :tabindex="action.hint ? 0 : undefined" :aria-label="action.hint ? `${action.label}：${action.hint}` : undefined">
+                <NButton :type="action.key === 'all' ? 'primary' : 'default'" :disabled="!!action.hint" @click="runToolbarAction(action.key)">
+                  <span :class="action.icon" />{{ action.label }}
+                </NButton>
+              </span>
+            </template>
             <NButton class="panel-multiselect-toggle" size="medium" :type="selecting ? 'default' : 'primary'" :secondary="!selecting" :disabled="selectionBusy || ranch.busy" @click="toggleSelection">
               <span class="i-carbon-checkbox-checked" />
               <span class="panel-multiselect-toggle__label">{{ selecting ? '取消' : '多选' }}</span>
@@ -316,7 +374,6 @@ function target(animal: any) {
 
         <div class="panel-scroll-body">
         <RanchGate @retry="refresh">
-          <RanchCareerPanel v-if="state?.career" :career="state.career" />
         <div class="ranch-summary">
           <div class="ranch-summary__states">
             <span v-for="item in summary" :key="item.key" class="ranch-state" :class="`ranch-state--${item.key}`">
@@ -346,10 +403,11 @@ function target(animal: any) {
                   <button type="button" :disabled="selectionBusy || disabled" @click="selectedIds = []">清空</button>
                 </span>
               </div>
-              <NButton type="primary" :disabled="disabled || selectionBusy || !selectedIds.length" @click="selectionAction === 'release' ? releaseConfirm = true : runToolbarAction(selectionAction)">
+              <NButton type="primary" :disabled="!!selectionHint" :title="selectionHint" @click="selectionAction === 'release' ? releaseConfirm = true : runToolbarAction(selectionAction)">
                 {{ selectionOptions.find(item => item.key === selectionAction)?.label }}
               </NButton>
             </div>
+            <p v-if="selectionHint" class="text-xs text-[var(--ui-muted)]" role="status">{{ selectionHint }}</p>
           </div>
           <div v-if="selecting && selectingFacilities" class="ranch-facility-selection">
             <button v-for="facility in (state?.facilities || []).filter((f: any) => [6, 7].includes(Number(f.moduleType)))" :key="facility.id"
@@ -451,6 +509,7 @@ function target(animal: any) {
   scrollbar-width: none;
 }
 .ranch-actions :deep(.n-button) { flex: 0 0 auto; width: auto; }
+.ranch-action-slot { display: inline-flex; flex: 0 0 auto; }
 .ranch-actions::-webkit-scrollbar { display: none; }
 .ranch-actions :deep(.n-button__content) {
   gap: 4px;

@@ -20,6 +20,7 @@ export const RANCH_AUTOMATION_DEFAULTS = {
     ranch_grass_threshold_percent: 20,
     ranch_fill_cans: true,
     ranch_feed_normal: true,
+    // 默认仅在最长生长阶段使用普通罐头，避免把时长浪费在产出最短的阶段。
     ranch_feed_normal_stage: 'longest' as RanchFeedStage,
     ranch_feed_organic: true,
     ranch_feed_organic_stage: 'near_harvest' as RanchFeedStage,

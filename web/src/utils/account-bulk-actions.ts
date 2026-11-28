@@ -1,4 +1,5 @@
 import type { Account } from '@/stores/account'
+import { isAccountActive } from './account-runtime'
 
 export type AccountBatchKind = 'start' | 'stop' | 'cleanup'
 
@@ -22,14 +23,10 @@ const BATCH_VERBS: Record<AccountBatchKind, string> = {
 /**
  * running 表示 worker 进程是否存在，online 表示是否连上游戏。
  */
-function isStopped(account: Account) {
-  return account.running !== true
-}
-
 /**
  * 按动作挑选批量目标；传入 selectedIds 时只在选中范围内挑，
  * 因此多选里的“启动/停止/清理”与全局按钮共用同一套前置判断。
- * 启动包括已停止账号和仍在运行的断线账号；清理只允许已停止的账号。
+ * 启动包括已停止、断线和等待重登的账号；等待重登的账号也可通过停止取消重登。
  */
 export function pickAccountBatchTargets(
   accounts: Account[],
@@ -42,9 +39,13 @@ export function pickAccountBatchTargets(
     .filter((account) => {
       if (allowed && !allowed.has(String(account.id)))
         return false
+      if (account.runtimeState === 'stopping')
+        return false
+      const active = isAccountActive(account)
       if (kind === 'start')
-        return isStopped(account) || account.online === false
-      return kind === 'stop' ? !isStopped(account) : isStopped(account)
+        return !active || account.runtimeState === 'offline' || account.runtimeState === 'relogin_waiting'
+          || (!account.runtimeState && account.online === false)
+      return kind === 'stop' ? active : !active
     })
     .map(account => String(account.id))
 }
@@ -98,23 +99,28 @@ export function toAccountBatchOutcome(
 export async function runAccountBatch(
   ids: string[],
   runOne: (id: string) => Promise<AccountBatchOutcome>,
+  concurrency = 1,
 ): Promise<AccountBatchSummary> {
-  const summary: AccountBatchSummary = { succeeded: 0, failed: [] }
-  for (const id of Array.isArray(ids) ? ids : []) {
-    let outcome: AccountBatchOutcome
-    try {
-      outcome = await runOne(id)
+  const targets = Array.isArray(ids) ? ids : []
+  const outcomes: AccountBatchOutcome[] = []
+  let nextIndex = 0
+  async function runQueue() {
+    while (nextIndex < targets.length) {
+      const index = nextIndex++
+      try {
+        outcomes[index] = await runOne(targets[index]!)
+      }
+      catch (error: any) {
+        outcomes[index] = { ok: false, error: String(error?.message || error || '操作失败') }
+      }
     }
-    catch (error: any) {
-      outcome = { ok: false, error: String(error?.message || error || '操作失败') }
-    }
-    if (!outcome || outcome.ok !== true) {
-      summary.failed.push({ id, error: String(outcome?.error || '操作失败') })
-      continue
-    }
-    summary.succeeded += 1
   }
-  return summary
+  const lanes = Math.min(targets.length, Math.max(1, Math.floor(concurrency) || 1))
+  await Promise.all(Array.from({ length: lanes }, runQueue))
+  const failed = targets.flatMap((id, index) => outcomes[index]?.ok
+    ? []
+    : [{ id, error: String(outcomes[index]?.error || '操作失败') }])
+  return { succeeded: targets.length - failed.length, failed }
 }
 
 export function formatAccountBatchSummary(

@@ -34,7 +34,8 @@ function harness() {
         '../services/ace': { startAceRuntime() {}, stopAceRuntime() {}, getAceDiagnostics: () => ({}) },
         '../services/status': { updateStatusFromLogin() {} },
         './crypto-wasm': { bindUser() {}, getEncryptedInitInfo: () => '', getDiagnostics: () => ({}) },
-        './utils': { toLong: Number, toNum: Number, log() {}, logWarn() {}, syncServerTime() {} },
+        './utils': { toLong: Number, toNum: Number, log() {}, logWarn() {}, syncServerTime() {}, getServerClockSample: () => null,
+            getServerTimeSec: () => Math.floor(wall / 1000), formatDateKeyInTimeZone: realRequire('./utils').formatDateKeyInTimeZone },
     };
     const sandbox = {
         require: name => overrides[name] || realRequire(name), module: { exports: {} }, exports: {},
@@ -109,7 +110,7 @@ test('wall-clock jumps cannot disconnect a recently active connection or conceal
     const heartbeat = h.tasks.get('heartbeat_interval');
     h.advance(20000);
     h.jumpWall(86400000);
-    await heartbeat(); await heartbeat(); await heartbeat();
+    await heartbeat(); await heartbeat(); await heartbeat(); await heartbeat();
     assert.equal(disconnects.length, 0);
     assert.equal(h.api.snapshot().lastInboundAgeMs, 20000);
     assert.equal(h.api.snapshot().onlineAgeMs, 20000);
@@ -123,6 +124,52 @@ test('wall-clock jumps cannot disconnect a recently active connection or conceal
     assert.equal(h.sockets[0].terminated, true);
     assert.equal(h.sockets.length, 1); // No automatic replay of the one-time Code.
     assert.equal(h.tasks.size, 0);
+});
+
+test('pong cannot mask a stalled gateway, but recent request replies prevent disconnection', async () => {
+    await loadProto();
+    const h = harness();
+    const disconnects = [];
+    h.api.networkEvents.on('disconnected', event => disconnects.push(event));
+    h.api.connect('synthetic-code');
+    await h.api.login();
+    h.api.setSender(async () => { throw new Error('synthetic heartbeat timeout'); });
+    const socket = h.sockets[0];
+    const heartbeat = h.tasks.get('heartbeat_interval');
+    for (let miss = 0; miss < 4; miss++) {
+        h.advance(25000);
+        socket.emit('pong');
+        await heartbeat();
+    }
+    assert.equal(disconnects.length, 0);
+
+    h.api.holdReplies();
+    const request = h.api.request('gamepb.userpb.UserService', 'Synthetic', Buffer.alloc(0));
+    h.advance(20000);
+    socket.emit('message', types.GateMessage.encode({
+        meta: { message_type: 2, client_seq: 1 },
+        body: Buffer.alloc(0),
+    }).finish());
+    await request;
+
+    h.advance(5000);
+    socket.emit('pong');
+    await heartbeat();
+    assert.equal(disconnects.length, 0);
+    assert.equal(h.api.snapshot().lastGatewayReplyAgeMs, 5000);
+
+    h.advance(25000);
+    socket.emit('pong');
+    await heartbeat();
+    assert.equal(disconnects.length, 0);
+    h.advance(25000);
+    socket.emit('pong');
+    await heartbeat();
+    assert.equal(disconnects.length, 1);
+    assert.equal(disconnects[0].source, 'heartbeat_timeout');
+    assert.equal(disconnects[0].diagnostics.lastInboundAgeMs, 0);
+    assert.equal(disconnects[0].diagnostics.lastGatewayReplyAgeMs, 55000);
+    assert.equal(socket.terminated, true);
 });
 
 test('gateway requests distinguish login and disconnect from request timeout', async () => {
@@ -159,4 +206,38 @@ test('a failed handshake ends once and never reuses its Code', () => {
     assert.equal(disconnects[0].phase, 'connecting');
     assert.equal(h.api.getWs(), null);
     assert.equal(h.sockets.length, 1);
+});
+
+test('掉线诊断带 TCP 层字节计数，握手完成后打开内核 keepalive', async () => {
+    await loadProto();
+    const h = harness();
+    const keepAlive = [];
+    h.api.connect('synthetic-code');
+    h.sockets[0]._socket = {
+        bytesRead: 987654,
+        bytesWritten: 12345,
+        writableLength: 600,
+        remoteAddress: '101.35.200.1',
+        remotePort: 443,
+        setKeepAlive: (enabled, idleMs) => keepAlive.push([enabled, idleMs]),
+    };
+    h.sockets[0].emit('open');
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(keepAlive, [[true, 15000]]);
+    const tcp = h.api.snapshot().tcp;
+    assert.equal(tcp.bytesRead, 987654);
+    assert.equal(tcp.bytesWritten, 12345);
+    assert.equal(tcp.writableLength, 600);
+    assert.equal(tcp.remote, '101.35.200.1:443');
+    assert.equal(tcp.txQueue, undefined, '拿不到 localPort 时不该去读内核表，也不该编出队列数');
+    h.api.cleanup();
+});
+
+test('拿不到 net.Socket 时 TCP 快照降级为 null，不影响诊断', async () => {
+    await loadProto();
+    const h = harness();
+    h.api.connect('synthetic-code');
+    await h.api.login();
+    assert.equal(h.api.snapshot().tcp, null);
+    h.api.cleanup();
 });

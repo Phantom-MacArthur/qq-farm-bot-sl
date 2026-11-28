@@ -2,6 +2,7 @@
  * 通用工具函数
  */
 import type Long from 'long';
+import { performance } from 'node:perf_hooks';
 export {};
 
 const LongModule = require('long');
@@ -11,6 +12,7 @@ const coreLogger = createModuleLogger('core');
 
 // ============ 服务器时间状态 ============
 let serverTimeOffsetMs = 0;
+let serverClockSample: { ms: number; receivedAt: number } | undefined;
 const dateFormatters: Map<string, Intl.DateTimeFormat> = new Map();
 const timeFormatters: Map<string, Intl.DateTimeFormat> = new Map();
 
@@ -36,8 +38,17 @@ function serverTimeToLocalMs(timestampMs: number): number {
 }
 
 /** 同步服务器时间 */
-function syncServerTime(ms: number): void {
+function syncServerTime(ms: number, confirmed = true): void {
     serverTimeOffsetMs = ms ? ms - Date.now() : 0;
+    if (confirmed && Number.isFinite(ms) && ms >= 1e12 && ms <= 8.64e15 && ms !== serverClockSample?.ms) {
+        serverClockSample = { ms, receivedAt: performance.now() };
+    }
+}
+
+function getServerClockSample() {
+    if (!serverClockSample) return null;
+    const { ms, receivedAt } = serverClockSample;
+    return { ms, nowMs: ms + Math.max(0, performance.now() - receivedAt) };
 }
 
 function getDateFormatter(timeZone: string): Intl.DateTimeFormat {
@@ -215,7 +226,7 @@ function randomDelay(minMs: number, maxMs: number): Promise<void> {
 module.exports = {
     toLong, toNum,
     setLogHook,
-    getServerTimeSec, serverTimeToLocalMs, syncServerTime, getSystemDateKey, getSystemClockMinutes,
+    getServerTimeSec, serverTimeToLocalMs, syncServerTime, getServerClockSample, getSystemDateKey, getSystemClockMinutes,
     formatDateKeyInTimeZone, formatSystemDateTime24, toTimeSec,
     log, logWarn, sleep, randomDelay,
 };

@@ -19,6 +19,7 @@ module.exports = {
     getBagSeedMultiLandReservationEnabled: accountConfig.getBagSeedMultiLandReservationEnabled,
     getBagSeedLandTypes: accountConfig.getBagSeedLandTypes,
     getBagSeedFallbackStrategy: accountConfig.getBagSeedFallbackStrategy,
+    getRankedSeedFallbackStrategy: accountConfig.getRankedSeedFallbackStrategy,
     getIntervals: accountConfig.getIntervals,
     getFriendQuietHours: accountConfig.getFriendQuietHours,
     getKnownFriendGids: accountConfig.getKnownFriendGids,

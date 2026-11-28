@@ -1,6 +1,6 @@
 # QQ 农场多账号挂机 + Web 面板
 
-基于 Node.js 的 QQ 农场自动化工具，提供多账号挂机、农场与好友自动化、独立图鉴与藏品、活动中心、商城、数据分析和 Web 控制面板。当前项目版本为 `20261102`，QQ 与微信游戏协议版本均为 `1.16.1.6_20261028`，两端独立维护版本配置和 TSDK/WASM。
+基于 Node.js 的 QQ 农场自动化工具，提供多账号挂机、农场与好友自动化、独立图鉴与藏品、活动中心、商城、数据分析和 Web 控制面板。当前项目版本为 `20261117`，QQ 与微信游戏协议版本均为 `1.17.1.10_20261117`，两端独立维护版本配置和 TSDK/WASM。
 
 > [!IMPORTANT]
 > Web 面板默认端口为 `3007`，且**不再提供登录鉴权**：打开即进入面板。面板会直接操作本机游戏账号，因此请勿将管理端口直接暴露到公网。
@@ -65,6 +65,8 @@
 - 星砂商店：查看星砂余额和活动商品，执行兑换
 - 节令活动：查看当前节令并领取开放奖励
 - 鹊桥寄情：查看筑桥阶段、领取鹊桥奖励，并向好友赠送鹊羽香囊
+- 以薯换福：领取每日红薯种子、分享铺子、按好友收购价比价出售蜜薯、领取小铺提成并查看收购记录，兑换商店支持填写数量
+- 以薯换福自动任务：每日领种子、分享、自动领取提成，蜜薯成熟后按好友报价从高到低自动售卖（好友收满或停收自动换下一家），比价好友数与间隔可配置
 - 雨落成诗：查看雷雨剩余时间和闪电变异配置，兑换或使用天气瓶，并推进气象研究节点
 - 活动快照请求采用串行和重复请求合并，避免登录或切换账号时占满游戏网关请求队列
 - 运行时自动发现新上线但尚未登记玩法的活动 ID，并尝试从官方 CDN 还原活动封面（详情见 [docs/activity-update-cdn.md](docs/activity-update-cdn.md)）
@@ -77,7 +79,8 @@
 - PC 端使用固定侧栏，移动端使用顶部栏和底部导航，并针对常用操作完成响应式适配
 - 作物收益分析、策略预览、批量维护作物黑名单
 - 设置页统一管理游戏账号、自动化策略、运行环境和下线提醒
-- 基于 `pushoo` 的实例级事件推送，可配置通知渠道和离线自动清理时间
+- 「设置 → 推送通知」按账号选择一个推送渠道、配置通知类型和离线自动清理时间，并可保存通用默认配置
+- 源码部署可在「设置 → 系统设置 → 版本更新」检查、更新或回滚
 
 ## 技术栈
 
@@ -85,7 +88,7 @@
 | --- | --- |
 | 后端 | Node.js 20、Express 4、Socket.IO 4、TypeScript 5.9 |
 | 前端 | Vue 3.5、Naive UI 2、Vue Router 5、Pinia 3、Vite 7、UnoCSS 66 |
-| 工程 | pnpm 10.30.2、ESLint 9、Docker Compose |
+| 工程 | pnpm 12.21.0、ESLint 9、Docker Compose |
 | 协议 | WebSocket、Protocol Buffers、TSDK WASM |
 
 ## 快速开始
@@ -94,11 +97,18 @@
 
 | 运行方式 | 要求 |
 | --- | --- |
-| 源码运行 | Node.js 20.19+、pnpm 10+ |
+| 源码运行 | Node.js 20.19+、pnpm 12.21.0 |
 | Docker | Docker 20+、Docker Compose 2+、Node 20.19.6（镜像内置） |
 | 二进制发布版 | 无需安装 Node.js |
 
-推荐通过 Corepack 启用项目指定版本的 pnpm：
+在 Windows 上先运行 `pnpm --version`。如果 pnpm 缺失或无法运行，可通过 npm 安装项目指定的版本：
+
+```bash
+npm install --global pnpm@12.21.0
+pnpm --version
+```
+
+在 Linux 和 macOS 上，有 Corepack 时可用它启用项目指定版本的 pnpm：
 
 ```bash
 corepack enable
@@ -139,15 +149,28 @@ pnpm dev:core
 git clone https://github.com/liyangpengs/qq-farm-bot.git
 cd qq-farm-bot
 corepack enable
-bash start.sh
+bash ./start.sh
+
+# 查看状态与日志
 bash status.sh
+
+# 停止服务
+bash ./stop.sh
 ```
 
 首次启动会安装构建依赖并打包前端、后端和会话宿主。默认只显示当前步骤、进度和耗时。需要查看编译器的完整输出时，在命令后加 `--verbose` 或 `-v`。再次启动可复用现有发布包。如果从旧版单进程脚本迁移，请先在旧版本运行一次原有的 `bash stop.sh`，升级后启动服务并登录账号。从这次登录开始，会话由独立宿主管理。
 
-源码部署通过 `bash start.sh` 启动后，可以在「设置 → 系统设置 → 版本更新」检查当前分支，选择「仅拉取代码」或「拉取并更新」。只改页面时，只更新网页；只改服务端时，复用当前网页。两者都已是目标版本时直接结束。第一次从旧版升级时会先记录版本信息。构建期间可以继续使用面板。新版就绪后页面会在当前位置刷新，有未保存的设置时会先提示。
+在构建机的仓库根目录执行 `pnpm install --frozen-lockfile` 和 `pnpm run build`。发布时，将同一版本的 `core/client.js`、`core/dist/`、`web/dist/` 和 `packages/session-contract/dist/` 随源码一起提交。只改面板时可用 `pnpm run build:web` 更新前端产物。
+
+部署机拉取包含这些产物的提交后，首次启动用 `bash ./start.sh --prebuilt`，在线切换用 `bash ./update.sh all --skip-build`。这两种方式复用 Git 带来的构建产物，仍需要 Node.js、pnpm 和运行依赖。`packages/session-contract/dist/index.js` 是启动工具使用的基础组件，随源码提交后，首次启动也可以跳过它的编译。
+
+前端类型检查已与生产构建拆分，需要单独检查时执行 `pnpm typecheck:web`。
+
+源码部署通过 `bash start.sh` 启动后，能访问面板的人都可以在「设置 → 系统设置 → 版本更新」检查当前分支，选择「仅拉取代码」或「拉取并更新」，也可以回滚到已有备份。只改页面时，只更新网页；只改服务端时，复用当前网页。两者都已是目标版本时直接结束。第一次从旧版升级时会先记录版本信息。构建期间可以继续使用面板。新版就绪后页面会在当前位置刷新，有未保存的设置时会先提示。
 
 「历史版本与回滚」默认开启备份。关闭后，从下次更新起不再新增可回退版本，已有备份仍可回退或手动删除。QQ、微信客户端版本一致且后端支持当前会话宿主时，可以在线回滚。有配对记录的备份会一起恢复前端，旧备份可单独回退后端。批量清理会保留正在使用的版本和旧页面仍需加载的静态资源。
+
+在线更新与回退（宿主保持游戏连接，后端可接管原会话）：
 
 | 操作 | 命令 | 对在线账号的影响 |
 | --- | --- | --- |
@@ -197,7 +220,7 @@ Compose 分别运行 `session-host` 和 `qq-farm-bot`，通过 `qq-farm-runtime`
 
 Docker 数据保存在 `qq-farm-data` 和 `qq-farm-logs` 命名卷中。执行 `docker compose down` 不会删除这些卷；不要使用 `docker compose down -v`，除非确认要删除运行数据。
 
-Compose 使用根目录作为构建上下文，Dockerfile 位于 `core/Dockerfile`。镜像构建阶段固定使用 Node `20.19.6` 和 pnpm `10.30.2`，通过 BuildKit 缓存 pnpm store，并在相互独立的阶段构建 Web、Core 和生产依赖；仅修改一侧源码时可直接复用另一侧缓存。运行阶段只保留生产依赖、编译产物、协议定义、游戏配置和 TSDK WASM。容器内部固定监听 `3007`，根目录 `.env` 中的 `PORT` 只用于宿主机端口映射。
+Compose 使用根目录作为构建上下文，Dockerfile 位于 `core/Dockerfile`。镜像构建阶段默认使用 Node `20.19.6` 和 pnpm `12.21.0`，通过 BuildKit 缓存 pnpm store，并在相互独立的阶段构建 Web、Core 和生产依赖。仅修改一侧源码时可直接复用另一侧缓存。运行阶段只保留生产依赖、编译产物、协议定义、游戏配置和 TSDK WASM。容器内部固定监听 `3007`，根目录 `.env` 中的 `PORT` 只用于宿主机端口映射。
 
 依赖源默认使用 npm 官方源；网络受限时可以在根目录 `.env` 中覆盖构建参数后重新构建：
 
@@ -230,12 +253,14 @@ chmod +x ./qq-farm-bot
 1. 打开 Web 面板即可直接使用（面板不再要求登录）。
 2. 如需使用 QQ 扫码登录，先部署并启动 [qq-miniapp-auth](https://github.com/liyangpengs/qq-miniapp-auth) 服务，再在“设置 → 系统设置 → 登录设置”开启 QQ 扫码登录，并填写 NapCat 接口地址和接口签名。
 3. 在设置页添加游戏账号，可使用有效 Code、微信扫码或 QQ扫码登录。
-4. 为账号配置种植、自动化和好友策略，并按需设置实例级下线提醒。
+4. 为账号配置种植、自动化、好友策略和下线提醒。
 5. 启动账号，在概览页确认连接状态、农场数据和实时日志。
 
-Code 具有时效性；登录失败时应先重新获取 Code 或重新扫码。QQ 客户端被挤下线后，官方“重新登录”会签发新的 Code；可启动 QQFarmCodeHelper 的标准获取模式并开启自动同步，再点击官方“重新登录”，Helper 会更新匹配账号的 Code 并重新启动远程账号。协议监听模式只落盘抓包，永远不会自动上传 Code。
+微信扫码授权的日常续期只刷新令牌，游戏连接继续运行。开启微信掉线自动重登后，首次按设置的等待时间尝试。遇到可重试错误时每隔 5 分钟重试，直到连回、主动停止、关闭重登，或授权失效需要重新扫码。
 
-QQ 扫码登录依赖外部 [qq-miniapp-auth](https://github.com/liyangpengs/qq-miniapp-auth) 服务。登录设置中的 NapCat 接口地址需填写该服务的可访问地址，NapCat 接口签名需与其 `API_SIGNING_SECRET` 配置一致；两者会保存在本机数据目录中，由后端调用外部服务时读取。QQ 扫码登录默认关闭，开启前必须同时配置接口地址和签名。
+QQ Code 具有时效性。QQ 客户端被挤下线后，官方“重新登录”会签发新的 Code。可启动 QQFarmCodeHelper 的标准获取模式并开启自动同步，再点击官方“重新登录”，Helper 会更新匹配账号的 Code 并重新启动远程账号。协议监听模式只将抓包结果保存到本地。
+
+QQ 扫码登录依赖外部 [qq-miniapp-auth](https://github.com/liyangpengs/qq-miniapp-auth) 服务，默认开启。用 compose 部署时在 `.env` 里设 `COMPOSE_PROFILES=napcat` 与 `NAPCAT_LOGIN_ENABLED=true`，napcat 服务会一起起来，取码地址由 `NAPCAT_WEBUI_URL` / `NAPCAT_OPENAUTH_URL` 提供，面板里的 NapCat 接口地址和签名可以不填；不用 compose 自带 NapCat 时，才需要在登录设置里同时填写接口地址与签名（签名需与对端 `API_SIGNING_SECRET` 一致），否则保存登录设置会被拒绝。两者保存在本机数据目录中，由后端调用外部服务时读取。
 
 ## 配置说明
 
@@ -304,7 +329,7 @@ QQ 扫码登录依赖外部 [qq-miniapp-auth](https://github.com/liyangpengs/qq-
 
 游戏账号、配置、活动状态和日志都属于运行数据。升级、迁移或重新部署前，建议先停止服务并备份整个数据目录或 Docker 命名卷，而不是只复制单个 JSON 文件。
 
-游戏账号属于当前实例，不带用户归属字段，也没有数量上限。通知类型和推送渠道对当前实例的所有账号生效。神秘商人的到货和自动购买提醒还需在对应账号的「自动控制」中开启。
+游戏账号属于当前实例，不带用户归属字段，也没有数量上限。通知类型和推送渠道可按账号配置，并支持通用默认设置。神秘商人的到货和自动购买提醒还需在对应账号的「自动控制」中开启。
 
 ## 项目结构
 
@@ -383,12 +408,16 @@ pnpm -C core exec tsx ../tools/audit-capture-compatibility.js <capture-dir>
 
 专题说明统一收录在 [`docs/`](docs/README.md)：
 
+- [新活动自研手册](docs/new-activity-playbook.md)
 - [工具脚本](docs/tools.md)
 - [网络并发模型](docs/network-concurrency.md)
 - [TSDK Node.js 运行约定](docs/tsdk-runtime.md)
 - [配置存储、迁移与缓存](docs/config-storage.md)
 - [2026-10-22 游戏版本与资源对齐](docs/game-update-20261022.md)
+- [图鉴、变异宝典与藏品](docs/collections-20261101.md)
 - [雨落成诗活动协议与实现](docs/weather-activity.md)
+- [以薯换福命令号、状态槽与自动任务](docs/yishuhuanfu-20261125.md)
+- [SL 以薯换福设计方案](docs/yishuhuanfu-sl-design.md)
 - [神秘商人、游戏商城与购买协议](docs/shop-protocols.md)
 - [好友宠物缓存与每日同步](docs/friend-pet-cache.md)
 - [个人页宠物协议](docs/pet-protocols.md)
@@ -400,5 +429,3 @@ pnpm -C core exec tsx ../tools/audit-capture-compatibility.js <capture-dir>
 <div align="center">
   <p>如果觉得项目有用，欢迎点一个 Star。</p>
 </div>
-
-- [图鉴、变异宝典与藏品](docs/collections-20261101.md)

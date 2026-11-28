@@ -1,5 +1,7 @@
-import { AUTOMATION_MODULE_DEFAULTS, FARM_DAILY_DEFAULTS, MUGE_REWARD_DEFAULTS } from '../../config/automation-modules';
-import type { AccountConfig, AutoCodeRefreshConfig, AutomationConfig, BagSeedFallbackStrategy, CaptureSettings, FertilizerLandType, FertilizerMode, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
+import type { LegacyAutoCodeRefreshConfig } from '../../types/config';
+import { ACTIVITY_AUTOMATION_DEFAULTS, AUTOMATION_MODULE_DEFAULTS, FARM_DAILY_DEFAULTS, MUGE_REWARD_DEFAULTS } from '../../config/automation-modules';
+import { normalizeYishuMinPrice, normalizeYishuSellAfterTime } from '../../config/yishuhuanfu';
+import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, CaptureSettings, FertilizerLandType, FertilizerMode, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig, RankedSeedFallbackStrategy } from '../../types/config';
 export {};
 
 const { DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersion } = require('../../config/config');
@@ -15,7 +17,7 @@ const configStorage = createConfigStorage(STORE_FILE);
 const KNOWN_FRIEND_GIDS_DIR: string = getDataFile('known_friend_gids');
 
 const ALLOWED_PLANTING_STRATEGIES: PlantingStrategy[] = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority', 'illustrated'];
-const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: BagSeedFallbackStrategy[] = ALLOWED_PLANTING_STRATEGIES.filter((s): s is BagSeedFallbackStrategy => s !== 'illustrated');
+const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES = ALLOWED_PLANTING_STRATEGIES;
 const PUSHOO_CHANNELS: Set<string> = new Set([
     'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
     'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
@@ -57,7 +59,9 @@ const DEFAULT_OFFLINE_REMINDER: OfflineReminder = {
 
 const DEFAULT_LOGIN_SETTINGS: LoginSettings = {
     wechatQrLogin: true,
-    qqQrLogin: false,
+    // 扫码登录是本仓库的主要登录方式：compose 起 napcat profile 后， NapCat 地址由
+    // NAPCAT_WEBUI_URL / NAPCAT_OPENAUTH_URL 给出，不需要用户在面板里再填一遍。
+    qqQrLogin: true,
     napCatEndpoint: '',
     napCatSignature: '',
 };
@@ -69,7 +73,7 @@ const DEFAULT_CAPTURE_SETTINGS: CaptureSettings = {
 };
 
 // 只对带内置登录凭据的微信扫码账号生效；QQ 账号在调度阶段会直接静默退出。
-const DEFAULT_AUTO_CODE_REFRESH: AutoCodeRefreshConfig = {
+const DEFAULT_AUTO_CODE_REFRESH: LegacyAutoCodeRefreshConfig = {
     enabled: true,
     intervalMinutes: 2,
     maxRetries: 8,
@@ -112,6 +116,7 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
         fertilizer_smart_seconds: 300,
         skip_own_weed_bug: true,
         show_manual_fertilizer: true,
+        ...ACTIVITY_AUTOMATION_DEFAULTS,
     },
     plantingStrategy: 'max_exp',
     preferredSeedId: 0,
@@ -159,6 +164,7 @@ const DEFAULT_ACCOUNT_CONFIG: AccountConfig = {
     bagSeedMultiLandReservationEnabled: false,
     bagSeedLandTypes: {},
     bagSeedFallbackStrategy: 'level',
+    rankedSeedFallbackStrategy: '',
     autoAcceptFriendMinLevel: 0,
     autoAcceptRequireOwnLevel: false,
 };
@@ -236,10 +242,14 @@ function normalizeBagSeedLandTypes(input: unknown): Record<string, FertilizerLan
     return normalized;
 }
 
-function normalizeBagSeedFallbackStrategy(input: unknown, fallback: BagSeedFallbackStrategy = 'level'): BagSeedFallbackStrategy {
+function normalizeRankedSeedFallbackStrategy(input: unknown): RankedSeedFallbackStrategy {
     const strategy = String(input || '').trim();
-    if (ALLOWED_BAG_SEED_FALLBACK_STRATEGIES.includes(strategy as BagSeedFallbackStrategy)) return strategy as BagSeedFallbackStrategy;
-    return fallback;
+    return ALLOWED_BAG_SEED_FALLBACK_STRATEGIES.find(candidate => candidate === strategy) || '';
+}
+
+function normalizeBagSeedFallbackStrategy(input: unknown, fallback: BagSeedFallbackStrategy = 'level', primary?: PlantingStrategy): BagSeedFallbackStrategy {
+    const strategy = normalizeRankedSeedFallbackStrategy(input) || fallback;
+    return primary === 'illustrated' && strategy === 'illustrated' ? 'level' : strategy;
 }
 
 function normalizeFertilizerLandTypes(input: unknown, fallback: FertilizerLandType[] = DEFAULT_FERTILIZER_LAND_TYPES): FertilizerLandType[] {
@@ -359,7 +369,8 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
             ? !!base.bagSeedMultiLandReservationEnabled
             : DEFAULT_ACCOUNT_CONFIG.bagSeedMultiLandReservationEnabled,
         bagSeedLandTypes: normalizeBagSeedLandTypes(base.bagSeedLandTypes),
-        bagSeedFallbackStrategy: normalizeBagSeedFallbackStrategy(base.bagSeedFallbackStrategy),
+        bagSeedFallbackStrategy: normalizeBagSeedFallbackStrategy(base.bagSeedFallbackStrategy, 'level', base.plantingStrategy),
+        rankedSeedFallbackStrategy: normalizeRankedSeedFallbackStrategy(base.rankedSeedFallbackStrategy),
         autoAcceptFriendMinLevel: normalizeAutoAcceptFriendMinLevel(base.autoAcceptFriendMinLevel, DEFAULT_ACCOUNT_CONFIG.autoAcceptFriendMinLevel),
         autoAcceptRequireOwnLevel: !!base.autoAcceptRequireOwnLevel,
     };
@@ -367,6 +378,53 @@ function cloneAccountConfig(base: Partial<AccountConfig> = DEFAULT_ACCOUNT_CONFI
 
 function normalizeFertilizerMode(value: unknown, fallback: FertilizerMode): FertilizerMode {
     return FERTILIZER_MODES.has(value as FertilizerMode) ? value as FertilizerMode : fallback;
+}
+
+/**
+ * 单个 automation 键的归一。两处写入路径（`normalizeAccountConfig` 读账号存档、
+ * `applyConfigSnapshot` 保存设置页）必须共用这一份，否则选法配置会被另一处 `!!v` 布尔化：
+ * 2026-10-19 的 bug 就是雇佣班次/特长在保存时被折成 true，再读回来落回默认档。
+ * `current` 是该键归一前的现值，非法值一律回到它而不是硬编码默认。
+ */
+function normalizeAutomationValue(key: string, value: unknown, current: any): any {
+    if (key === 'fertilizer') {
+        return normalizeFertilizerMode(value, current);
+    }
+    if (key === 'fertilizer_land_types') {
+        return normalizeFertilizerLandTypes(value, current);
+    }
+    if (key === 'fertilizer_land_strategies') {
+        return normalizeFertilizerLandStrategies(value);
+    }
+    if (key.startsWith('ranch_')) {
+        return normalizeRanchSetting(key, value);
+    }
+    if (key === 'fertilizer_smart_seconds') {
+        return Math.max(30, Math.min(3600, Number(value) || 300));
+    }
+    // 以薯换福的数值项：默认值是数字，这里必须显式夹取，否则会被下面的 `!!value` 折成 true。
+    if (key === 'yishu_scan_friend_limit') {
+        return Math.max(1, Math.min(200, Number.parseInt(String(value), 10) || 200));
+    }
+    if (key === 'yishu_scan_interval_minutes') {
+        return Math.max(5, Math.min(720, Number.parseInt(String(value), 10) || 30));
+    }
+    if (key === 'yishu_sell_min_count') {
+        return Math.max(1, Math.min(10000, Number.parseInt(String(value), 10) || 1));
+    }
+    if (key === 'yishu_sell_min_price') {
+        return normalizeYishuMinPrice(value);
+    }
+    // "HH:MM" 是字符串项，不夹取就会被折成 true，卖薯闸门直接失效。
+    if (key === 'yishu_sell_after_time') {
+        return normalizeYishuSellAfterTime(value);
+    }
+    if (key === 'yishu_sell_mode') {
+        if (value === 'confirm') return 'scan';
+        return ['', 'off', 'manual', 'scan', 'auto'].includes(String(value)) ? String(value) : current;
+    }
+    if (Object.hasOwn(ACTIVITY_AUTOMATION_DEFAULTS, key)) return value === true;
+    return !!value;
 }
 
 function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accountFallbackConfig): AccountConfig {
@@ -380,19 +438,7 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         }
         for (const [k, v] of Object.entries(migrateRanchMarketAutomation(src.automation))) {
             if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
-            if (k === 'fertilizer') {
-                cfg.automation.fertilizer = normalizeFertilizerMode(v, cfg.automation.fertilizer);
-            } else if (k === 'fertilizer_land_types') {
-                cfg.automation.fertilizer_land_types = normalizeFertilizerLandTypes(v, cfg.automation.fertilizer_land_types);
-            } else if (k === 'fertilizer_land_strategies') {
-                cfg.automation.fertilizer_land_strategies = normalizeFertilizerLandStrategies(v);
-            } else if (k.startsWith('ranch_')) {
-                (cfg.automation as any)[k] = normalizeRanchSetting(k, v);
-            } else if (k === 'fertilizer_smart_seconds') {
-                cfg.automation.fertilizer_smart_seconds = Math.max(30, Math.min(3600, Number(v) || 300));
-            } else {
-                (cfg.automation as any)[k] = !!v;
-            }
+            (cfg.automation as any)[k] = normalizeAutomationValue(k, v, (cfg.automation as any)[k]);
         }
     }
 
@@ -506,8 +552,11 @@ function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accoun
         cfg.bagSeedLandTypes = normalizeBagSeedLandTypes(src.bagSeedLandTypes);
     }
 
-    if (src.bagSeedFallbackStrategy !== undefined && src.bagSeedFallbackStrategy !== null) {
-        cfg.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(src.bagSeedFallbackStrategy, cfg.bagSeedFallbackStrategy);
+    cfg.bagSeedFallbackStrategy = normalizeBagSeedFallbackStrategy(
+        src.bagSeedFallbackStrategy ?? cfg.bagSeedFallbackStrategy, cfg.bagSeedFallbackStrategy, cfg.plantingStrategy,
+    );
+    if (src.rankedSeedFallbackStrategy !== undefined && src.rankedSeedFallbackStrategy !== null) {
+        cfg.rankedSeedFallbackStrategy = normalizeRankedSeedFallbackStrategy(src.rankedSeedFallbackStrategy);
     }
 
     if (src.autoAcceptFriendMinLevel !== undefined && src.autoAcceptFriendMinLevel !== null) {
@@ -721,12 +770,14 @@ module.exports = {
     normalizeBagSeedPriority,
     normalizeBagSeedLandTypes,
     normalizeBagSeedFallbackStrategy,
+    normalizeRankedSeedFallbackStrategy,
     normalizeFertilizerMode,
     normalizeFertilizerLandTypes,
     normalizeTimeString,
     normalizeIntervals,
     normalizeAutoAcceptFriendMinLevel,
     normalizeAccountConfig,
+    normalizeAutomationValue,
     cloneAccountConfig,
     resolveAccountId,
     loadGlobalConfig,

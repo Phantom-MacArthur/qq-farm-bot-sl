@@ -1,21 +1,17 @@
 <script setup lang="ts">
 import type { MugeAction, MugeTier } from '@/stores/muge'
 import { NButton } from 'naive-ui/es/button'
-import { NTab, NTabs } from 'naive-ui/es/tabs'
+import { NTab } from 'naive-ui/es/tabs'
 import { storeToRefs } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import ActivityRulesDialog from '@/components/activity/ActivityRulesDialog.vue'
+import PageTabs from '@/components/PageTabs.vue'
 import EmptyState from '@/components/ui/EmptyState.vue'
-import GameSpaceSwitch from '@/components/GameSpaceSwitch.vue'
-import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
-import TopAccountMenu from '@/components/TopAccountMenu.vue'
+import RefreshButton from '@/components/ui/RefreshButton.vue'
 import { useAccountStore } from '@/stores/account'
 import { useMugeStore } from '@/stores/muge'
 
-/**
- * 牧歌初启：农场与牧场共用同一份账号进度，两个空间的活动页都打开这里。
- * 页面直接铺在内容区上（标题行 + 页签 + 卡片网格），与游戏商城等页面同一种结构，不再套活动外框。
- */
+/** 农场与牧场共用同一份账号进度。 */
 type Section = 'celebration' | 'friends' | 'handbook' | 'personality'
 type Tone = 'done' | 'ready' | 'idle' | 'locked'
 
@@ -24,10 +20,22 @@ const store = useMugeStore()
 const { state, busy, error, needsRefresh } = storeToRefs(store)
 const { currentAccountId } = storeToRefs(useAccountStore())
 const tab = ref<Section>('celebration')
+const contentScroll = ref<HTMLElement | null>(null)
 const rulesOpen = ref(false)
+const refreshing = ref(false)
 const answering = ref(false)
 const questionIndex = ref(0)
 const disabled = computed(() => busy.value || needsRefresh.value || !state.value?.active)
+
+async function refresh() {
+  refreshing.value = true
+  try {
+    await store.request()
+  }
+  finally {
+    refreshing.value = false
+  }
+}
 
 const period = computed(() => {
   const s = state.value
@@ -160,261 +168,242 @@ watch(currentAccountId, () => {
   questionIndex.value = 0
   void store.request()
 }, { immediate: true })
+
+watch(tab, () => {
+  contentScroll.value?.scrollTo({ top: 0 })
+})
 </script>
 
 <template>
-  <section class="muge">
-    <!-- 标题行：与全站页头同一字号与位置，返回、标题、活动时间；右侧说明与刷新。 -->
-    <header class="muge-head">
-      <div class="muge-head__lead">
-        <NButton quaternary circle title="返回活动列表" aria-label="返回活动列表" @click="$emit('back')">
-          <template #icon>
-            <span class="i-carbon-arrow-left" />
-          </template>
-        </NButton>
-        <img src="/activity-assets/muge/icon.png" alt="" width="32" height="32" class="muge-head__icon">
-        <div class="muge-head__text min-w-0">
-          <div class="muge-head__title-row">
-            <h1>牧歌初启</h1>
-            <NButton quaternary :disabled="!state" title="活动说明" aria-label="活动说明" @click="rulesOpen = true">
-              <template #icon>
-                <span class="i-carbon-information" />
-              </template>
-              <span class="muge-head__rules-label">活动说明</span>
-            </NButton>
-          </div>
-          <p v-if="period">
+  <section class="muge page-stack">
+    <PageTabs v-model:value="tab" aria-label="牧歌初启玩法">
+      <NTab v-for="section in sections" :key="section.key" :name="section.key">
+        <span class="muge-tab"><span :class="section.icon" aria-hidden="true" />{{ section.label }}<i v-if="section.dot" class="muge-tab__dot" aria-label="有可领取奖励" /></span>
+      </NTab>
+    </PageTabs>
+
+    <section class="muge-panel page-card-surface panel-scroll-layout margin-shell"><div class="margin-content">
+      <header class="muge-head panel-titlebar panel-titlebar--flush margin-shell"><div class="margin-content">
+        <div class="muge-head__lead">
+          <NButton quaternary circle title="返回活动列表" aria-label="返回活动列表" @click="$emit('back')">
+            <template #icon><span class="i-carbon-arrow-left" /></template>
+          </NButton>
+          <img src="/activity-assets/muge/icon.png" alt="" width="32" height="32" class="muge-head__icon">
+          <h1>牧歌初启</h1>
+          <p v-if="period" class="muge-head__period">
             <span class="i-carbon-calendar" aria-hidden="true" />{{ period.text }}
             <span class="muge-head__badge" :class="{ 'is-ended': period.ended }">{{ period.badge }}</span>
           </p>
         </div>
-      </div>
-      <div class="muge-head__actions">
-        <ThemeSwitcher />
-        <GameSpaceSwitch />
-        <TopAccountMenu />
-      </div>
-    </header>
+        <div class="page-toolbar__actions">
+          <NButton secondary :disabled="!state" @click="rulesOpen = true">
+            <template #icon><span class="i-carbon-information" /></template>
+            活动说明
+          </NButton>
+          <RefreshButton title="刷新活动" :loading="refreshing" :disabled="busy || !currentAccountId" @click="refresh" />
+        </div>
+      </div></header>
 
-    <NTabs v-model:value="tab" type="line" class="muge-tabs" aria-label="牧歌初启玩法">
-      <NTab v-for="section in sections" :key="section.key" :name="section.key">
-        <span class="muge-tab"><span :class="section.icon" aria-hidden="true" />{{ section.label }}<i v-if="section.dot" class="muge-tab__dot" aria-label="有可领取奖励" /></span>
-      </NTab>
-    </NTabs>
+      <div ref="contentScroll" class="panel-scroll-body">
+        <div class="muge-content">
+          <p v-if="error" class="muge-error" role="alert">
+            <span class="i-carbon-warning-alt" aria-hidden="true" />{{ error }}
+          </p>
 
-    <div class="muge-content">
-      <p v-if="error" class="muge-error" role="alert">
-        <span class="i-carbon-warning-alt" aria-hidden="true" />{{ error }}
-      </p>
+          <EmptyState v-if="!currentAccountId" title="请先选择账号" icon="i-carbon-user-avatar" />
+          <EmptyState v-else-if="!state" :title="busy ? '正在读取活动进度' : '暂未获取到活动数据'" :icon="busy ? 'i-svg-spinners-90-ring-with-bg' : 'i-carbon-calendar'" />
 
-      <EmptyState v-if="!currentAccountId" title="请先选择账号" icon="i-carbon-user-avatar" />
-      <EmptyState v-else-if="!state" :title="busy ? '正在读取活动进度' : '暂未获取到活动数据'" :icon="busy ? 'i-svg-spinners-90-ring-with-bg' : 'i-carbon-calendar'">
-        <NButton v-if="!busy" secondary @click="store.request()">
-          重新读取
-        </NButton>
-      </EmptyState>
-
-      <template v-else>
-        <p v-if="!state.active" class="muge-notice">
-          <span class="i-carbon-time" aria-hidden="true" />活动尚未开始或已经结束，奖励暂不可领取
-        </p>
-
-        <!-- 兴牧庆典 / 牧友同行 -->
-        <template v-if="tierSection">
-          <section class="muge-card muge-bar">
-            <div class="muge-bar__value">
-              <span>{{ tierSection.label }}</span>
-              <strong>{{ tierSection.value.toLocaleString('zh-CN') }}<small>{{ tierSection.unit }}</small></strong>
-            </div>
-            <div class="muge-bar__progress">
-              <div class="muge-track ui-progress-track" aria-hidden="true">
-                <i :style="{ width: `${progressTo(tierSection.value, tierSection.tiers, tierSection.unit).percent}%` }" />
-              </div>
-              <span>{{ progressTo(tierSection.value, tierSection.tiers, tierSection.unit).text }}<em> · {{ tierSection.note }}</em></span>
-            </div>
-            <div class="muge-bar__actions">
-            <NButton type="primary" :secondary="!claimable(tierSection.tiers)" :disabled="disabled || !claimable(tierSection.tiers)" :loading="busy" @click="store.request(tierSection.action)">
-              {{ claimable(tierSection.tiers) ? `领取 ${claimable(tierSection.tiers)} 档奖励` : '暂无可领取' }}
-            </NButton>
-                <NButton :loading="busy" :disabled="busy || !currentAccountId" title="刷新活动" aria-label="刷新活动" @click="store.request()">
-                  <template #icon>
-                    <span class="i-carbon-renew" />
-                  </template>
-                  刷新
-                </NButton>
-            </div>
-          </section>
-
-          <div class="muge-grid">
-            <article v-for="tier in tierSection.tiers" :key="tier.id" class="muge-card muge-item" :class="`is-${tierTone(tier.status).tone}`">
-              <span class="muge-item__well"><img v-if="tier.rewards[0]" :src="tier.rewards[0].image" alt=""></span>
-              <div class="muge-item__main">
-                <strong>{{ compact(tier.threshold) }}{{ tierSection.unit }}</strong>
-                <span v-for="reward in tier.rewards" :key="reward.id">{{ reward.name }} <b>×{{ reward.count.toLocaleString('zh-CN') }}</b></span>
-              </div>
-              <span class="muge-status" :class="`is-${tierTone(tier.status).tone}`">
-                <span v-if="tier.status === 3" class="i-carbon-checkmark" aria-hidden="true" />{{ tierTone(tier.status).text }}
-              </span>
-            </article>
-          </div>
-        </template>
-
-        <!-- 成长手册 -->
-        <template v-else-if="tab === 'handbook'">
-          <EmptyState v-if="!handbook" title="成长手册未开启" description="种植等级达到 25 级并开启牧场后解锁" icon="i-carbon-locked" />
           <template v-else>
-            <section class="muge-card muge-bar">
-              <div class="muge-bar__value">
-                <span>成长积分</span>
-                <strong>{{ handbook.points }}<small>积分</small></strong>
-              </div>
-              <div class="muge-bar__progress">
-                <div class="muge-track ui-progress-track" aria-hidden="true">
-                  <i :style="{ width: `${progressTo(handbook.points, handbook.tiers, ' 积分').percent}%` }" />
-                </div>
-                <span>{{ progressTo(handbook.points, handbook.tiers, ' 积分').text }}</span>
-              </div>
-              <div class="muge-bar__actions">
-                <NButton :disabled="disabled || !handbook.tasks.some(task => task.status === 2)" @click="store.request('claimTask')">
-                  领取任务奖励
-                </NButton>
-                <NButton type="primary" :secondary="!claimable(handbook.tiers)" :disabled="disabled || !claimable(handbook.tiers)" @click="store.request('claimHandbook')">
-                  领取积分奖励
-                </NButton>
-                <NButton :loading="busy" :disabled="busy || !currentAccountId" title="刷新活动" aria-label="刷新活动" @click="store.request()">
-                  <template #icon>
-                    <span class="i-carbon-renew" />
-                  </template>
-                  刷新
-                </NButton>
-              </div>
-            </section>
+            <p v-if="!state.active" class="muge-notice">
+              <span class="i-carbon-time" aria-hidden="true" />活动尚未开始或已经结束，奖励暂不可领取
+            </p>
 
-            <section class="muge-section">
-              <header class="muge-section__head">
-                <i aria-hidden="true" /><h2>积分奖励</h2><span>{{ handbook.tiers.filter(t => t.status === 3).length }} / {{ handbook.tiers.length }}</span>
-              </header>
-              <div class="muge-grid is-small">
-                <article v-for="tier in handbook.tiers" :key="tier.id" class="muge-card muge-item is-compact" :class="`is-${tierTone(tier.status).tone}`" :title="tier.rewards.map(r => `${r.name} ×${r.count}`).join('、')">
+            <!-- 兴牧庆典 / 牧友同行 -->
+            <template v-if="tierSection">
+              <section class="muge-bar" :class="{ 'muge-card': tierSection.tiers.length > 0 }">
+                <div class="muge-bar__value">
+                  <span>{{ tierSection.label }}</span>
+                  <strong>{{ tierSection.value.toLocaleString('zh-CN') }}<small>{{ tierSection.unit }}</small></strong>
+                </div>
+                <div class="muge-bar__progress">
+                  <div class="muge-track ui-progress-track" aria-hidden="true">
+                    <i :style="{ width: `${progressTo(tierSection.value, tierSection.tiers, tierSection.unit).percent}%` }" />
+                  </div>
+                  <span>{{ progressTo(tierSection.value, tierSection.tiers, tierSection.unit).text }}<em> · {{ tierSection.note }}</em></span>
+                </div>
+                <div class="muge-bar__actions">
+                  <NButton type="primary" :secondary="!claimable(tierSection.tiers)" :disabled="disabled || !claimable(tierSection.tiers)" :loading="busy && !refreshing" @click="store.request(tierSection.action)">
+                    {{ claimable(tierSection.tiers) ? `领取 ${claimable(tierSection.tiers)} 档奖励` : '暂无可领取' }}
+                  </NButton>
+                </div>
+              </section>
+
+              <div v-if="tierSection.tiers.length" class="muge-grid">
+                <article v-for="tier in tierSection.tiers" :key="tier.id" class="muge-card muge-item" :class="`is-${tierTone(tier.status).tone}`">
                   <span class="muge-item__well"><img v-if="tier.rewards[0]" :src="tier.rewards[0].image" alt=""></span>
                   <div class="muge-item__main">
-                    <strong>{{ tier.threshold }} 积分</strong>
-                    <span v-if="tier.rewards[0]">{{ tier.rewards[0].name }} <b>×{{ tier.rewards[0].count.toLocaleString('zh-CN') }}</b></span>
+                    <strong>{{ compact(tier.threshold) }}{{ tierSection.unit }}</strong>
+                    <span v-for="reward in tier.rewards" :key="reward.id">{{ reward.name }} <b>×{{ reward.count.toLocaleString('zh-CN') }}</b></span>
                   </div>
-                  <span v-if="tier.status !== 1" class="muge-status" :class="`is-${tierTone(tier.status).tone}`">
+                  <span class="muge-status" :class="`is-${tierTone(tier.status).tone}`">
                     <span v-if="tier.status === 3" class="i-carbon-checkmark" aria-hidden="true" />{{ tierTone(tier.status).text }}
                   </span>
                 </article>
               </div>
-            </section>
+            </template>
 
-            <details v-for="group in taskDays" :key="group.day" class="muge-section" :open="!group.locked">
-              <summary class="muge-section__head">
-                <i aria-hidden="true" /><h2>第 {{ group.day }} 天</h2>
-                <span>{{ group.locked ? `未解锁 · ${group.tasks.length} 个任务` : `已完成 ${group.done} / ${group.tasks.length}` }}</span>
-                <span class="muge-section__chevron i-carbon-chevron-down" aria-hidden="true" />
-              </summary>
-              <div class="muge-grid">
-                <article v-for="task in group.tasks" :key="task.id" class="muge-card muge-item" :class="`is-${taskTone(task).tone}`">
-                  <span class="muge-item__well"><img v-if="task.rewards[0]" :src="task.rewards[0].image" alt=""></span>
-                  <div class="muge-item__main">
-                    <strong :title="task.description">{{ task.description }}</strong>
-                    <span>{{ task.points }} 积分<template v-for="reward in task.rewards" :key="reward.id"> · {{ reward.name }} <b>×{{ reward.count.toLocaleString('zh-CN') }}</b></template></span>
+            <!-- 成长手册 -->
+            <template v-else-if="tab === 'handbook'">
+              <EmptyState v-if="!handbook" title="成长手册未开启" description="种植等级达到 25 级并开启牧场后解锁" icon="i-carbon-locked" />
+              <template v-else>
+                <section class="muge-bar" :class="{ 'muge-card': handbook.tiers.length > 0 || handbook.tasks.length > 0 }">
+                  <div class="muge-bar__value">
+                    <span>成长积分</span>
+                    <strong>{{ handbook.points }}<small>积分</small></strong>
                   </div>
-                  <span class="muge-status" :class="`is-${taskTone(task).tone}`">
-                    <span v-if="task.status === 3" class="i-carbon-checkmark" aria-hidden="true" />{{ taskTone(task).text }}
-                  </span>
-                </article>
-              </div>
-            </details>
+                  <div class="muge-bar__progress">
+                    <div class="muge-track ui-progress-track" aria-hidden="true">
+                      <i :style="{ width: `${progressTo(handbook.points, handbook.tiers, ' 积分').percent}%` }" />
+                    </div>
+                    <span>{{ progressTo(handbook.points, handbook.tiers, ' 积分').text }}</span>
+                  </div>
+                  <div class="muge-bar__actions">
+                    <NButton :disabled="disabled || !handbook.tasks.some(task => task.status === 2)" @click="store.request('claimTask')">
+                      领取任务奖励
+                    </NButton>
+                    <NButton type="primary" :secondary="!claimable(handbook.tiers)" :disabled="disabled || !claimable(handbook.tiers)" @click="store.request('claimHandbook')">
+                      领取积分奖励
+                    </NButton>
+                  </div>
+                </section>
+
+                <section v-if="handbook.tiers.length" class="muge-section">
+                  <header class="muge-section__head">
+                    <i aria-hidden="true" /><h2>积分奖励</h2><span>{{ handbook.tiers.filter(t => t.status === 3).length }} / {{ handbook.tiers.length }}</span>
+                  </header>
+                  <div class="muge-grid is-small">
+                    <article v-for="tier in handbook.tiers" :key="tier.id" class="muge-card muge-item is-compact" :class="`is-${tierTone(tier.status).tone}`" :title="tier.rewards.map(r => `${r.name} ×${r.count}`).join('、')">
+                      <span class="muge-item__well"><img v-if="tier.rewards[0]" :src="tier.rewards[0].image" alt=""></span>
+                      <div class="muge-item__main">
+                        <strong>{{ tier.threshold }} 积分</strong>
+                        <span v-if="tier.rewards[0]">{{ tier.rewards[0].name }} <b>×{{ tier.rewards[0].count.toLocaleString('zh-CN') }}</b></span>
+                      </div>
+                      <span v-if="tier.status !== 1" class="muge-status" :class="`is-${tierTone(tier.status).tone}`">
+                        <span v-if="tier.status === 3" class="i-carbon-checkmark" aria-hidden="true" />{{ tierTone(tier.status).text }}
+                      </span>
+                    </article>
+                  </div>
+                </section>
+
+                <details v-for="group in taskDays" :key="group.day" class="muge-section" :open="!group.locked">
+                  <summary class="muge-section__head">
+                    <i aria-hidden="true" /><h2>第 {{ group.day }} 天</h2>
+                    <span>{{ group.locked ? `未解锁 · ${group.tasks.length} 个任务` : `已完成 ${group.done} / ${group.tasks.length}` }}</span>
+                    <span class="muge-section__chevron i-carbon-chevron-down" aria-hidden="true" />
+                  </summary>
+                  <div class="muge-grid">
+                    <article v-for="task in group.tasks" :key="task.id" class="muge-card muge-item" :class="`is-${taskTone(task).tone}`">
+                      <span class="muge-item__well"><img v-if="task.rewards[0]" :src="task.rewards[0].image" alt=""></span>
+                      <div class="muge-item__main">
+                        <strong :title="task.description">{{ task.description }}</strong>
+                        <span>{{ task.points }} 积分<template v-for="reward in task.rewards" :key="reward.id"> · {{ reward.name }} <b>×{{ reward.count.toLocaleString('zh-CN') }}</b></template></span>
+                      </div>
+                      <span class="muge-status" :class="`is-${taskTone(task).tone}`">
+                        <span v-if="task.status === 3" class="i-carbon-checkmark" aria-hidden="true" />{{ taskTone(task).text }}
+                      </span>
+                    </article>
+                  </div>
+                </details>
+              </template>
+            </template>
+
+            <!-- 牧场人格 -->
+            <template v-else-if="tab === 'personality'">
+              <EmptyState v-if="!state.personality" title="牧场人格暂不可用" icon="i-carbon-user-profile" />
+
+              <section v-else-if="answering && question" class="muge-quiz" aria-label="牧场人格测试">
+                <header class="muge-quiz__head">
+                  <span>第 <b>{{ questionIndex + 1 }}</b> / {{ questions.length }} 题</span>
+                  <NButton text :disabled="busy" @click="answering = false">
+                    退出测试
+                  </NButton>
+                </header>
+                <div class="muge-track ui-progress-track" aria-hidden="true">
+                  <i :style="{ width: `${(questionIndex + 1) / questions.length * 100}%` }" />
+                </div>
+                <h3 class="muge-quiz__title">
+                  {{ question.title }}
+                </h3>
+                <div class="muge-quiz__options" role="radiogroup" :aria-label="question.title">
+                  <button
+                    v-for="option in question.options"
+                    :key="option.value"
+                    type="button"
+                    role="radio"
+                    class="muge-option"
+                    :aria-checked="answers[question.id] === option.value"
+                    :disabled="disabled"
+                    @click="answer(option.value)"
+                  >
+                    <span class="muge-option__letter">{{ option.label }}</span>
+                    <span class="muge-option__text">{{ option.text }}</span>
+                    <span v-if="answers[question.id] === option.value" class="muge-option__check i-carbon-checkmark-filled" aria-hidden="true" />
+                  </button>
+                </div>
+                <footer class="muge-quiz__foot">
+                  <NButton secondary :disabled="busy || questionIndex === 0" @click="questionIndex--">
+                    上一题
+                  </NButton>
+                  <NButton v-if="isLast" type="primary" :loading="busy" :disabled="disabled || !allAnswered" @click="settle">
+                    查看人格结果
+                  </NButton>
+                  <NButton v-else secondary :disabled="busy || !answers[question.id]" @click="questionIndex++">
+                    下一题
+                  </NButton>
+                </footer>
+              </section>
+
+              <section v-else class="muge-result">
+                <img v-if="state.personality.image" :src="state.personality.image" alt="我的牧场人格测试结果" class="muge-result__poster">
+                <span v-else class="muge-result__placeholder" aria-hidden="true"><span class="i-carbon-user-profile" /></span>
+                <div class="muge-result__body">
+                  <div>
+                    <h3>{{ state.personality.personalityId ? '我的牧场人格' : '测一测你的牧场人格' }}</h3>
+                    <p>
+                      {{ state.personality.personalityId
+                        ? '根据经营农场的习惯得出，活动期间可以重新测试，新结果会覆盖旧结果。'
+                        : '根据经营农场的习惯得出你的牧场人格，测试结果可以分享给好友。' }}
+                    </p>
+                  </div>
+                  <ul class="muge-result__facts">
+                    <li>
+                      <span>题目</span>
+                      <b>{{ questions.length }} 道</b>
+                    </li>
+                    <li>
+                      <span>已测试</span>
+                      <b>{{ state.personality.settleCount || (state.personality.personalityId ? 1 : 0) }} 次</b>
+                    </li>
+                    <li :class="{ 'is-ready': state.personality.personalityId && !state.personality.shareRewardClaimed }">
+                      <span>首次分享奖励</span>
+                      <b>{{ state.personality.shareRewardClaimed ? '已领取' : state.personality.personalityId ? '可领取' : '完成测试后领取' }}</b>
+                    </li>
+                  </ul>
+                  <div class="muge-result__actions">
+                    <NButton :type="state.personality.personalityId ? 'default' : 'primary'" :secondary="!!state.personality.personalityId" :disabled="disabled" @click="startSurvey">
+                      {{ state.personality.personalityId ? '重新测试' : '开始测试' }}
+                    </NButton>
+                    <NButton v-if="state.personality.personalityId && !state.personality.shareRewardClaimed" type="primary" :disabled="disabled" @click="store.request('claimShare')">
+                      领取首次分享奖励
+                    </NButton>
+                  </div>
+                </div>
+              </section>
+            </template>
           </template>
-        </template>
-
-        <!-- 牧场人格 -->
-        <template v-else-if="tab === 'personality'">
-          <EmptyState v-if="!state.personality" title="牧场人格暂不可用" icon="i-carbon-user-profile" />
-
-          <section v-else-if="answering && question" class="muge-card muge-quiz" aria-label="牧场人格测试">
-            <header class="muge-quiz__head">
-              <span>第 <b>{{ questionIndex + 1 }}</b> / {{ questions.length }} 题</span>
-              <NButton text :disabled="busy" @click="answering = false">
-                退出测试
-              </NButton>
-            </header>
-            <div class="muge-track ui-progress-track" aria-hidden="true">
-              <i :style="{ width: `${(questionIndex + 1) / questions.length * 100}%` }" />
-            </div>
-            <h3 class="muge-quiz__title">
-              {{ question.title }}
-            </h3>
-            <div class="muge-quiz__options" role="radiogroup" :aria-label="question.title">
-              <button
-                v-for="option in question.options"
-                :key="option.value"
-                type="button"
-                role="radio"
-                class="muge-option"
-                :aria-checked="answers[question.id] === option.value"
-                :disabled="disabled"
-                @click="answer(option.value)"
-              >
-                <span class="muge-option__letter">{{ option.label }}</span>
-                <span class="muge-option__text">{{ option.text }}</span>
-                <span v-if="answers[question.id] === option.value" class="muge-option__check i-carbon-checkmark-filled" aria-hidden="true" />
-              </button>
-            </div>
-            <footer class="muge-quiz__foot">
-              <NButton secondary :disabled="busy || questionIndex === 0" @click="questionIndex--">
-                上一题
-              </NButton>
-              <NButton v-if="isLast" type="primary" :loading="busy" :disabled="disabled || !allAnswered" @click="settle">
-                查看人格结果
-              </NButton>
-              <NButton v-else secondary :disabled="busy || !answers[question.id]" @click="questionIndex++">
-                下一题
-              </NButton>
-            </footer>
-          </section>
-
-          <section v-else class="muge-card muge-result">
-            <img v-if="state.personality.image" :src="state.personality.image" alt="我的牧场人格测试结果" class="muge-result__poster">
-            <span v-else class="muge-result__placeholder" aria-hidden="true"><span class="i-carbon-user-profile" /></span>
-            <div class="muge-result__body">
-              <div>
-                <h3>{{ state.personality.personalityId ? '我的牧场人格' : '测一测你的牧场人格' }}</h3>
-                <p>
-                  {{ state.personality.personalityId
-                    ? '根据经营农场的习惯得出，活动期间可以重新测试，新结果会覆盖旧结果。'
-                    : '根据经营农场的习惯得出你的牧场人格，测试结果可以分享给好友。' }}
-                </p>
-              </div>
-              <ul class="muge-result__facts">
-                <li>
-                  <span>题目</span>
-                  <b>{{ questions.length }} 道</b>
-                </li>
-                <li>
-                  <span>已测试</span>
-                  <b>{{ state.personality.settleCount || (state.personality.personalityId ? 1 : 0) }} 次</b>
-                </li>
-                <li :class="{ 'is-ready': state.personality.personalityId && !state.personality.shareRewardClaimed }">
-                  <span>首次分享奖励</span>
-                  <b>{{ state.personality.shareRewardClaimed ? '已领取' : state.personality.personalityId ? '可领取' : '完成测试后领取' }}</b>
-                </li>
-              </ul>
-              <div class="muge-result__actions">
-                <NButton :type="state.personality.personalityId ? 'default' : 'primary'" :secondary="!!state.personality.personalityId" :disabled="disabled" @click="startSurvey">
-                  {{ state.personality.personalityId ? '重新测试' : '开始测试' }}
-                </NButton>
-                <NButton v-if="state.personality.personalityId && !state.personality.shareRewardClaimed" type="primary" :disabled="disabled" @click="store.request('claimShare')">
-                  领取首次分享奖励
-                </NButton>
-              </div>
-            </div>
-          </section>
-        </template>
-      </template>
-    </div>
+        </div>
+      </div>
+    </div></section>
 
     <ActivityRulesDialog :open="rulesOpen" title="牧歌初启 · 活动说明" @close="rulesOpen = false">
       <div v-if="rules.length" class="muge-rules">
@@ -430,12 +419,20 @@ watch(currentAccountId, () => {
 </template>
 
 <style scoped>
-/* 页面直接铺在内容区（与游戏商城同一结构）：标题行、页签、内容依次排列，宽度跟随全站内容区。 */
 .muge {
   display: flex;
-  min-width: 0;
+  min-height: 0;
+  flex: 1 1 auto;
   flex-direction: column;
-  padding-bottom: 24px;
+}
+
+.muge-panel {
+  overflow: clip;
+  background: var(--ui-surface-solid) !important;
+}
+
+.muge-panel > .margin-content {
+  margin: 0;
 }
 
 .muge h1,
@@ -445,21 +442,16 @@ watch(currentAccountId, () => {
   margin: 0;
 }
 
-/* 标题行与全站页头（PageHeader）同高同字号。 */
-.muge-head {
-  display: flex;
-  min-height: 44px;
-  align-items: center;
+.muge-head > .margin-content {
   justify-content: space-between;
-  gap: 12px;
-  padding-top: 16px;
 }
 
 .muge-head__lead {
   display: flex;
   min-width: 0;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 4px 8px;
 }
 
 .muge-head__icon {
@@ -468,23 +460,19 @@ watch(currentAccountId, () => {
 }
 
 .muge-head h1 {
-  overflow: hidden;
   color: var(--ui-ink);
-  font-size: var(--ui-font-size-large-15);
-  font-weight: var(--fw-700);
-  line-height: 1.3;
-  text-overflow: ellipsis;
+  font-size: inherit;
+  font-weight: var(--fw-650);
   white-space: nowrap;
 }
 
-.muge-head p {
+.muge-head__period {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 5px;
-  margin-top: 2px;
   color: var(--ui-muted);
   font-size: var(--ui-content-item-font-height-tiny-12);
-  white-space: nowrap;
 }
 
 .muge-head__badge {
@@ -500,24 +488,6 @@ watch(currentAccountId, () => {
 .muge-head__badge.is-ended {
   color: var(--ui-muted);
   background: var(--ui-surface-soft);
-}
-
-.muge-head__title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.muge-head__actions {
-  display: flex;
-  flex: none;
-  align-items: center;
-  gap: 4px;
-}
-
-/* 页签与游戏商城的页签同一种线型样式，下边线贯穿整行。 */
-.muge-tabs {
-  margin-top: 8px;
 }
 
 .muge-tab {
@@ -542,7 +512,7 @@ watch(currentAccountId, () => {
   min-width: 0;
   flex-direction: column;
   gap: 14px;
-  padding-top: 16px;
+  padding: 16px;
 }
 
 .muge-error,
@@ -580,6 +550,9 @@ watch(currentAccountId, () => {
   flex-wrap: wrap;
   align-items: center;
   gap: 12px 28px;
+}
+
+.muge-bar.muge-card {
   padding: 16px 20px;
 }
 
@@ -833,7 +806,6 @@ details:not([open]) > .muge-section__head > i {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 20px 22px;
 }
 
 .muge-quiz__head {
@@ -937,7 +909,6 @@ details:not([open]) > .muge-section__head > i {
   display: flex;
   align-items: center;
   gap: 28px;
-  padding: 20px 24px;
 }
 
 .muge-result__poster {
@@ -1054,62 +1025,8 @@ details:not([open]) > .muge-section__head > i {
   text-align: center;
 }
 
-@media (max-width: 1023px) {
-  .muge-head {
-    padding-top: 12px;
-  }
-
-  .muge-head h1 {
-    font-size: var(--ui-font-size-large-15);
-  }
-}
-
 @media (max-width: 640px) {
-  .muge-head {
-    display: grid;
-    grid-template-columns: auto 32px minmax(0, 1fr);
-    gap: 4px 8px;
-  }
-
-  .muge-head__lead,
-  .muge-head__text {
-    display: contents;
-  }
-
-  .muge-head__icon {
-    grid-area: 1 / 2;
-  }
-
-  .muge-head__title-row {
-    grid-area: 1 / 3;
-  }
-
-  .muge-head__actions {
-    grid-area: 3 / 1 / auto / -1;
-    justify-self: end;
-  }
-
-  .muge-head p {
-    grid-area: 2 / 2 / auto / -1;
-    flex-wrap: wrap;
-    margin-top: 0;
-    white-space: normal;
-  }
-
-  .muge-head__title-row .muge-head__rules-label {
-    display: none;
-  }
-
-  .muge-tabs {
-    --n-tab-gap: 10px !important;
-    --n-tab-font-size: 13px !important;
-  }
-
-  .muge-tab {
-    gap: 4px;
-  }
-
-  .muge-bar {
+  .muge-bar.muge-card {
     padding: 14px 16px;
   }
 
@@ -1126,7 +1043,6 @@ details:not([open]) > .muge-section__head > i {
     flex-direction: column;
     align-items: stretch;
     gap: 18px;
-    padding: 16px;
   }
 
   .muge-result__poster {

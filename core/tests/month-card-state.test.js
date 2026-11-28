@@ -36,15 +36,23 @@ test('没买月卡时服务器仍返回月卡条目：不能显示为今日已�
 });
 
 test('月卡可领时领取并记录奖励，状态为今日已领取', async () => {
-    const service = loadMonthCard({
+    const replies = {
         GetMonthCardInfos: { infos: [{ goods_id: 2001, reward: { id: 1002, count: 30 }, can_claim: true }] },
         ClaimMonthCardReward: { items: [{ id: 1002, count: 30 }] },
-    });
+    };
+    const service = loadMonthCard(replies);
     assert.equal(await service.performDailyMonthCardGift(true), true);
     const state = service.getMonthCardDailyState();
     assert.equal(state.doneToday, true);
     assert.equal(state.hasCard, true);
     assert.deepEqual(state.rewards, [{ id: 1002, count: 30, extra: false, name: '点券', image: '/game-config/seed_images_named/seed_images/1002.png' }]);
+
+    replies.GetMonthCardInfos.infos[0].can_claim = false;
+    assert.equal(await service.performDailyMonthCardGift(true), false);
+    const rechecked = service.getMonthCardDailyState();
+    assert.equal(rechecked.hasCard, true);
+    assert.equal(rechecked.doneToday, true);
+    assert.deepEqual(rechecked.rewards, state.rewards);
 });
 
 test('服务器没有任何月卡条目时为未开通', async () => {

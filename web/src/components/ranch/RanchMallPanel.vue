@@ -200,7 +200,7 @@ function submit(count: number) {
       <div class="mall-body panel-scroll-body">
         <RanchGate @retry="refresh">
           <EmptyState v-if="marketAbsent" title="仓鼠驿站当前未到访" icon="i-carbon-store" />
-          <EmptyState v-else-if="!goods.length && !loading" title="没有匹配的商品" description="换个分类或关键词试试" icon="i-carbon-search-locate" />
+          <EmptyState v-else-if="!goods.length && !loading" bare title="没有匹配的商品" description="换个分类或关键词试试" icon="i-carbon-search-locate" />
 
           <section v-else class="goods-grid" aria-live="polite">
             <article v-for="good in goods" :key="goodKey(good)" class="goods-card margin-shell" :class="{ 'is-unavailable': !good.available }"><span class="margin-content">

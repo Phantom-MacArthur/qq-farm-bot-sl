@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 import CatalogPanel from '@/components/catalog/CatalogPanel.vue'
 import { useCatalogPaging, useImageErrors } from '@/components/catalog/catalogShared'
@@ -154,6 +154,7 @@ interface SeedInfoLine {
   label: string
   value: string
   icon?: string
+  wrap?: boolean
 }
 
 // 按“成熟时间→季数→季产→果实售价→种子售价→收入/季”排列；
@@ -169,6 +170,14 @@ function seedInfoLines(item: any): SeedInfoLine[] {
   if (!isLimited(item))
     lines.push({ label: '种子售价', value: m ? numText(m.seedPrice) : '-', icon: GOLD_ICON })
   lines.push({ label: '收入/季', value: m ? fmtInt(m.incomePerSeason) : '-', icon: GOLD_ICON })
+  const mutations: string[] = []
+  for (const effect of Array.isArray(item.mutationEffects) ? item.mutationEffects : []) {
+    const name = String(effect?.name ?? '').trim()
+    if (name)
+      mutations.push(Number.isFinite(effect.probabilityPercent) ? `${name} ${effect.probabilityPercent}%` : name)
+  }
+  if (mutations.length)
+    lines.push({ label: '可变异', value: mutations.join('、'), wrap: true })
   return lines
 }
 
@@ -262,7 +271,7 @@ type TipContent = string | string[] | SeedInfoLine[]
 const tipVisible = ref(false)
 const tipLeft = ref(0)
 const tipTop = ref(0)
-const tipTransform = ref('none')
+const tipElement = ref<HTMLElement | null>(null)
 const tipLines = ref<SeedInfoLine[]>([])
 
 function showTip(e: MouseEvent, content: TipContent) {
@@ -274,22 +283,18 @@ function showTip(e: MouseEvent, content: TipContent) {
   tipLines.value = lines
   moveTip(e)
   tipVisible.value = true
+  void nextTick(() => {
+    if (tipVisible.value)
+      moveTip(e)
+  })
 }
 function moveTip(e: MouseEvent) {
-  tipTop.value = e.clientY + 18
-  // 单行不换行：按最长一行估算宽度，靠右缘时向左翻转
-  const estWidth = tipLines.value.reduce((max, line) => {
-    const len = (line.label ? line.label.length + 1 : 0) + line.value.length
-    return Math.max(max, len + (line.icon ? 2 : 0))
-  }, 0) * 13 + 24
-  if (window.innerWidth - e.clientX < estWidth) {
-    tipLeft.value = e.clientX - 14
-    tipTransform.value = 'translateX(-100%)'
-  }
-  else {
-    tipLeft.value = e.clientX + 14
-    tipTransform.value = 'none'
-  }
+  const width = tipElement.value?.offsetWidth ?? 0
+  const height = tipElement.value?.offsetHeight ?? 0
+  const right = e.clientX + 14
+  const left = right + width <= window.innerWidth - 8 ? right : e.clientX - width - 14
+  tipLeft.value = Math.max(8, Math.min(left, window.innerWidth - width - 8))
+  tipTop.value = Math.max(8, Math.min(e.clientY + 18, window.innerHeight - height - 8))
 }
 function hideTip() {
   tipVisible.value = false
@@ -496,10 +501,11 @@ useReconnectRefresh(handleCalibrate)
     <!-- 跟随鼠标的浮窗：公式行为纯文本，种子详情行带货币图标 -->
     <div
       v-if="tipVisible"
+      ref="tipElement"
       class="metric-tip"
-      :style="{ left: `${tipLeft}px`, top: `${tipTop}px`, transform: tipTransform }"
+      :style="{ left: `${tipLeft}px`, top: `${tipTop}px` }"
     >
-      <div v-for="(line, i) in tipLines" :key="i" class="metric-tip__line">
+      <div v-for="(line, i) in tipLines" :key="i" class="metric-tip__line" :class="{ 'metric-tip__line--wrap': line.wrap }">
         <span v-if="line.label">{{ line.label }}：</span>
         <img v-if="line.icon" :src="line.icon" class="metric-tip__icon" alt="">
         <span>{{ line.value }}</span>
@@ -534,6 +540,16 @@ useReconnectRefresh(handleCalibrate)
   display: flex;
   align-items: center;
   white-space: nowrap;
+}
+
+.metric-tip__line--wrap {
+  align-items: baseline;
+  max-width: min(26rem, calc(100vw - 36px));
+  white-space: normal;
+}
+
+.metric-tip__line--wrap > :first-child {
+  flex: none;
 }
 
 .metric-tip__icon {

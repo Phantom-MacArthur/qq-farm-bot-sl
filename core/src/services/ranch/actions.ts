@@ -1,5 +1,6 @@
 import type { RanchFeedStage } from '../../config/ranch-automation';
 import { RANCH_NEAR_HARVEST_MS } from '../../config/ranch-automation';
+import { farmActivityEvents } from '../farm-activity-events';
 export {};
 
 const { rpc, inScene } = require('./transport');
@@ -174,9 +175,11 @@ async function planAction(action: string, input: any, raw: any, produceTargets?:
         const strategy = feedStage ?? (bucketType === 2 && input.normalStage === 'longest' ? 'longest' : 'any');
         const nowSeconds = getServerTimeSec();
         const animals = unused.filter(animal => matchesFeedStage(animal, strategy, nowSeconds * 1000));
-        if (!animals.length) plan.message = feedable.length ? '普通罐头本轮已使用' : '当前没有可喂养的动物';
-        if (unused.length && !animals.length) {
-            plan.message = strategy === 'longest' ? '当前没有处于最长生长阶段的可喂养动物' : '当前没有符合罐头使用时机的动物';
+        if (!animals.length) {
+            // 空目标要分清是「没动物可喂」「本轮罐头已用完」还是「被使用时机策略挡下」，提示才有指导性。
+            if (!feedable.length) plan.message = '当前没有可喂养的动物';
+            else if (!unused.length) plan.message = '罐头本轮已使用';
+            else plan.message = strategy === 'longest' ? '当前没有处于最长生长阶段的可喂养动物' : '当前没有符合罐头使用时机的动物';
         }
         plan.payload = { targets: animalRefs(animals), bucket_type: bucketType };
         const maxSeconds = animals.reduce((sum, animal) => {
@@ -634,9 +637,17 @@ async function operate(action: string, input: any = {}, feedStage?: RanchFeedSta
                     .some(animal => animal.mutation?.mutation_type > 0) };
         });
 
-        if (result.status === 'confirmed' && result.rewards.length) {
+        if (result.status === 'confirmed') {
+            const harvested = action === 'harvest' && result.harvestedAnimals > 0;
+            if (harvested || action === 'sell' && result.completed > 0) {
+                const loot = result.rewards.map((item: { name: string; count: string }) => `${item.name} ×${item.count}`).join('、');
+                const summary = harvested ? `收获 ${result.harvestedAnimals} 只动物` : `${plan.label}完成`;
+                farmActivityEvents.emit('activity', harvested ? 'animalHarvest' : 'sale', `${summary}${loot ? `，获得 ${loot}` : ''}`);
+            }
             const rewardNames: Record<string, string> = { claimTasks: '任务奖励', claimDailyShare: '分享礼包', claimIllustrated: '图鉴奖励' };
-            if (rewardNames[action]) require('../farm-reward-history').recordFarmReward(`ranch_${action}`, result.rewards, rewardNames[action]);
+            if (result.rewards.length && rewardNames[action]) {
+                require('../farm-reward-history').recordFarmReward(`ranch_${action}`, result.rewards, rewardNames[action]);
+            }
         }
         if (result.harvestedGiant) require('../../utils/network').networkEvents.emit('ranchBookReward', 'giant', true);
         if (!direct || action !== 'feed' || input.produceAfterFeed !== true || result.status !== 'confirmed') return result;

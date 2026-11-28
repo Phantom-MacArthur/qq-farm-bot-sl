@@ -2,7 +2,6 @@
 import { useRoute } from 'vue-router'
 import GameSpaceSwitch from '@/components/GameSpaceSwitch.vue'
 import TopAccountMenu from '@/components/TopAccountMenu.vue'
-import ThemeSwitcher from '@/components/ThemeSwitcher.vue'
 
 const route = useRoute()
 </script>
@@ -19,9 +18,8 @@ const route = useRoute()
       </h1>
     </div>
 
-    <!-- 右侧：主题、空间和账号 -->
+    <!-- 右侧：空间和账号 -->
     <div class="flex shrink-0 items-center gap-2">
-      <ThemeSwitcher />
       <GameSpaceSwitch v-if="route.name !== 'dashboard'" />
       <TopAccountMenu />
     </div>

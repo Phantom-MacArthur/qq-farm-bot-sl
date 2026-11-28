@@ -5,11 +5,15 @@
 export {};
 
 const crypto = require('node:crypto');
+const { setTimeout: delay } = require('node:timers/promises');
 const axios = require('axios').default;
 const pushoo = require('pushoo').default;
 
 const DINGTALK_WEBHOOK_PREFIX = 'https://oapi.dingtalk.com/robot/send?access_token=';
 const MEOW_DEFAULT_BASE_URL = 'https://api.chuckfang.com';
+const NOTIFICATION_INTERVAL_MS = 1000;
+let notificationSlot = Promise.resolve();
+let nextNotificationAt = 0;
 
 function assertRequiredText(name: string, value: any): string {
     const text: string = String(value || '').trim();
@@ -225,11 +229,26 @@ async function sendWxPusherWechatMessage(payload: any = {}, post: any = axios.po
     return mapWxPusherResponse(response);
 }
 
+function sendNotification(payload: any): Promise<PushResult> {
+    // 测试与实际推送共用发送时隙。平台回包慢时，后续消息仍按发送间隔排队。
+    const slot = notificationSlot.then(async () => {
+        let remaining = nextNotificationAt - performance.now();
+        while (remaining > 0) {
+            await delay(Math.ceil(remaining));
+            remaining = nextNotificationAt - performance.now();
+        }
+        nextNotificationAt = performance.now() + NOTIFICATION_INTERVAL_MS;
+        const send = payload.channel === 'wxpusher' ? sendWxPusherMessage
+            : payload.channel === 'wxpusher_wechat' ? sendWxPusherWechatMessage : sendPushooMessage;
+        return { result: send(payload) };
+    });
+    notificationSlot = slot.then(() => undefined, () => undefined);
+    return slot.then(({ result }) => result);
+}
+
 module.exports = {
     buildDingTalkWebhook,
     createDingTalkSign,
     sendMeowMessage,
-    sendPushooMessage,
-    sendWxPusherMessage,
-    sendWxPusherWechatMessage,
+    sendNotification,
 };
